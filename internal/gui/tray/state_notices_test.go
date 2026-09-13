@@ -31,7 +31,7 @@ func noticeConnectedSnapshot(ns []notice.Notice) Snapshot {
 
 func TestUpdate_NoticeBecomesARow(t *testing.T) {
 	got := Update(noticeConnectedSnapshot([]notice.Notice{
-		notice.LighterModel("heavy", "light", 42, 60),
+		notice.LighterModel("heavy", "light", 228, 0, 190),
 	}))
 
 	if len(got.Notices) != 1 {
@@ -49,16 +49,16 @@ func TestUpdate_NoticeBecomesARow(t *testing.T) {
 	}
 }
 
-func TestUpdate_UpgradeNoticeCarriesItsOwnMarker(t *testing.T) {
+func TestUpdate_InfoNoticeCarriesItsOwnMarker(t *testing.T) {
 	got := Update(noticeConnectedSnapshot([]notice.Notice{
-		notice.BetterModel("light", "heavy", 118, 64),
+		notice.UpdateAvailable("0.1.0", "0.2.0"),
 	}))
 
 	if len(got.Notices) != 1 {
 		t.Fatalf("got %d rows, want 1", len(got.Notices))
 	}
 	if !strings.HasPrefix(got.Notices[0].Label, "⬆ ") {
-		t.Errorf("label = %q, want the step-up marker rather than a warning", got.Notices[0].Label)
+		t.Errorf("label = %q, want the info marker rather than a warning", got.Notices[0].Label)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestUpdate_NoNoticesRendersTheMenuItAlwaysDid(t *testing.T) {
 func TestUpdate_NoticesTruncateToTheSlotsThatExist(t *testing.T) {
 	var many []notice.Notice
 	for range notice.MaxActive + 4 {
-		many = append(many, notice.LighterModel("heavy", "light", 42, 60))
+		many = append(many, notice.LighterModel("heavy", "light", 228, 0, 190))
 	}
 
 	got := Update(noticeConnectedSnapshot(many))
@@ -110,7 +110,7 @@ func TestUpdate_NoticeWithNoTitleIsNotARow(t *testing.T) {
 // not gated on enrollment — the same reasoning as the update banner
 // beside it.
 func TestUpdate_NoticesShowBeforeSignIn(t *testing.T) {
-	snap := noticeConnectedSnapshot([]notice.Notice{notice.LighterModel("heavy", "light", 42, 60)})
+	snap := noticeConnectedSnapshot([]notice.Notice{notice.LighterModel("heavy", "light", 228, 0, 190)})
 	snap.Identity = &management.IdentityView{Enrolled: false}
 
 	if got := Update(snap); len(got.Notices) != 1 {

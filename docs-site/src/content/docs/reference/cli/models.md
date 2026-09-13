@@ -112,9 +112,9 @@ waired runtimes refresh             # re-evaluate the engine and model picks
 waired runtimes benchmark           # measure this computer's real speed
 ```
 
-**`benchmark`** measures throughput with the model this computer runs. If a
-different model would suit it better, it offers the swap, names both models,
-and says which direction it is offering. See
+**`benchmark`** times one request with the model this computer runs, and
+replaces the figure Waired kept for it. If the request takes longer than the
+target, it offers a lighter model and names both. See
 [Change the model](/guides/choose-a-model/#switch-models).
 
 **`upgrade`** is what `waired update` runs for you. It changes an engine this

@@ -93,6 +93,15 @@ another page stops you.
 <a id="toks"></a>
 **tok/s (tokens per second)**
 : How fast answers come out. A token is roughly three-quarters of a word.
+  Waired shows it in some places, but does not judge a model by it. See
+  [seconds per request](#seconds-per-request).
+
+<a id="seconds-per-request"></a>
+**Seconds per request**
+: How long one request the size of a coding agent's takes on this computer:
+  reading a long prompt, then writing the answer. It is the figure Waired
+  judges speed by, against a target, as in
+  `228 s per request (target: 190 s or less)`.
 
 <a id="context-window"></a>
 **Context window**

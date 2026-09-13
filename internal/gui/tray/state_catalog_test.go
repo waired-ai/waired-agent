@@ -414,9 +414,9 @@ func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#784): a row this computer has run
-// reports what it got, in the tooltip where the sentences live. The mark
-// stays a mark.
+// PRODUCT CONTRACT (waired-agent#784; seconds per request since
+// waired-agent#1341): a row this computer has run reports what it got, in
+// the tooltip where the sentences live. The mark stays a mark.
 //
 // It is the only thing on this menu that explains a "recommended" mark
 // that has moved: everything else in the tooltip is what the rules
@@ -428,8 +428,8 @@ func TestUpdate_CatalogMeasuredRateIsInTheTooltip(t *testing.T) {
 			{
 				ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, Downloaded: true,
 				ModelSize:     "small",
-				MeasuredTokps: 11,
-				Fit:           &hostfit.Presentation{Runnable: true, RequiredResidentMB: 9 * 1024, QualityTier: 55},
+				MeasuredTokps: 15.8, MeasuredTurnSeconds: 228,
+				Fit: &hostfit.Presentation{Runnable: true, RequiredResidentMB: 9 * 1024, QualityTier: 55},
 			},
 			{
 				ModelID: "qwen3.5-2b", DisplayName: "Qwen3.5 2B", Fits: true, Downloaded: true,
@@ -440,10 +440,10 @@ func TestUpdate_CatalogMeasuredRateIsInTheTooltip(t *testing.T) {
 	}
 	rows := Update(connectedSnapshotWithCatalog(c)).CatalogEntries
 
-	if !strings.Contains(rows[0].Tooltip, "Measured 11 tok/s on this computer.") {
+	if !strings.Contains(rows[0].Tooltip, "228 s per request on this computer.") {
 		t.Errorf("the measured row does not report its figure: %q", rows[0].Tooltip)
 	}
-	if strings.Contains(rows[0].Label, "tok/s") {
+	if strings.Contains(rows[0].Label, "per request") {
 		t.Errorf("the figure belongs in the tooltip, not the label: %q", rows[0].Label)
 	}
 	if strings.Contains(rows[0].Label, "recommended") {
@@ -452,7 +452,7 @@ func TestUpdate_CatalogMeasuredRateIsInTheTooltip(t *testing.T) {
 	if !strings.Contains(rows[1].Label, "recommended") {
 		t.Errorf("the badge did not land on the next row: %q", rows[1].Label)
 	}
-	if strings.Contains(rows[1].Tooltip, "Measured") {
+	if strings.Contains(rows[1].Tooltip, "per request") {
 		t.Errorf("a row nobody ran reports a measurement: %q", rows[1].Tooltip)
 	}
 }

@@ -39,7 +39,6 @@ var declared = []client{
 	{"cmd/waired/update_client.go", "http.Client{}", notMgmt + ": downloads a release asset from GitHub"},
 	{"cmd/waired/login_client.go", "http.Client{}", notMgmt + ": the control plane's device-login API"},
 	{"cmd/waired/claude.go", "http.Client{}", notMgmt + ": the Anthropic API's /v1/models"},
-	{"cmd/waired/init_benchmark.go", "http.Client{}", notMgmt + ": the local inference engine, benchmarked directly"},
 
 	// Allow-listed management reads. These work over plain TCP today
 	// because their routes are in tcpReadRoutes.

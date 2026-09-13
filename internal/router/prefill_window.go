@@ -3,6 +3,8 @@ package router
 import (
 	"sync"
 	"time"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // PrefillWindow is this requester's per-peer record of how fast each peer
@@ -25,15 +27,28 @@ import (
 //     this requester really experienced, including the network leg the
 //     peer cannot see.
 //
-// Both are keyed by DEPTH, and an observed turn is only folded into a rung
-// whose depth it is actually close to. Prefill throughput falls as the
-// prompt grows, so a 30k-token turn says nothing about a 4k rung; the
-// acceptance band is the same 0.7-1.5 the measurement itself uses.
+// It holds two kinds of reading, because the mesh runs two generations of
+// agent while waired-agent#1341 rolls out.
 //
-// The BEST reading in the window wins rather than the mean: a cold sample
-// includes a model load and only ever understates, so keeping the best is
-// what stops one unlucky turn from re-ranking a peer for a quarter of an
-// hour.
+// SECONDS PER REQUEST (the peer's `speed`, decision 9 of
+// docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md): one
+// figure per peer, what a 32,768-token request costs there. The NEWER
+// reading replaces the older one, whichever is faster — a re-measurement is
+// the peer's current answer, and the rule that used to keep the best reading
+// is what left a peer that had become slower ranked on its old figure until
+// the window expired. An observed turn replaces only the prefill term, and
+// only when its depth resembles 32,768 and the peer published a decode rate
+// to finish the sum with.
+//
+// PREFILL RUNGS (the peer's `prefill_rate`, every agent before #1341): keyed
+// by DEPTH, and an observed turn is only folded into a rung whose depth it is
+// actually close to. Prefill throughput falls as the prompt grows, so a
+// 30k-token turn says nothing about a 4k rung; the acceptance band is the
+// same 0.7-1.5 the measurement itself uses. Here the BEST reading in the
+// window still wins rather than the mean: a cold sample includes a model load
+// and only ever understates. This path is kept unchanged for one release so a
+// round that mixes old and new agents still orders on something comparable
+// (assignSpeedRanks).
 type PrefillWindow struct {
 	now func() time.Time
 
@@ -49,6 +64,19 @@ type peerSpeedEntry struct {
 	// probe round old by the time the next ranking reads it.
 	capacityUsed int
 	lastProbe    time.Time
+
+	// published is the peer's own seconds-per-request reading, observed
+	// the one this requester computed from a real turn. The newer of the
+	// two (by measuredAt) is what Snapshot reports.
+	published *turnReading
+	observed  *turnReading
+}
+
+type turnReading struct {
+	turn, floor float64
+	decode      float64
+	measuredAt  time.Time
+	recordedAt  time.Time
 }
 
 type speedReading struct {
@@ -88,6 +116,20 @@ type PeerSpeed struct {
 	// as mesh traffic, which is exactly right: a machine busy with its
 	// owner's turn is busy.
 	CapacityUsed int
+	// Turn is the peer's cost per request in seconds, nil when this
+	// requester has no such reading for it — an agent predating
+	// waired-agent#1341, or a peer nobody has probed.
+	Turn *PeerTurn
+}
+
+// PeerTurn is one peer's seconds-per-request reading as the ranking reads it.
+type PeerTurn struct {
+	// TurnSeconds is the finished figure; TurnFloorSeconds, set only when
+	// TurnSeconds is not, a lower bound from a measurement still running
+	// past the line.
+	TurnSeconds      float64
+	TurnFloorSeconds float64
+	MeasuredAt       time.Time
 }
 
 // NewPrefillWindow returns an empty window. now defaults to time.Now.
@@ -111,6 +153,7 @@ func (w *PrefillWindow) entryLocked(deviceID, variantID string) *peerSpeedEntry 
 		// a rate is meaningless against another variant.
 		e.variantID = variantID
 		e.rungs = map[int]speedReading{}
+		e.published, e.observed = nil, nil
 	}
 	return e
 }
@@ -127,12 +170,32 @@ func (w *PrefillWindow) RecordProbe(deviceID string, s HealthStatus) {
 	defer w.mu.Unlock()
 	now := w.now()
 	variant := ""
-	if s.PrefillRate != nil {
+	switch {
+	case s.Speed != nil && s.Speed.VariantID != "":
+		variant = s.Speed.VariantID
+	case s.PrefillRate != nil:
 		variant = s.PrefillRate.VariantID
 	}
 	e := w.entryLocked(deviceID, variant)
 	e.capacityUsed = s.CapacityUsed
 	e.lastProbe = now
+	if s.Speed.usable() {
+		measuredAt := parseMeasuredAt(s.Speed.MeasuredAt, now)
+		r := &turnReading{
+			turn: s.Speed.TurnSeconds, floor: s.Speed.TurnFloorSeconds,
+			decode: s.Speed.DecodeTokps, measuredAt: measuredAt, recordedAt: now,
+		}
+		if r.turn > 0 {
+			r.floor = 0
+		}
+		cur := e.published
+		// Newer replaces older, faster or not. The same measurement arriving
+		// again refreshes it; an OLDER one — a probe answered out of order —
+		// does not overturn it unless what is stored has already aged out.
+		if cur == nil || !measuredAt.Before(cur.measuredAt) || now.Sub(cur.recordedAt) > prefillWindowTTL {
+			e.published = r
+		}
+	}
 	if s.PrefillRate == nil {
 		return
 	}
@@ -140,8 +203,43 @@ func (w *PrefillWindow) RecordProbe(deviceID string, s HealthStatus) {
 		if r.Depth <= 0 || r.Tokps <= 0 {
 			continue
 		}
-		w.keepBestLocked(e, r.Depth, r.Tokps, r.Bound, now)
+		depth := r.Depth
+		if !isPrefillRungDepth(depth) {
+			// A #1341 peer publishes its one reading at the depth it
+			// measured, which is 32,768 except on a host whose window
+			// cannot hold that prompt. Filed under the rung it resembles,
+			// so an older round can still compare it; dropped if it
+			// resembles none.
+			var ok bool
+			if depth, ok = prefillRungForDepth(depth); !ok {
+				continue
+			}
+		}
+		w.keepBestLocked(e, depth, r.Tokps, r.Bound, now)
 	}
+}
+
+// parseMeasuredAt reads a published RFC3339Nano instant, falling back to the
+// moment it was received: a reading with no date is at least as new as the
+// probe that carried it.
+func parseMeasuredAt(v string, received time.Time) time.Time {
+	if v == "" {
+		return received
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return received
+	}
+	return t
+}
+
+func isPrefillRungDepth(depth int) bool {
+	for _, d := range PrefillRungDepths {
+		if d == depth {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordObserved folds one real turn into the window: prompt tokens over
@@ -151,25 +249,53 @@ func (w *PrefillWindow) RecordProbe(deviceID string, s HealthStatus) {
 // other. A turn that resembles none is dropped — an uncomparable reading
 // is worse than no reading, because the ranking cannot tell it apart from
 // a comparable one.
+//
+// The same turn may also replace the prefill term of the peer's
+// seconds-per-request figure — when its depth resembles
+// hostfit.SpeedMeasurementDepthTokens (the same band) and the peer has
+// published a decode rate to complete the sum:
+//
+//	turn = TurnSecondsAt(32768, observed prefill, published decode)
+//
+// dated now, so it stands until the peer publishes a newer measurement.
 func (w *PrefillWindow) RecordObserved(deviceID, variantID string, promptTokens int, ttft time.Duration) {
 	if deviceID == "" || promptTokens <= 0 || ttft <= 0 {
-		return
-	}
-	depth, ok := prefillRungForDepth(promptTokens)
-	if !ok {
 		return
 	}
 	tokps := float64(promptTokens) / ttft.Seconds()
 	if tokps <= 0 {
 		return
 	}
+	depth, rungOK := prefillRungForDepth(promptTokens)
+	ratio := float64(promptTokens) / float64(hostfit.SpeedMeasurementDepthTokens)
+	turnOK := ratio >= prefillObservationBandLow && ratio <= prefillObservationBandHigh
+	if !rungOK && !turnOK {
+		return
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	now := w.now()
 	e := w.entryLocked(deviceID, variantID)
-	w.keepBestLocked(e, depth, tokps, false, w.now())
+	if rungOK {
+		w.keepBestLocked(e, depth, tokps, false, now)
+	}
+	if !turnOK {
+		return
+	}
+	pub := e.published
+	if pub == nil || pub.decode <= 0 || now.Sub(pub.recordedAt) > prefillWindowTTL {
+		return
+	}
+	e.observed = &turnReading{
+		turn:       hostfit.TurnSecondsAt(hostfit.SpeedMeasurementDepthTokens, tokps, pub.decode),
+		decode:     pub.decode,
+		measuredAt: now,
+		recordedAt: now,
+	}
 }
 
-// keepBestLocked keeps the faster of the stored and the new reading, and
+// keepBestLocked is the legacy rung rule: it keeps the faster of the stored
+// and the new reading, and
 // prefers a measurement to a bound at the same rung — a bound is what a
 // host publishes when it could not finish, so any real reading supersedes
 // it. Caller holds mu.
@@ -213,6 +339,10 @@ func prefillRungForDepth(promptTokens int) (int, bool) {
 // host to climb, the requester to know which rung an observed turn belongs
 // to. Changing one without the other silently stops observations from
 // merging with published readings.
+//
+// Kept for one release after waired-agent#1341, whose agents measure one
+// depth and publish seconds per request: a round that still contains an
+// older agent orders on these rungs (assignSpeedRanks).
 var PrefillRungDepths = []int{4096, 8192, 32768}
 
 // Snapshot returns the live per-peer view, dropping readings past the
@@ -225,6 +355,7 @@ func (w *PrefillWindow) Snapshot() map[string]PeerSpeed {
 	now := w.now()
 	var out map[string]PeerSpeed
 	for deviceID, e := range w.peers {
+		turn := e.turnLocked(now)
 		var rungs map[int]PrefillRung
 		for depth, r := range e.rungs {
 			if now.Sub(r.at) > prefillWindowTTL {
@@ -237,20 +368,40 @@ func (w *PrefillWindow) Snapshot() map[string]PeerSpeed {
 			rungs[depth] = PrefillRung{Depth: depth, Tokps: r.tokps, Bound: r.bound}
 		}
 		staleProbe := now.Sub(e.lastProbe) > prefillWindowTTL
-		if rungs == nil && staleProbe {
+		if rungs == nil && turn == nil && staleProbe {
 			delete(w.peers, deviceID)
 			continue
 		}
 		if out == nil {
 			out = make(map[string]PeerSpeed)
 		}
-		ps := PeerSpeed{VariantID: e.variantID, Rungs: rungs}
+		ps := PeerSpeed{VariantID: e.variantID, Rungs: rungs, Turn: turn}
 		if !staleProbe {
 			ps.CapacityUsed = e.capacityUsed
 		}
 		out[deviceID] = ps
 	}
 	return out
+}
+
+// turnLocked is the reading Snapshot reports: the newer of the published and
+// the observed figure, among those still inside the window. Aged-out
+// readings are dropped. Caller holds mu.
+func (e *peerSpeedEntry) turnLocked(now time.Time) *PeerTurn {
+	if e.published != nil && now.Sub(e.published.recordedAt) > prefillWindowTTL {
+		e.published = nil
+	}
+	if e.observed != nil && now.Sub(e.observed.recordedAt) > prefillWindowTTL {
+		e.observed = nil
+	}
+	r := e.published
+	if o := e.observed; o != nil && (r == nil || o.measuredAt.After(r.measuredAt)) {
+		r = o
+	}
+	if r == nil {
+		return nil
+	}
+	return &PeerTurn{TurnSeconds: r.turn, TurnFloorSeconds: r.floor, MeasuredAt: r.measuredAt}
 }
 
 // RoundRung is the depth a whole selection round may be compared at: the

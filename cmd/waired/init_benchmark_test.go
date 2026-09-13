@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,17 +29,25 @@ type benchStub struct {
 	failed    bool
 	failedMsg string
 	active    *management.ActiveSelection // /status Active (names the benchmarked model)
-	measured  float64                     // /benchmark measured_tokps
+	measured  float64                     // /benchmark turn_seconds (seconds per request)
 	// measuredSeq, when non-empty, gives each /benchmark call its own
 	// figure (last repeats) — a host measures differently once it is
 	// serving a different model, which is the whole of waired-agent#648.
 	measuredSeq []float64
-	// floor is the interactive floor the daemon judged the measurement
-	// against; below_floor is derived from it in server(), not set
-	// separately. 0 = a daemon that reports no floor, which is how every
-	// build before waired-agent#784 answered and is what the older
-	// fixtures here exercise.
+	// floor is the line (seconds per request) the daemon judged the
+	// measurement against; over_budget is derived from it in server(), not
+	// set separately. 0 = a daemon that sends no line, which reads as no
+	// verdict — what the older fixtures here exercise.
 	floor float64
+	// modes records the ?mode= each /benchmark call carried.
+	modes []string
+	// running, when set, makes /benchmark/status answer it while the first
+	// /benchmark call is held open until release is closed (or the client
+	// leaves) — a measurement still in flight.
+	running *management.BenchmarkStatusResponse
+	release chan struct{}
+	// abandoned counts /benchmark calls whose client left before an answer.
+	abandoned int
 	// failAfter makes /benchmark answer 503 from that call onwards, so a
 	// re-measurement can fail while the first one succeeded. 0 = never.
 	failAfter int
@@ -50,9 +59,8 @@ type benchStub struct {
 	// and deleteStatus refuses them (0 = 200 OK).
 	deleted      []string
 	deleteStatus int
-	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
-	downloading  bool                                // preferred-model response Downloading
-	statusSeq    []statusStep                        // scripted /status sequence (last repeats)
+	downloading  bool         // preferred-model response Downloading
+	statusSeq    []statusStep // scripted /status sequence (last repeats)
 	statusCalls  int
 	acceptedID   string
 	dismissFrom  string
@@ -71,6 +79,8 @@ func (b *benchStub) server() *httptest.Server {
 		b.mu.Lock()
 		b.benchCalls++
 		call := b.benchCalls
+		b.modes = append(b.modes, r.URL.Query().Get("mode"))
+		hold := b.running != nil && call == 1
 		flipped := b.readyAfter > 0 && call > b.readyAfter
 		measured := b.measured
 		if len(b.measuredSeq) > 0 {
@@ -81,6 +91,16 @@ func (b *benchStub) server() *httptest.Server {
 		if !b.ready && !flipped {
 			w.WriteHeader(http.StatusTooEarly)
 			return
+		}
+		if hold {
+			select {
+			case <-b.release:
+			case <-r.Context().Done():
+				b.mu.Lock()
+				b.abandoned++
+				b.mu.Unlock()
+				return
+			}
 		}
 		if b.failAfter > 0 && call >= b.failAfter {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -98,18 +118,29 @@ func (b *benchStub) server() *httptest.Server {
 			})
 			return
 		}
-		// below_floor is DERIVED here, never set independently. The
+		// over_budget is DERIVED here, never set independently. The
 		// daemon computes it from the same measurement and the same
-		// floor (interactiveFloorVerdict), so a stub that let a test
-		// pin "measured 120 tok/s, below_floor true" would be fixing a
-		// combination no host can send — the shape of defect this repo
-		// has hit before by letting a fake accept any body.
-		//
-		belowFloor := b.floor > 0 && measured > 0 && measured < b.floor
+		// line, so a stub that let a test pin "228 s per request,
+		// over_budget false" would be fixing a combination no host can
+		// send — the shape of defect this repo has hit before by letting
+		// a fake accept any body.
+		over := b.floor > 0 && measured > b.floor
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
-			Ran: true, MeasuredTokps: measured, Recommendation: b.rec, Upgrade: b.upgrade,
-			BelowFloor: belowFloor, FloorTokps: b.floor,
+			Ran: true, Recommendation: b.rec,
+			SpeedMeasurement: management.SpeedMeasurement{
+				TurnSeconds: measured, BudgetSeconds: b.floor, OverBudget: over,
+			},
 		})
+	})
+	mux.HandleFunc("/waired/v1/inference/benchmark/status", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		running := b.running
+		b.mu.Unlock()
+		if running == nil {
+			_ = json.NewEncoder(w).Encode(management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(running)
 	})
 	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
@@ -196,7 +227,7 @@ func tinyRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
 		FromModelID: "qwen2.5-coder-3b-instruct", FromVariantID: "q4-gguf",
 		ToModelID: "qwen3.5-0.8b", ToVariantID: "q8-gguf",
-		MeasuredTokps: 8, FloorTokps: 30,
+		TurnSeconds: 240, BudgetSeconds: 190,
 	}
 }
 
@@ -204,7 +235,7 @@ func sampleRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
 		FromModelID: "heavy", FromVariantID: "q4",
 		ToModelID: "light", ToVariantID: "q4-tiny",
-		MeasuredTokps: 10, FloorTokps: 30,
+		TurnSeconds: 228, BudgetSeconds: 190,
 	}
 }
 
@@ -302,7 +333,7 @@ func TestPromptBenchmark_OldDaemonWithoutRateIsNeutral(t *testing.T) {
 	if strings.Contains(got, "Local inference works") {
 		t.Errorf("a daemon that reports no rate must not claim inference works: %q", got)
 	}
-	if !strings.Contains(got, "doesn't report a throughput figure") {
+	if !strings.Contains(got, "doesn't report a figure in seconds") {
 		t.Errorf("expected the neutral old-daemon wording, got: %q", got)
 	}
 }
@@ -326,7 +357,7 @@ func TestPromptBenchmark_FailedBenchmarkPrintsNoSuccessLine(t *testing.T) {
 		t.Fatalf("prompt: %v", err)
 	}
 	got := out.String()
-	for _, forbidden := range []string{"Local inference works", "tok/s", "looks good"} {
+	for _, forbidden := range []string{"Local inference works", "per request", "looks good"} {
 		if strings.Contains(got, forbidden) {
 			t.Errorf("a failed benchmark must not print %q: %q", forbidden, got)
 		}
@@ -687,7 +718,7 @@ func realRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
 		FromModelID: "qwen3.6-35b-a3b", FromVariantID: "q4-gguf",
 		ToModelID: "qwen3.6-27b", ToVariantID: "q4-gguf",
-		MeasuredTokps: 43, FloorTokps: 100,
+		TurnSeconds: 228, BudgetSeconds: 190,
 	}
 }
 
@@ -700,7 +731,7 @@ func realRec() *management.BenchmarkRecommendation {
 // measurement — and this flow says which direction it is offering in its
 // own prose instead of leaving a reader to compare two numbers.
 func TestPromptBenchmark_NamesFromTo(t *testing.T) {
-	stub := &benchStub{ready: true, rec: realRec()}
+	stub := &benchStub{ready: true, rec: realRec(), measured: 228, floor: 190}
 	srv := stub.server()
 	defer srv.Close()
 
@@ -710,7 +741,7 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		"Qwen3.6 35B-A3B measured 43 tok/s",
+		"Local inference is slow: Qwen3.6 35B-A3B takes 228 s per request (target: 190 s or less).",
 		"Waired recommends switching from Qwen3.6 35B-A3B to Qwen3.6 27B",
 		// The direction, which the numbers used to carry.
 		"The lighter model should run more smoothly",
@@ -727,7 +758,7 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 // The no-recommendation "works" line names the benchmarked model, resolved
 // from /inference/status Active (the benchmark response carries no model id).
 func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
-	stub := &benchStub{ready: true, measured: 120,
+	stub := &benchStub{ready: true, measured: 70, floor: 190,
 		active: &management.ActiveSelection{ModelID: "qwen3.6-35b-a3b", VariantID: "q4-gguf"}}
 	srv := stub.server()
 	defer srv.Close()
@@ -736,7 +767,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Local inference works. Qwen3.6 35B-A3B measured 120 tok/s"
+	want := "Local inference works. Qwen3.6 35B-A3B takes 70 s per request on this computer."
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}
@@ -745,7 +776,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 // When /status carries no Active selection (old daemon), the works line keeps
 // the model-less wording rather than printing an empty name.
 func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
-	stub := &benchStub{ready: true, measured: 120}
+	stub := &benchStub{ready: true, measured: 70, floor: 190}
 	srv := stub.server()
 	defer srv.Close()
 
@@ -753,40 +784,9 @@ func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Local inference works. Measured 120 tok/s"
+	want := "Local inference works. 70 s per request on this computer."
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
-	}
-}
-
-// The upgrade recommendation names the from → to pair and contrasts
-// predicted vs measured throughput.
-//
-// It also has to SAY that the target is the stronger model. The line is
-// otherwise entirely about speed, and this flow is the one that offers a
-// multi-GB download — with the quality figures gone (#537) nothing else
-// in it tells the reader what they would be getting.
-func TestPromptBenchmark_UpgradeNamesFromTo(t *testing.T) {
-	upgrade := &management.BenchmarkRecommendation{
-		Direction:   "upgrade",
-		FromModelID: "qwen3.6-27b", FromVariantID: "q4-gguf",
-		ToModelID: "qwen3.6-35b-a3b", ToVariantID: "q4-gguf",
-		MeasuredTokps: 140, FloorTokps: 100, PredictedTokps: 110,
-	}
-	stub := &benchStub{ready: true, measured: 140, upgrade: upgrade}
-	srv := stub.server()
-	defer srv.Close()
-
-	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
-		t.Fatalf("prompt: %v", err)
-	}
-	want := "Qwen3.6 35B-A3B is a stronger model and should run at about 110 tok/s here, against 140 tok/s measured on Qwen3.6 27B"
-	if !strings.Contains(out.String(), want) {
-		t.Errorf("output missing %q; got:\n%s", want, out.String())
-	}
-	if strings.Contains(out.String(), "quality 89") || strings.Contains(out.String(), "quality 70") {
-		t.Errorf("upgrade line still prints a quality figure (#537); got:\n%s", out.String())
 	}
 }
 
@@ -992,7 +992,7 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 //
 // The observed instance is the routing-sentinel transcript in #576, where
 // init printed "Waiting for the model to finish downloading…" 1 ms after
-// "[ok] granite4-350m ready" and then measured 20 tok/s 52 s later: the
+// "[ok] granite4-350m ready" and then measured the model 52 s later: the
 // engine was loading, and there was no download to wait for.
 func TestBenchWaitLineFor(t *testing.T) {
 	const (
@@ -1072,18 +1072,18 @@ func TestPromptBenchmark_EngineLoadWaitDoesNotNameADownload(t *testing.T) {
 // moved off the model measured at 26 tok/s, because one response was
 // taken before the recommendation and reused after the switch. An
 // operator reads that as "I switched to the lighter model and it is
-// still 26 tok/s".
+// still as slow".
 func TestPromptBenchmark_AcceptSwitchesThenRemeasures(t *testing.T) {
 	stub := &benchStub{
 		ready:       true,
 		rec:         sampleRec(),
-		measuredSeq: []float64{26, 71}, // the rejected model, then the one that took over
+		measuredSeq: []float64{228, 70}, // the rejected model, then the one that took over
 	}
 	srv := stub.server()
 	defer srv.Close()
 
 	var out strings.Builder
-	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	resp, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\n")), false)
 	if err != nil {
 		t.Fatalf("benchmark: %v", err)
@@ -1094,8 +1094,8 @@ func TestPromptBenchmark_AcceptSwitchesThenRemeasures(t *testing.T) {
 	if stub.benchCalls != 2 {
 		t.Fatalf("benchmark calls = %d, want a second measurement after the switch", stub.benchCalls)
 	}
-	if got := outcomeFrom(resp); !got.Measured || got.Tokps != 71 {
-		t.Errorf("summary outcome = %+v, want the post-switch 71 tok/s", got)
+	if got := outcomeFrom(resp); !got.Measured || got.Speed.TurnSeconds != 70 {
+		t.Errorf("summary outcome = %+v, want the post-switch 70 s per request", got)
 	}
 	if !strings.Contains(out.String(), "Measuring the new model...") {
 		t.Errorf("the second measurement was not announced:\n%s", out.String())
@@ -1107,12 +1107,12 @@ func TestPromptBenchmark_AcceptSwitchesThenRemeasures(t *testing.T) {
 // Downloading + no terminal owner means the wait runs to completion, so
 // the case exercised here is the failed accept.
 func TestPromptBenchmark_NoRemeasureWhenTheSwitchFailed(t *testing.T) {
-	stub := &benchStub{ready: true, rec: sampleRec(), measured: 26, acceptStatus: http.StatusConflict}
+	stub := &benchStub{ready: true, rec: sampleRec(), measured: 228, acceptStatus: http.StatusConflict}
 	srv := stub.server()
 	defer srv.Close()
 
 	var out strings.Builder
-	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	resp, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\n")), false)
 	if err != nil {
 		t.Fatalf("benchmark: %v", err)
@@ -1135,7 +1135,7 @@ func TestPromptBenchmark_RemeasureFailureDropsTheRate(t *testing.T) {
 	stub := &benchStub{
 		ready:     true,
 		rec:       sampleRec(),
-		measured:  26,
+		measured:  228,
 		failAfter: 2, // the first measurement lands, the re-run does not
 		failedMsg: "the engine went away",
 	}
@@ -1143,7 +1143,7 @@ func TestPromptBenchmark_RemeasureFailureDropsTheRate(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	resp, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\n")), false)
 	if err != nil {
 		t.Fatalf("benchmark: %v", err)
@@ -1151,21 +1151,21 @@ func TestPromptBenchmark_RemeasureFailureDropsTheRate(t *testing.T) {
 	if got := outcomeFrom(resp); got.Measured {
 		t.Errorf("outcome = %+v, want no rate at all rather than the rejected model's", got)
 	}
-	if strings.Contains(out.String(), "26 tok/s on this host") {
+	if strings.Contains(out.String(), "228 s per request here") {
 		t.Errorf("the rejected model's rate was reported as the new model's:\n%s", out.String())
 	}
 }
 
-// The lighter model can itself measure below the floor. Acting on that
+// The lighter model can itself measure over the line. Acting on that
 // here would step down again inside a flow the operator answered once, so
 // the second run's recommendation is read for its number only.
 func TestPromptBenchmark_RemeasureIgnoresASecondRecommendation(t *testing.T) {
-	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 28}}
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{228, 212}}
 	srv := stub.server()
 	defer srv.Close()
 
 	var out strings.Builder
-	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	resp, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\n")), false)
 	if err != nil {
 		t.Fatalf("benchmark: %v", err)
@@ -1178,8 +1178,8 @@ func TestPromptBenchmark_RemeasureIgnoresASecondRecommendation(t *testing.T) {
 	if stub.dismissCount != 0 {
 		t.Errorf("dismiss = %d, want the second recommendation neither taken nor dismissed", stub.dismissCount)
 	}
-	if got := outcomeFrom(resp); !got.Measured || got.Tokps != 28 {
-		t.Errorf("outcome = %+v, want the honest post-switch 28 tok/s", got)
+	if got := outcomeFrom(resp); !got.Measured || got.Speed.TurnSeconds != 212 {
+		t.Errorf("outcome = %+v, want the honest post-switch 212 s per request", got)
 	}
 }
 
@@ -1191,13 +1191,13 @@ func TestPromptBenchmark_RemeasureIgnoresASecondRecommendation(t *testing.T) {
 // machine, one of them a model the same run had just judged too heavy
 // for it and replaced.
 func TestPromptBenchmark_OffersToRemoveTheRejectedModel(t *testing.T) {
-	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 71}}
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{228, 70}}
 	srv := stub.server()
 	defer srv.Close()
 
 	var out strings.Builder
 	// Two answers: accept the switch, then accept the removal.
-	_, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	_, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\ny\n")), false)
 	if err != nil {
 		t.Fatalf("benchmark: %v", err)
@@ -1214,12 +1214,12 @@ func TestPromptBenchmark_OffersToRemoveTheRejectedModel(t *testing.T) {
 // later — an operator who plans to add memory has a real reason to keep
 // a model this host cannot run today.
 func TestPromptBenchmark_KeepingTheRejectedModelSaysHowToRemoveIt(t *testing.T) {
-	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 71}}
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{228, 70}}
 	srv := stub.server()
 	defer srv.Close()
 
 	var out strings.Builder
-	_, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	_, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\nn\n")), false)
 	if err != nil {
 		t.Fatalf("benchmark: %v", err)
@@ -1251,6 +1251,28 @@ func TestOfferToRemoveRejected_NonInteractiveKeepsTheWeights(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "`waired models rm heavy`") {
 		t.Errorf("non-interactive did not say how to remove it:\n%s", out.String())
+	}
+}
+
+// PRODUCT CONTRACT (owner decision 2026-09-13, decision 8 of
+// docs/decisions/20260913/2245): Enter on the removal offer keeps the
+// weights. Switching back later reuses the stored measurement, and it
+// should not have to download the model again either.
+func TestOfferToRemoveRejected_EnterKeepsTheWeights(t *testing.T) {
+	stub := &benchStub{}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	offerToRemoveRejected(srv.URL, "heavy", "heavy", false, &out, bufio.NewScanner(strings.NewReader("\n")))
+	if len(stub.deleted) != 0 {
+		t.Fatalf("deleted = %v, want Enter to keep the weights", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "[y/N]") {
+		t.Errorf("the offer does not show No as its default:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Keeping heavy.") {
+		t.Errorf("Enter did not say it kept the model:\n%s", out.String())
 	}
 }
 
@@ -1310,21 +1332,6 @@ func TestPromptBenchmark_NoAnswerKeepsTheModel(t *testing.T) {
 	}
 }
 
-func TestPromptBenchmark_NoAnswerToAnUpgradeChangesNothing(t *testing.T) {
-	stub := &benchStub{ready: true, upgrade: sampleRec(), measured: 120}
-	srv := stub.server()
-	defer srv.Close()
-
-	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
-		bufio.NewScanner(strings.NewReader("")), false); err != nil {
-		t.Fatalf("prompt: %v", err)
-	}
-	if stub.acceptCount != 0 || stub.dismissCount != 0 {
-		t.Errorf("no answer must neither switch (%d) nor dismiss (%d)", stub.acceptCount, stub.dismissCount)
-	}
-}
-
 func TestPromptBenchmark_NoAnswerDoesNotDisableInference(t *testing.T) {
 	// The tiny dialog's default is No, and No TURNS LOCAL INFERENCE OFF.
 	// That is a decision for a person who read the question; an exhausted
@@ -1350,12 +1357,12 @@ func TestPromptBenchmark_NoAnswerToTheRemovalKeepsTheWeights(t *testing.T) {
 	// One answer only: the switch is accepted by a person, and stdin then
 	// ends before the removal question. Deleting gigabytes is the one
 	// answer an unattended run must not give.
-	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 71}}
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{228, 70}}
 	srv := stub.server()
 	defer srv.Close()
 
 	var out strings.Builder
-	if _, _, err := benchmarkWithScanner(srv.URL, false, &out,
+	if _, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
 		bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("benchmark: %v", err)
 	}
@@ -1422,7 +1429,7 @@ func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T)
 			lightestOfferedModelID)
 	}
 	stub := &benchStub{
-		ready: true, measured: 26, floor: 60,
+		ready: true, measured: 228, floor: 190,
 		active: &management.ActiveSelection{ModelID: lightestOfferedModelID, VariantID: "q8-gguf"},
 	}
 	srv := stub.server()
@@ -1442,8 +1449,8 @@ func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T)
 	if strings.Contains(got, "Local inference works") {
 		t.Errorf("a host measured below its floor was told local inference works:\n%s", got)
 	}
-	if !strings.Contains(got, "26 tok/s") || !strings.Contains(got, "60 tok/s") {
-		t.Errorf("the measurement and the floor are not both stated:\n%s", got)
+	if !strings.Contains(got, "228 s per request (target: 190 s or less)") {
+		t.Errorf("the measurement and the target are not both stated:\n%s", got)
 	}
 	if !strings.Contains(got, "nothing lighter to switch to") {
 		t.Errorf("the reason there is no step-down is not stated:\n%s", got)
@@ -1464,7 +1471,7 @@ func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T)
 // it here.
 func TestPromptBenchmark_LightestModelNoAnswerKeepsInference(t *testing.T) {
 	stub := &benchStub{
-		ready: true, measured: 26, floor: 60,
+		ready: true, measured: 228, floor: 190,
 		active: &management.ActiveSelection{ModelID: lightestOfferedModelID, VariantID: "q8-gguf"},
 	}
 	srv := stub.server()
@@ -1488,7 +1495,7 @@ func TestPromptBenchmark_LightestModelNoAnswerKeepsInference(t *testing.T) {
 // would be answering a question nobody asked.
 func TestPromptBenchmark_BelowFloorWithoutAProposalSaysSoOnly(t *testing.T) {
 	stub := &benchStub{
-		ready: true, measured: 26, floor: 60,
+		ready: true, measured: 228, floor: 190,
 		active: &management.ActiveSelection{ModelID: "qwen3.6-35b-a3b", VariantID: "q4-gguf"},
 	}
 	srv := stub.server()
@@ -1503,7 +1510,7 @@ func TestPromptBenchmark_BelowFloorWithoutAProposalSaysSoOnly(t *testing.T) {
 	if strings.Contains(got, "Local inference works") {
 		t.Errorf("a host measured below its floor was told local inference works:\n%s", got)
 	}
-	if !strings.Contains(got, "26 tok/s") {
+	if !strings.Contains(got, "228 s per request") {
 		t.Errorf("the measurement is not stated:\n%s", got)
 	}
 	if stub.disableCount != 0 {
@@ -1514,12 +1521,12 @@ func TestPromptBenchmark_BelowFloorWithoutAProposalSaysSoOnly(t *testing.T) {
 
 // PRODUCT CONTRACT (waired-agent#784): the re-measurement after a
 // step-down reports what it found. The switched-to model can itself be
-// below the floor — that is the case the chain exists for — and saying
+// over the line — that is the case the chain exists for — and saying
 // "Local inference works" over it is the same untruth the badge was
 // filed for.
 func TestRemeasureAfterSwitch_StillSlowDoesNotClaimSuccess(t *testing.T) {
 	stub := &benchStub{
-		ready: true, measured: 44, floor: 60,
+		ready: true, measured: 212, floor: 190,
 		active: &management.ActiveSelection{ModelID: "qwen3.5-4b", VariantID: "q4-gguf"},
 	}
 	srv := stub.server()
@@ -1532,10 +1539,10 @@ func TestRemeasureAfterSwitch_StillSlowDoesNotClaimSuccess(t *testing.T) {
 	}
 	got := out.String()
 	if strings.Contains(got, "Local inference works") {
-		t.Errorf("44 tok/s against a 60 tok/s floor was reported as working:\n%s", got)
+		t.Errorf("212 s per request against a 190 s line was reported as working:\n%s", got)
 	}
-	if !strings.Contains(got, "44 tok/s") || !strings.Contains(got, "60 tok/s") {
-		t.Errorf("the measurement and the floor are not both stated:\n%s", got)
+	if want := "Qwen3.5 4B takes 212 s per request here (target: 190 s or less)."; !strings.Contains(got, want) {
+		t.Errorf("output missing %q:\n%s", want, got)
 	}
 }
 
@@ -1543,7 +1550,7 @@ func TestRemeasureAfterSwitch_StillSlowDoesNotClaimSuccess(t *testing.T) {
 // somewhere fast enough says so.
 func TestRemeasureAfterSwitch_FastEnoughStillSaysItWorks(t *testing.T) {
 	stub := &benchStub{
-		ready: true, measured: 95, floor: 60,
+		ready: true, measured: 70, floor: 190,
 		active: &management.ActiveSelection{ModelID: "qwen3.5-4b", VariantID: "q4-gguf"},
 	}
 	srv := stub.server()
@@ -1554,6 +1561,273 @@ func TestRemeasureAfterSwitch_FastEnoughStillSaysItWorks(t *testing.T) {
 		t.Fatal("re-measurement returned nothing")
 	}
 	if got := out.String(); !strings.Contains(got, "Local inference works") {
-		t.Errorf("95 tok/s against a 60 tok/s floor did not report success:\n%s", got)
+		t.Errorf("70 s per request against a 190 s line did not report success:\n%s", got)
+	}
+}
+
+// overLineRunning is the daemon's benchmark status for a measurement still
+// in flight and already past its line: the request has run 195 s against a
+// 190 s line, so one request takes at least that long.
+func overLineRunning(rec *management.BenchmarkRecommendation) *management.BenchmarkStatusResponse {
+	return &management.BenchmarkStatusResponse{
+		State:   management.BenchmarkStateRunning,
+		ModelID: "qwen3.8-27b",
+		SpeedMeasurement: management.SpeedMeasurement{
+			ElapsedSeconds: 195, BudgetSeconds: 190, TurnFloorSeconds: 195, OverBudget: true,
+		},
+		Recommendation: rec,
+	}
+}
+
+// fastPolls shrinks the wait's cadence for one test.
+func fastPolls(t *testing.T) {
+	t.Helper()
+	pi, ne := benchPollInterval, benchNarrateEvery
+	benchPollInterval, benchNarrateEvery = 5*time.Millisecond, time.Hour
+	t.Cleanup(func() { benchPollInterval, benchNarrateEvery = pi, ne })
+}
+
+// PRODUCT CONTRACT (waired-ai/waired-agent#1341, decision 7 of
+// docs/decisions/20260913/2245): `waired init` asks in mode ensure, so it
+// does not measure again what the daemon has just measured on its own;
+// `waired runtimes benchmark` asks in mode rerun, a person asking for a new
+// number; the measurement after a switch asks in ensure, so a model this
+// host has measured before is answered from the stored figure.
+func TestBenchmark_ModesByCaller(t *testing.T) {
+	stub := &benchStub{ready: true, measured: 70, floor: 190}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, true, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if _, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, true, &out,
+		bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	remeasureAfterSwitch(srv.URL, &out)
+	want := []string{management.BenchmarkModeRerun, management.BenchmarkModeEnsure, management.BenchmarkModeEnsure}
+	if strings.Join(stub.modes, ",") != strings.Join(want, ",") {
+		t.Errorf("modes = %v, want %v", stub.modes, want)
+	}
+}
+
+// PRODUCT CONTRACT (waired-ai/waired#1382; decisions 4-5 of
+// docs/decisions/20260913/2245): a measurement past its line is said once,
+// the lighter model is offered at that moment, and staying keeps the flow
+// waiting for the measurement to end — the result is reported only then.
+// The answer given while it ran stands: the finished figure does not ask
+// the same question again.
+func TestBenchmark_OverTheLineWhileRunningOffersOnceAndWaits(t *testing.T) {
+	fastPolls(t)
+	stub := &benchStub{
+		ready: true, rec: sampleRec(), measured: 228, floor: 190,
+		running: overLineRunning(sampleRec()), release: make(chan struct{}),
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	// Release the held measurement once the question has been answered: the
+	// scanner hands out the "n" and the test lets the daemon finish after.
+	pr, pw := io.Pipe()
+	var out syncBuilder
+	done := make(chan *management.BenchmarkRunResponse, 1)
+	go func() {
+		resp, _, _ := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out, bufio.NewScanner(pr), false)
+		done <- resp
+	}()
+	waitForOutput(t, &out, "Switch to light? The measurement keeps running if you stay.")
+	_, _ = pw.Write([]byte("n\n"))
+	waitForOutput(t, &out, "Waiting for the measurement to finish.")
+	select {
+	case <-done:
+		t.Fatal("the flow returned while the measurement was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(stub.release)
+	var resp *management.BenchmarkRunResponse
+	select {
+	case resp = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the flow did not return after the measurement ended")
+	}
+	_ = pw.Close()
+
+	got := out.String()
+	for _, want := range []string{
+		"Timing this computer on the model it will serve.",
+		"Qwen3.8 27B takes 195 s or more per request (target: 190 s or less).",
+		"Local inference is slow: heavy takes 228 s per request (target: 190 s or less).",
+		"Keeping heavy.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "Switch to light?"); n != 1 {
+		t.Errorf("the switch was asked %d times, want once:\n%s", n, got)
+	}
+	if stub.acceptCount != 0 || stub.dismissCount != 1 {
+		t.Errorf("accept = %d dismiss = %d, want the No recorded once and nothing switched", stub.acceptCount, stub.dismissCount)
+	}
+	if got := outcomeFrom(resp); !got.OverLine() || got.Speed.TurnSeconds != 228 {
+		t.Errorf("outcome = %+v, want the finished 228 s over the line", got)
+	}
+}
+
+// Yes while the measurement runs leaves it: the request is abandoned (the
+// daemon cancels the measurement on the switch), the switch is made, and the
+// new model is measured.
+func TestBenchmark_OverTheLineSwitchLeavesTheMeasurement(t *testing.T) {
+	fastPolls(t)
+	stub := &benchStub{
+		ready: true, rec: sampleRec(), measuredSeq: []float64{228, 70}, floor: 190,
+		running: overLineRunning(sampleRec()), release: make(chan struct{}),
+	}
+	srv := stub.server()
+	defer srv.Close()
+	defer close(stub.release)
+
+	var out syncBuilder
+	// y switches; the removal offer that follows then reads EOF and keeps.
+	resp, _, err := benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if stub.acceptCount != 1 || stub.acceptedID != "light" {
+		t.Fatalf("accept = %d id %q, want the switch made", stub.acceptCount, stub.acceptedID)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stub.mu.Lock()
+		n := stub.abandoned
+		stub.mu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			if n != 1 {
+				t.Errorf("abandoned requests = %d, want the held one left", n)
+			}
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := outcomeFrom(resp); !got.Measured || got.Speed.TurnSeconds != 70 {
+		t.Errorf("outcome = %+v, want the switched-to model's 70 s", got)
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v on an unanswered removal offer", stub.deleted)
+	}
+}
+
+// Non-interactive, the line is still said, and nothing is asked: the flow
+// keeps waiting and reports the finished figure.
+func TestBenchmark_OverTheLineNonInteractiveAsksNothing(t *testing.T) {
+	fastPolls(t)
+	stub := &benchStub{
+		ready: true, rec: sampleRec(), measured: 228, floor: 190,
+		running: overLineRunning(sampleRec()), release: make(chan struct{}),
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out syncBuilder
+	done := make(chan struct{})
+	go func() {
+		_, _, _ = benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, true, &out,
+			bufio.NewScanner(strings.NewReader("y\n")), false)
+		close(done)
+	}()
+	waitForOutput(t, &out, "Waiting for the measurement to finish.")
+	select {
+	case <-done:
+		t.Fatal("the flow returned while the measurement was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(stub.release)
+	<-done
+	got := out.String()
+	if strings.Contains(got, "The measurement keeps running if you stay.") {
+		t.Errorf("a non-interactive run was asked to switch:\n%s", got)
+	}
+	if stub.acceptCount != 0 {
+		t.Errorf("a non-interactive run switched models")
+	}
+}
+
+// With no lighter model to offer, the line is said and the wait goes on.
+func TestBenchmark_OverTheLineWithoutACandidateWaits(t *testing.T) {
+	fastPolls(t)
+	stub := &benchStub{
+		ready: true, measured: 228, floor: 190,
+		running: overLineRunning(nil), release: make(chan struct{}),
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out syncBuilder
+	done := make(chan struct{})
+	go func() {
+		_, _, _ = benchmarkWithScanner(srv.URL, management.BenchmarkModeEnsure, false, &out,
+			bufio.NewScanner(strings.NewReader("")), false)
+		close(done)
+	}()
+	waitForOutput(t, &out, "   Waiting for the measurement to finish.")
+	close(stub.release)
+	<-done
+	if strings.Contains(out.String(), "Switch to") {
+		t.Errorf("a switch was offered with no candidate:\n%s", out.String())
+	}
+}
+
+func TestModelSpeedLine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ms   *management.ModelSpeedStatus
+		want string
+	}{
+		{"nothing reported", nil, ""},
+		{"finished", &management.ModelSpeedStatus{ModelID: "qwen3.6-35b-a3b",
+			SpeedMeasurement: management.SpeedMeasurement{TurnSeconds: 70, BudgetSeconds: 190}},
+			"  Qwen3.6 35B-A3B takes 70 s per request on this computer (target: 190 s or less)."},
+		{"running", &management.ModelSpeedStatus{ModelID: "qwen3.6-35b-a3b", Running: true,
+			SpeedMeasurement: management.SpeedMeasurement{ElapsedSeconds: 45, BudgetSeconds: 190}},
+			"  Qwen3.6 35B-A3B is being measured, 45s so far (target: 190 s or less)."},
+		{"running past the line", &management.ModelSpeedStatus{ModelID: "qwen3.8-27b", Running: true,
+			SpeedMeasurement: management.SpeedMeasurement{ElapsedSeconds: 195, TurnFloorSeconds: 195, BudgetSeconds: 190, OverBudget: true}},
+			"  Qwen3.8 27B takes 195 s or more per request on this computer (target: 190 s or less)."},
+	} {
+		if got := modelSpeedLine(tc.ms); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// syncBuilder is a strings.Builder safe to read while the flow writes.
+type syncBuilder struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuilder) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuilder) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func waitForOutput(t *testing.T, out *syncBuilder, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(out.String(), want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("output never contained %q:\n%s", want, out.String())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

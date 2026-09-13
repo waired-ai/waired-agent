@@ -571,9 +571,9 @@ func (a sbInfProvider) Select(ctx context.Context, req router.Request) (router.S
 	return router.Selection{}, errNotEnrolled
 }
 
-func (a sbInfProvider) RunBenchmark(ctx context.Context) (management.BenchmarkOutcome, bool, error) {
+func (a sbInfProvider) RunBenchmark(ctx context.Context, mode string) (management.BenchmarkOutcome, bool, error) {
 	if p := a.liveOrNil(); p != nil {
-		return p.RunBenchmark(ctx)
+		return p.RunBenchmark(ctx, mode)
 	}
 	return management.BenchmarkOutcome{}, false, errNotEnrolled
 }

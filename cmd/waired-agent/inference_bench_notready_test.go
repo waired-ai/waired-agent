@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // seedActiveReady makes EngineReady() answer true on a provider built by
@@ -61,7 +62,7 @@ func TestRunBenchmark_NotReadyLeavesThroughThe425Door(t *testing.T) {
 	p := benchJobProvider(t, func(context.Context) BenchResult { return notReadyBench() })
 	seedActiveReady(t, p, "granite4-350m")
 
-	out, ok, err := p.RunBenchmark(context.Background())
+	out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 	if err != nil {
 		t.Fatalf("err = %v, want nil — not-ready is not an error", err)
 	}
@@ -93,7 +94,7 @@ func TestRunBenchmark_AFailedRunStillLeavesThroughThe503Door(t *testing.T) {
 	})
 	seedActiveReady(t, p, "granite4-350m")
 
-	out, ok, err := p.RunBenchmark(context.Background())
+	out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -143,7 +144,7 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 	}
 	got := make(chan result, 1)
 	go func() {
-		out, ok, err := p.RunBenchmark(context.Background())
+		out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 		got <- result{out, ok, err}
 	}()
 
@@ -187,13 +188,13 @@ func TestBenchmarkJob_NotReadyIsNotACompletionRecord(t *testing.T) {
 	measuredAt := time.Now().UTC().Add(-time.Hour)
 	if err := p.store.Update(func(s *catalog.State) {
 		s.LastBenchmark = &catalog.BenchmarkRecord{
-			Gen: 5, MeasuredTokps: 99, Method: benchMethodOllamaEval, MeasuredAt: measuredAt,
+			Gen: 5, MeasuredTokps: 99, Method: signer.BenchmarkMethodOllamaEval, MeasuredAt: measuredAt,
 		}
 	}); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
 
-	waitDone(t, p.startBenchmarkJob(7))
+	waitDone(t, p.startBenchmarkJob(7, management.BenchmarkModeEnsure))
 
 	got := p.BenchmarkStatus()
 	if got.State != management.BenchmarkStateDone {
@@ -227,7 +228,7 @@ func TestBenchmarkJob_NotReadyIsNotACompletionRecord(t *testing.T) {
 // mesh this host has no working engine.
 func TestBenchmarkJob_NotReadyStillDeRatesTheNode(t *testing.T) {
 	p := benchJobProvider(t, func(context.Context) BenchResult { return notReadyBench() })
-	waitDone(t, p.startBenchmarkJob(0))
+	waitDone(t, p.startBenchmarkJob(0, management.BenchmarkModeEnsure))
 	if got := p.AdvertisedCapacity(); got != 1 {
 		t.Errorf("AdvertisedCapacity = %d, want 1 (0 would advertise UNLIMITED)", got)
 	}
@@ -241,7 +242,7 @@ func TestRunBenchmark_MeasuredRunIsUnaffected(t *testing.T) {
 	})
 	seedActiveReady(t, p, "granite4-350m")
 
-	out, ok, err := p.RunBenchmark(context.Background())
+	out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 	if err != nil || !ok {
 		t.Fatalf("RunBenchmark = (%+v, %v, %v), want a measured result", out, ok, err)
 	}

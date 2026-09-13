@@ -38,9 +38,9 @@ func newRuntimesCmd() *cobra.Command {
 	return cmd
 }
 
-// newRuntimesBenchmarkCmd runs the on-device interactive-performance check
-// against the daemon and, when the active model benches below the
-// interactive floor, prompts to switch to a lighter one (issue #133).
+// newRuntimesBenchmarkCmd measures the active model again (overwriting the
+// stored figure) and, when one request takes longer than the line, prompts
+// to switch to a lighter one (issue #133; waired-ai/waired-agent#1341).
 // Shares the prompt logic with `waired init`.
 func newRuntimesBenchmarkCmd() *cobra.Command {
 	var mgmt, stateDir string

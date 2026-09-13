@@ -66,6 +66,7 @@ type Server struct {
 	isShareDeniedFn func() bool
 	isMeasuringFn   func() bool
 	prefillRateFn   func() *PrefillRate
+	speedFn         func() *SpeedReading
 	inflight        *inflightCounter
 	public          *publicAdmission
 	team            *cancelRegistry
@@ -604,6 +605,10 @@ type Config struct {
 	// live residency does — see HealthSnapshot.PrefillRate.
 	PrefillRate func() *PrefillRate
 
+	// Speed returns this host's served-model speed measurement for
+	// /healthz (HealthSnapshot.Speed). nil = never reported.
+	Speed func() *SpeedReading
+
 	// IsPublicShareDenied returns true when the operator has NOT
 	// enabled Public Share serving (public share spec §8.1). Applies
 	// only to requests whose peer IsPublicConsumer(): they get 503
@@ -723,6 +728,7 @@ func NewServerWithConfig(cfg Config) *Server {
 		isShareDeniedFn: cfg.IsShareDenied,
 		isMeasuringFn:   cfg.IsMeasuringSpeed,
 		prefillRateFn:   cfg.PrefillRate,
+		speedFn:         cfg.Speed,
 		engineReadyFn:   cfg.EngineReadyFn,
 		modelResidentFn: cfg.ModelResidentFn,
 		modelLoadingFn:  cfg.ModelLoadingFn,

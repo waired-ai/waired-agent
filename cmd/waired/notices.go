@@ -69,9 +69,10 @@ func printNotices(mgmtURL string) {
 // noticeMark is the marker a severity gets on a terminal. It goes
 // through emo() so a console that cannot draw the glyph gets the ASCII
 // fallback instead of mojibake; both marks are already in the fold table
-// (ascii.go). Info's is an arrow because every Info notice today is a
-// step-up model suggestion, which `waired init` already marks that way —
-// a record of today's producers, not a rule about severities.
+// (ascii.go). Info's is an arrow, the mark the step-up model suggestion
+// introduced; that suggestion is retired (waired-ai/waired-agent#1342) and
+// the arrow now marks every Info notice — a newer release, an engine note.
+// A record of today's marks, not a rule about severities.
 func noticeMark(s notices.Severity) string {
 	if s == notices.SeverityWarn {
 		return emo("⚠", "!")

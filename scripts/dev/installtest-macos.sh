@@ -636,7 +636,10 @@ assert_inference_macos() {
   # rather than a 350M fixture.
   tps=""; notready=""
   if [ -f "$INITLOG" ]; then
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1 || true)"
+    # The served model's seconds per request (waired-ai/waired-agent#1341);
+    # the suffix keeps the host-speed row ("N s per request, measured with a
+    # small model") from satisfying it. See the linux twin.
+    tps="$(grep -oE '[0-9]+(\.[0-9]+)? s (or more )?per request( on this computer| here| \(target)' "$INITLOG" | head -1 || true)"
     notready="$(grep -oE "$IT_BENCH_NOT_READY_RE" "$INITLOG" | head -1 || true)"
   fi
   if [ -n "$tps" ]; then
@@ -679,7 +682,7 @@ assert_inference_macos() {
     evidence_dump /tmp/it-logs.txt 2>&1 |
       sed 's/^/    agent| /' >&2 || true
   else
-    bad "no benchmark THROUGHPUT figure in init transcript ($INITLOG)"
+    bad "no benchmark figure (seconds per request) in init transcript ($INITLOG)"
     grep -iE 'benchmark|inference|engine' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
     # Surface the daemon's own boot benchmark slog and the engine log — a
     # failed benchmark is usually the engine's fault.

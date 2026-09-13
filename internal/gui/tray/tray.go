@@ -2407,16 +2407,6 @@ func (t *tray) maybeShowRecommendation(ctx context.Context, rec *management.Benc
 	}
 }
 
-// liveRecommendation picks the catalog's switch suggestion to surface:
-// lighter takes precedence over upgrade (the daemon makes them mutually
-// exclusive; precedence here is a safety net).
-func liveRecommendation(cat *management.ModelCatalogResponse) *management.BenchmarkRecommendation {
-	if rec := cat.BenchmarkRecommendation; rec != nil {
-		return rec
-	}
-	return cat.BenchmarkUpgrade
-}
-
 // dispatchNoticeClicks routes clicks on one notice row
 // (waired-agent#1205).
 //
@@ -2492,9 +2482,8 @@ const (
 //
 // The question has to describe what saying yes costs. Since waired#812
 // the switch applies in process, so the old "the agent will restart"
-// was overstating it; what the upgrade arm does cost is the download,
-// which the downgrade arm does not (the lighter model is the one this
-// host can already serve).
+// was overstating it. The upgrade arm that also sat here, and cost a
+// download, is retired (waired-ai/waired-agent#1342).
 func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	t.mu.Lock()
 	rec := t.lastRecommendation
@@ -2505,17 +2494,10 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 
 	title := "Local inference is slow"
 	body := fmt.Sprintf(
-		"This computer benchmarked at %.0f tok/s, below the %.0f tok/s needed for interactive use.\n\n"+
+		"This computer takes %s per request with %s %s.\n\n"+
 			"Switch to the lighter model %s? It applies live. Waired keeps answering.",
-		rec.MeasuredTokps, rec.FloorTokps, rec.ToModelID)
-	if rec.Direction == management.RecommendationUpgrade {
-		title = "Better model available"
-		body = fmt.Sprintf(
-			"This computer benchmarked at %.0f tok/s, enough headroom for a stronger model.\n\n"+
-				"Switch to %s (about %.0f tok/s predicted)? It downloads first, and your current model "+
-				"keeps answering until it is ready.",
-			rec.MeasuredTokps, rec.ToModelID, rec.PredictedTokps)
-	}
+		notice.RequestSeconds(rec.TurnSeconds, rec.TurnFloorSeconds), rec.FromModelID,
+		notice.TargetClause(rec.BudgetSeconds), rec.ToModelID)
 
 	yes, ok := confirmYesNo(title, body)
 	if !ok {
@@ -2699,7 +2681,7 @@ func (t *tray) pollOnce(ctx context.Context) {
 	// leaving snap.Catalog nil so the menu hides the submenu entirely.
 	if cat, catErr := t.cli.ModelCatalog(pollCtx); catErr == nil {
 		snap.Catalog = cat
-		t.maybeShowRecommendation(ctx, liveRecommendation(cat))
+		t.maybeShowRecommendation(ctx, cat.BenchmarkRecommendation)
 	}
 	// Notices: best-effort with 404 → ErrNoticesUnsupported, leaving
 	// snap.Notices nil so an older daemon renders the menu it always did

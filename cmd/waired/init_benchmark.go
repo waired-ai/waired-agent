@@ -2,20 +2,27 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hostspeed"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
+	notices "github.com/waired-ai/waired-agent/internal/notice"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // benchPollDeadline bounds how long `waired init` waits for the model to
 // finish downloading + the engine to come up before it gives up on the
-// interactive-performance check. Generous because a cold first pull of a
+// interactive-performance check. It bounds that wait only: once the
+// measurement itself is running, init waits for it to end however long it
+// takes, because setup is not complete until it has (waired-ai/waired#1382;
+// decision 5 of docs/decisions/20260913/2245). Generous because a cold first pull of a
 // multi-GB model over a slow link can take many minutes; the user can
 // always re-run `waired runtimes benchmark` later. A var (not const) so
 // tests can shrink it.
@@ -43,16 +50,17 @@ var benchPollInterval = 3 * time.Second
 // comfortably inside this; a var so tests can shrink it.
 var benchNoEngineGrace = 3 * time.Minute
 
-// benchHTTP is the status-aware client used by the benchmark prompt.
-// The /benchmark POST blocks while the daemon warms the model up (up
-// to 180 s for a cold multi-GB load) plus the 30 s measurement, so the
-// client timeout must comfortably exceed both.
-var benchHTTP = &http.Client{Timeout: 240 * time.Second}
+// benchNarrateEvery is how often the wait says how long the measurement has
+// been running. Elapsed time is what tells slow from stuck, and this output
+// is read through transcripts as often as by a person. A var so tests can
+// shrink it.
+var benchNarrateEvery = 30 * time.Second
 
-// promptBenchmarkRecommendation runs the issue #133 post-install
-// interactive-performance check: it asks the daemon to benchmark the
-// active model and, when throughput is below the interactive floor and a
-// lighter model fits, prompts the user to switch. It NEVER switches
+// promptBenchmarkRecommendation is `waired runtimes benchmark`: it asks the
+// daemon to measure the active model again (mode rerun — a person asking for
+// a new number overwrites the stored one) and, when one request takes longer
+// than the line and a lighter model fits, prompts the user to switch (issue
+// #133; waired-ai/waired-agent#1341). It NEVER switches
 // without confirmation; --non-interactive prints the recommendation but
 // does not auto-accept.
 //
@@ -68,54 +76,97 @@ func promptBenchmarkRecommendation(mgmtURL string, nonInteractive bool, out io.W
 	// for this caller: `waired runtimes benchmark` has already printed the
 	// engine's refusal in full, and turning it into a non-nil error here
 	// would make an informational path start failing.
-	_, _, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, sc, tty)
+	_, _, err := benchmarkWithScanner(mgmtURL, management.BenchmarkModeRerun, nonInteractive, out, sc, tty)
 	return err
 }
 
-// benchmarkOutcome carries the just-measured throughput up to the final
+// benchmarkOutcome carries the just-measured request time up to the final
 // success summary. The zero value means "no measurement" — the benchmark was
-// skipped, the daemon was unreachable, or an older daemon didn't report tok/s.
+// skipped, the daemon was unreachable, or an older daemon reported no
+// seconds.
 type benchmarkOutcome struct {
 	Measured bool
-	Tokps    float64
-	// ModelID is the model the rate was measured on, so the summary can
-	// report it as one model's speed rather than as an unattributed
-	// figure (waired-agent#1027). Empty against a daemon that predates
-	// the field, and the summary then prints the rate alone — the row it
-	// printed before.
-	ModelID string
-	// BelowFloor is the daemon's verdict that this rate is under the
-	// throughput a coding agent needs to be usable, and FloorTokps is
-	// what it was judged against.
+	// Speed is the daemon's measurement and verdict in seconds per request
+	// (waired-ai/waired-agent#1341): the figure, the line it was judged
+	// against, and whether it is over.
 	//
 	// Carried to the closing box because the box is where a run that KEPT
-	// a below-floor model reports itself, and it had no way to say so: on
+	// a model over the line reports itself, and it had no way to say so: on
 	// the rc6 review's RTX 4070 Laptop, `--non-interactive
-	// --inference-enabled=true` measured 11 tok/s against the 60 tok/s
-	// floor, printed "Non-interactive: keeping Qwen3.5 9B", and then
-	// closed on "setup is complete" with "Claude routed through Waired"
+	// --inference-enabled=true` measured a model too slow for a coding
+	// agent, printed "Non-interactive: keeping Qwen3.5 9B", and then closed
+	// on "setup is complete" with "Claude routed through Waired"
 	// (waired-agent#1300).
 	//
 	// Read off the response rather than from the arm that kept the model,
 	// so every path agrees: the accept path re-measures after the switch
 	// (remeasureAfterSwitch), so its response describes the model this
 	// computer actually ends up serving.
-	BelowFloor bool
-	FloorTokps float64
+	Speed management.SpeedMeasurement
+	// ModelID is the model the figure was measured on, so the summary can
+	// report it as one model's speed rather than as an unattributed
+	// figure (waired-agent#1027). Empty against a daemon that predates
+	// the field, and the summary then prints the figure alone.
+	ModelID string
+}
+
+// OverLine reports the daemon's verdict that one request takes longer than
+// the line.
+func (o benchmarkOutcome) OverLine() bool { return o.Measured && overLine(o.Speed) }
+
+// overLine is the verdict a response carries. Read from over_budget, and
+// from the two figures beside it as well, so a response that sent the
+// figures and not the flag is still judged the way the daemon judges.
+func overLine(sm management.SpeedMeasurement) bool {
+	if sm.OverBudget {
+		return true
+	}
+	if sm.BudgetSeconds <= 0 {
+		return false
+	}
+	return sm.TurnSeconds > sm.BudgetSeconds || (sm.TurnSeconds <= 0 && sm.TurnFloorSeconds > sm.BudgetSeconds)
+}
+
+// speedPhrase renders a measurement the one way every surface does
+// (internal/notice.RequestSeconds): "228 s per request", or "190 s or more
+// per request" for a measurement still running past the line.
+func speedPhrase(sm management.SpeedMeasurement) string {
+	return notices.RequestSeconds(sm.TurnSeconds, sm.TurnFloorSeconds) + " per request"
+}
+
+// speedTarget is the "(target: 190 s or less)" that goes beside it. A
+// response that carried no line is judged against the one this build ships,
+// which is the one the daemon it ships with reads.
+func speedTarget(sm management.SpeedMeasurement) string {
+	budget := sm.BudgetSeconds
+	if budget <= 0 {
+		budget = hostfit.ModelTurnBudgetSeconds
+	}
+	return notices.TargetClause(budget)
 }
 
 // outcomeFrom reduces a benchmark response to the summary-facing measurement.
 func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
-	if resp == nil || resp.MeasuredTokps <= 0 {
+	if resp == nil || !resp.Judged() {
 		return benchmarkOutcome{}
 	}
 	return benchmarkOutcome{
-		Measured:   true,
-		Tokps:      resp.MeasuredTokps,
-		ModelID:    resp.ModelID,
-		BelowFloor: resp.BelowFloor,
-		FloorTokps: resp.FloorTokps,
+		Measured: true,
+		Speed:    resp.SpeedMeasurement,
+		ModelID:  resp.ModelID,
 	}
+}
+
+// benchModelLabel names the measured model for a sentence: the id the
+// daemon attached to the figure, else the active model, else "".
+func benchModelLabel(mgmtURL, modelID string) string {
+	if modelID == "" {
+		modelID = activeModelForDisplay(mgmtURL)
+	}
+	if modelID == "" {
+		return ""
+	}
+	return bundledModelLabelDefault(modelID)
 }
 
 // benchmarkWithScanner is the body of promptBenchmarkRecommendation,
@@ -128,12 +179,52 @@ func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
 // obtained) so the caller can surface the throughput in the final success
 // summary; the error is always nil today (every give-up path is
 // best-effort) but kept for future use.
-func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, bool, error) {
-	resp, ok, ranAndFailed := waitForBenchmark(mgmtURL, out)
+//
+// mode is management.BenchmarkModeEnsure from `waired init` — a setup does
+// not measure twice what the daemon has just measured on its own — and
+// BenchmarkModeRerun from `waired runtimes benchmark`.
+//
+// The wait has no cap once the measurement runs (waired-ai/waired#1382).
+// When it passes the line before it ends, the person is told then and
+// offered the lighter model at that moment; staying keeps the measurement
+// running and the flow waits for it to finish.
+func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, bool, error) {
+	// switchTo is the suggestion the person accepted while the measurement
+	// was still running; declined is the target they turned down then, so
+	// the same question is not asked twice in one run.
+	var switchTo *management.BenchmarkRecommendation
+	declined := ""
+	offer := func(st management.BenchmarkStatusResponse) bool {
+		rec := st.Recommendation
+		if nonInteractive || rec == nil || rec.Dismissed || rec.ToModelID == "" {
+			return false
+		}
+		to := bundledModelLabelDefault(rec.ToModelID)
+		switch ynAsk(out, sc, fmt.Sprintf("Switch to %s? The measurement keeps running if you stay.", to), true) {
+		case ynYes:
+			switchTo = rec
+			return true
+		case ynNo:
+			declined = rec.ToModelID
+		}
+		return false
+	}
+	resp, ok, ranAndFailed := waitForBenchmark(mgmtURL, mode, out, offer)
+	if switchTo != nil {
+		from := bundledModelLabelDefault(switchTo.FromModelID)
+		to := bundledModelLabelDefault(switchTo.ToModelID)
+		var after *management.BenchmarkRunResponse
+		if switchAndWait(mgmtURL, switchTo.ToModelID, to, out, sc, tty) {
+			after = remeasureAfterSwitch(mgmtURL, out)
+			offerToRemoveRejected(mgmtURL, switchTo.FromModelID, from, nonInteractive, out, sc)
+		}
+		return after, false, nil
+	}
 	if !ok {
 		// already explained inside waitForBenchmark
 		return nil, ranAndFailed, nil
 	}
+	sm := resp.SpeedMeasurement
 
 	if rec := resp.Recommendation; rec != nil && !rec.Dismissed {
 		// Special case: the step-down lands on the lightest model we
@@ -141,15 +232,28 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		// instead of the neutral "switch to a lighter model" flow, confirm
 		// whether to keep local inference at all (drop to it) or turn it
 		// off. Default No.
-		if isLightestOfferedModel(rec.ToModelID) {
+		if isLightestOfferedModel(rec.ToModelID) && declined != rec.ToModelID {
 			return tinyBenchmarkDisableFlow(mgmtURL, nonInteractive, out, sc, tty, rec, resp)
 		}
 
-		// Below the interactive floor → lighter-model flow (issue #133).
+		// Over the line → lighter-model flow (issue #133).
 		from := bundledModelLabelDefault(rec.FromModelID)
 		to := bundledModelLabelDefault(rec.ToModelID)
-		writePromptf(out, "\n%s Local inference is slow: %s measured %.0f tok/s, below the %.0f tok/s needed for interactive use.\n",
-			emo("🐢", "!"), from, rec.MeasuredTokps, rec.FloorTokps)
+		writePromptf(out, "\n%s Local inference is slow: %s takes %s %s.\n",
+			emo("🐢", "!"), from, speedPhrase(sm), speedTarget(sm))
+
+		if declined == rec.ToModelID {
+			// Asked while the measurement ran, and answered No then. The
+			// finished figure does not change the question, so the answer
+			// stands and is recorded the way the prompt below records it.
+			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
+				writePromptf(out, "Warning: couldn't record your choice: %v\n", err)
+			} else {
+				writePromptf(out, "Keeping %s. You can switch later from the Waired app or with `waired runtimes benchmark`.\n",
+					from)
+			}
+			return resp, false, nil
+		}
 		writePromptf(out, "Waired recommends switching from %s to %s. The lighter model should run more smoothly on this hardware.\n",
 			from, to)
 
@@ -181,8 +285,8 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		return resp, false, nil
 	}
 
-	// Below the floor with no lighter model to propose. Reaching here
-	// means the daemon judged the rate too slow and LighterCandidate
+	// Over the line with no lighter model to propose. Reaching here
+	// means the daemon judged the request too slow and LighterCandidate
 	// found nothing — most often because this host is already serving
 	// the smallest model Waired offers, which is the one case where
 	// "switch to something lighter" has no answer (waired-agent#784).
@@ -192,91 +296,53 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 	// pick failed or the measurement describes a model that is no longer
 	// active, and offering to turn local inference off for either of
 	// those would be answering a question nobody asked.
-	if resp.BelowFloor && resp.Recommendation == nil {
+	if overLine(sm) && resp.Recommendation == nil {
 		if modelID := activeModelForDisplay(mgmtURL); modelID != "" && isLightestOfferedModel(modelID) {
 			return noLighterModelFlow(mgmtURL, nonInteractive, out, sc, modelID, resp)
 		}
 	}
 
-	// At or above the floor: a 200 means the daemon ran a real
-	// generation — this doubles as the end-to-end "local inference
-	// works" smoke test. The response doesn't carry the benchmarked
-	// model's identity, so name it from /inference/status (waired#773);
-	// fall back to the model-less wording when that can't be resolved.
+	// Inside the line: a 200 means the daemon ran a real generation —
+	// this doubles as the end-to-end "local inference works" smoke test.
+	label := benchModelLabel(mgmtURL, resp.ModelID)
 	switch {
-	case resp.MeasuredTokps > 0 && !resp.BelowFloor:
-		if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
-			writePromptf(out, "%s Local inference works. %s measured %.0f tok/s on this computer.\n",
-				emo("✅", "*"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
+	case sm.Judged() && !overLine(sm):
+		if label != "" {
+			writePromptf(out, "%s Local inference works. %s takes %s on this computer.\n",
+				emo("✅", "*"), label, speedPhrase(sm))
 		} else {
-			writePromptf(out, "%s Local inference works. Measured %.0f tok/s on this computer.\n",
-				emo("✅", "*"), resp.MeasuredTokps)
+			writePromptf(out, "%s Local inference works. %s on this computer.\n",
+				emo("✅", "*"), speedPhrase(sm))
 		}
-	case resp.MeasuredTokps > 0:
-		// Below the floor, and the two arms above did not take it: the
+	case sm.Judged():
+		// Over the line, and the two arms above did not take it: the
 		// daemon had no lighter model to propose and this host is not on
 		// the smallest one, so something else — a failed engine pick, a
 		// measurement describing a model that is no longer active —
 		// stopped the proposal.
 		//
-		// Say the number and stop. "Local inference works" over a rate
+		// Say the number and stop. "Local inference works" over a figure
 		// the same run judged too slow is the claim waired-agent#784
 		// reported from the badge; printing it here would be the same
 		// untruth in the same run.
-		if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
-			writePromptf(out, "%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s needed for interactive use.\n",
-				emo("🐢", "!"), bundledModelLabelDefault(modelID), resp.MeasuredTokps, resp.FloorTokps)
+		if label != "" {
+			writePromptf(out, "%s Local inference is slow here: %s takes %s %s.\n",
+				emo("🐢", "!"), label, speedPhrase(sm), speedTarget(sm))
 		} else {
-			writePromptf(out, "%s Local inference is slow here: measured %.0f tok/s, below the %.0f tok/s needed for interactive use.\n",
-				emo("🐢", "!"), resp.MeasuredTokps, resp.FloorTokps)
+			writePromptf(out, "%s Local inference is slow here: %s %s.\n",
+				emo("🐢", "!"), speedPhrase(sm), speedTarget(sm))
 		}
 	default:
-		// measured_tokps is absent. On a current daemon a FAILED benchmark is
-		// a non-200 (handled in waitForBenchmark), so reaching here means an
-		// older daemon that never reported the figure: we know a generation
-		// ran, not how fast. Do NOT claim "works" — that wording is what
-		// turned a dead engine into a green line (waired-agent#29), because a
-		// failed run and a too-slow host both arrive here with a zero rate.
+		// No seconds. On a current daemon a FAILED benchmark is a non-200
+		// (handled in waitForBenchmark), so reaching here means an older
+		// daemon that never reported the figure: we know a generation ran,
+		// not how fast. Do NOT claim "works" — that wording is what turned
+		// a dead engine into a green line (waired-agent#29), because a
+		// failed run and a too-slow host both arrive here with no figure.
 		writePrompt(out, emo("ℹ", "i")+" Benchmark ran, but this build of Waired doesn't report a "+
-			"throughput figure. Update Waired, then run `waired runtimes benchmark` to see it.")
+			"figure in seconds. Update Waired, then run `waired runtimes benchmark` to see it.")
 	}
 
-	if rec := resp.Upgrade; rec != nil && !rec.Dismissed {
-		from := bundledModelLabelDefault(rec.FromModelID)
-		to := bundledModelLabelDefault(rec.ToModelID)
-		// The direction is stated because the labels no longer carry a
-		// quality figure to compare (#537): the line said which model was
-		// faster and left "and is it better?" to two numbers beside the
-		// names. This flow only ever offers a stronger model, so it says so.
-		writePromptf(out, "\n%s This computer has headroom: %s is a stronger model and should run at about %.0f tok/s here, against %.0f tok/s measured on %s.\n",
-			emo("⬆", "^"), to, rec.PredictedTokps, rec.MeasuredTokps, from)
-
-		if nonInteractive {
-			writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
-				from)
-			return resp, false, nil
-		}
-
-		// Default No: an upgrade pulls a multi-GB download — the opposite
-		// trade-off of the lighter flow. The switch itself applies live
-		// (waired#812), so only the download is called out here.
-		answer := ynAsk(out, sc, fmt.Sprintf("Switch to %s? (downloads the model)", to), false)
-		if answer == ynNoAnswer {
-			return noAnswerKeeps(out, from, resp)
-		}
-		if answer == ynNo {
-			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
-				writePromptf(out, "Warning: couldn't record your choice: %v\n", err)
-			} else {
-				writePromptf(out, "Keeping %s. You can switch later from the Waired app or with `waired runtimes benchmark`.\n",
-					from)
-			}
-			return resp, false, nil
-		}
-		if switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty) {
-			resp = remeasureAfterSwitch(mgmtURL, out)
-		}
-	}
 	return resp, false, nil
 }
 
@@ -346,8 +412,10 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 // It is offered, not done. The bytes are re-downloadable but not free,
 // and an operator who expects to move back up after adding memory has a
 // real reason to keep them; that is a decision the person in front of
-// the machine owns, not the wizard. Default Yes follows the demotion
-// prompt above it: this host was measured too slow for that model.
+// the machine owns, not the wizard. Default No (owner decision
+// 2026-09-13, decision 8 of docs/decisions/20260913/2245): switching back
+// later reuses the stored measurement (decision 7), and it should not have
+// to download the weights again either.
 //
 // Non-interactive keeps the weights and says so, with the command that
 // removes them. Deleting gigabytes on nobody's authority is the one
@@ -362,7 +430,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 	}
 	// Never offer to delete the model this host is SERVING. The premise
 	// of the question — "Waired is not using it any more" — is what makes
-	// default Yes safe, and waired-agent#754 produced a step-down whose
+	// the offer safe at all, and waired-agent#754 produced a step-down whose
 	// two sides were the same model, which would have walked an operator
 	// through deleting the weights under the engine (DeleteModel drops
 	// the weights, clears state.Active, and clears the preference).
@@ -383,7 +451,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 		writePromptf(out, "Keeping %s. Remove it with `waired models rm %s`.\n", label, modelID)
 		return
 	}
-	answer := ynAsk(out, sc, fmt.Sprintf("Remove %s? Waired isn't using it any more.", label), true)
+	answer := ynAsk(out, sc, fmt.Sprintf("Remove %s? Waired isn't using it any more.", label), false)
 	if answer == ynNoAnswer {
 		// Same line the unattended arm above prints, for the same reason:
 		// deleting gigabytes on nobody's authority is the one answer this
@@ -420,23 +488,24 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 // no rate row says less and nothing false, and waitForBenchmark has
 // already explained whatever went wrong.
 //
-// The re-run genuinely re-measures — an explicit benchmark bypasses the
-// on-disk cache — and the daemon answers 425 while the engine is still
-// bouncing around the new weights, which waitForBenchmark already polls
-// through.
+// It asks in mode ensure: a model this host has measured before is answered
+// from the stored figure (decision 7 of docs/decisions/20260913/2245), and
+// one it has not is measured. The daemon answers 425 while the engine is
+// still bouncing around the new weights, which waitForBenchmark already
+// polls through.
 //
 // Any recommendation the second run carries is deliberately ignored. The
-// lighter model can itself measure below the floor, and acting on that
-// here would step down again inside a flow the operator answered once.
+// lighter model can itself measure over the line, and acting on that here
+// would step down again inside a flow the operator answered once.
 // `waired runtimes benchmark` is where that conversation belongs.
 func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRunResponse {
 	writePrompt(out, "Measuring the new model...")
-	resp, ok, _ := waitForBenchmark(mgmtURL, out)
-	if !ok || resp == nil || resp.MeasuredTokps <= 0 {
+	resp, ok, _ := waitForBenchmark(mgmtURL, management.BenchmarkModeEnsure, out, nil)
+	if !ok || resp == nil || !resp.Judged() {
 		return nil
 	}
 	// The second run's own verdict decides the wording. Claiming "works"
-	// over a rate this very run judged below the floor was the same
+	// over a figure this very run judged over the line was the same
 	// untruth waired-agent#784 reported from the badge — and it was
 	// reachable: a step-down onto a model that is itself too slow is
 	// exactly what the chain exists to walk.
@@ -446,24 +515,32 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 	// where the host stands leaves the operator with something to act
 	// on, and the catalog badge has already moved to the next rung by
 	// the time this prints.
-	label := ""
-	if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
-		label = bundledModelLabelDefault(modelID) + " "
-	}
-	if resp.BelowFloor {
-		writePromptf(out, "%s %smeasured %.0f tok/s here, still below the %.0f tok/s needed for interactive use.\n",
-			emo("🐢", "!"), label, resp.MeasuredTokps, resp.FloorTokps)
+	sm := resp.SpeedMeasurement
+	label := benchModelLabel(mgmtURL, resp.ModelID)
+	if overLine(sm) {
+		if label != "" {
+			writePromptf(out, "%s %s takes %s here %s.\n",
+				emo("🐢", "!"), label, speedPhrase(sm), speedTarget(sm))
+		} else {
+			writePromptf(out, "%s %s here %s.\n",
+				emo("🐢", "!"), speedPhrase(sm), speedTarget(sm))
+		}
 		writePrompt(out, "   Run `waired runtimes benchmark` to step down again.")
 		return resp
 	}
-	writePromptf(out, "%s Local inference works. %smeasured %.0f tok/s on this computer.\n",
-		emo("✅", "*"), label, resp.MeasuredTokps)
+	if label != "" {
+		writePromptf(out, "%s Local inference works. %s takes %s on this computer.\n",
+			emo("✅", "*"), label, speedPhrase(sm))
+	} else {
+		writePromptf(out, "%s Local inference works. %s on this computer.\n",
+			emo("✅", "*"), speedPhrase(sm))
+	}
 	return resp
 }
 
 // tinyBenchmarkDisableFlow is the benchmark-time counterpart of the install
-// spec-check dialog: the active model benchmarked below the interactive floor
-// and the ONLY lighter step-down is the bottom of the ladder — nothing Waired
+// spec-check dialog: one request with the active model takes longer than the
+// line and the ONLY lighter step-down is the bottom of the ladder — nothing Waired
 // offers is ranked below it (isLightestOfferedModel, init_modelselect.go).
 // Rather than the neutral "switch to a lighter model" flow, it confirms whether
 // to keep local inference by dropping to that last model, or turn it off.
@@ -480,8 +557,8 @@ func tinyBenchmarkDisableFlow(
 ) (*management.BenchmarkRunResponse, bool, error) {
 	from := bundledModelLabelDefault(rec.FromModelID)
 	label := bundledModelLabelDefault(rec.ToModelID)
-	writePromptf(out, "\n%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s\n",
-		emo("⚠", "!"), from, rec.MeasuredTokps, rec.FloorTokps)
+	writePromptf(out, "\n%s Local inference is slow here: %s takes %s %s.\n",
+		emo("⚠", "!"), from, speedPhrase(resp.SpeedMeasurement), speedTarget(resp.SpeedMeasurement))
 	// "very low quality" was the old wording. It said the wrong thing
 	// twice: the install floor is not a measurement of quality, and #537
 	// gives `small` a meaning that reaches models this flow would happily
@@ -492,8 +569,7 @@ func tinyBenchmarkDisableFlow(
 	// recommended on any computer") kept asserting the floor itself, which
 	// #522 abolished; the branch is selected by an ordering. So the line
 	// now says only what the gate actually tested (waired-agent#834).
-	writePromptf(out, "   needed for interactive use. %s is the smallest model Waired offers, so there's\n", label)
-	writePrompt(out, "   nothing lighter to switch to after it.")
+	writePromptf(out, "   %s is the smallest model Waired offers, so there's nothing lighter to switch to after it.\n", label)
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
@@ -531,7 +607,7 @@ func tinyBenchmarkDisableFlow(
 }
 
 // noLighterModelFlow is what happens when the host is ALREADY on the
-// bottom of the ladder and measured below the floor (waired-agent#784).
+// bottom of the ladder and measured over the line (waired-agent#784).
 //
 // tinyBenchmarkDisableFlow next door handles the rung above this one:
 // the step-down's target is the smallest model, so there is still a move
@@ -550,10 +626,9 @@ func noLighterModelFlow(
 	activeModelID string, resp *management.BenchmarkRunResponse,
 ) (*management.BenchmarkRunResponse, bool, error) {
 	label := bundledModelLabelDefault(activeModelID)
-	writePromptf(out, "\n%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s\n",
-		emo("⚠", "!"), label, resp.MeasuredTokps, resp.FloorTokps)
-	writePromptf(out, "   needed for interactive use. %s is the smallest model Waired offers, so there's\n", label)
-	writePrompt(out, "   nothing lighter to switch to.")
+	writePromptf(out, "\n%s Local inference is slow here: %s takes %s %s.\n",
+		emo("⚠", "!"), label, speedPhrase(resp.SpeedMeasurement), speedTarget(resp.SpeedMeasurement))
+	writePromptf(out, "   %s is the smallest model Waired offers, so there's nothing lighter to switch to.\n", label)
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", label)
@@ -585,11 +660,10 @@ func disableLocalInference(mgmtURL string) error {
 }
 
 // waitForBenchmark polls the daemon until the engine + active model are
-// ready, then runs the benchmark and returns the full response (with
-// the measurement plus any lighter/upgrade suggestion). ok=false means
-// "could not obtain a result" (daemon too old, model never readied
-// within the deadline, terminal pull failure) — the caller should
-// treat that as a non-error skip.
+// ready, then runs the benchmark and returns the full response (the
+// measurement plus any lighter-model suggestion). ok=false means "could not
+// obtain a result" (daemon too old, model never readied within the deadline,
+// terminal pull failure) — the caller should treat that as a non-error skip.
 //
 // ranAndFailed separates the ONE outcome inside ok=false that is not a
 // skip: the benchmark reached the engine and the engine could not
@@ -599,7 +673,14 @@ func disableLocalInference(mgmtURL string) error {
 // distinction they were the same zero value, which is how `waired init`
 // came to print "everything completed successfully!" one line after
 // reporting HTTP 500 (waired-ai/waired-agent#552).
-func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.BenchmarkRunResponse, ok, ranAndFailed bool) {
+//
+// While the measurement runs the wait says so, and how long it has been
+// going; there is no deadline on that part (waired-ai/waired#1382). When
+// it passes the line, the wait says that once, then calls offer (nil:
+// nothing to offer) with the daemon's status. offer returning true means
+// the person chose to leave the measurement — the wait abandons its
+// request and returns ok=false, and the caller carries out the choice.
+func waitForBenchmark(mgmtURL, mode string, out io.Writer, offer func(management.BenchmarkStatusResponse) bool) (resp *management.BenchmarkRunResponse, ok, ranAndFailed bool) {
 	deadline := time.Now().Add(benchPollDeadline)
 	// announcedWait is the lead of the wait line last printed, not a bool:
 	// what init is waiting on can change mid-wait (the download finishes and
@@ -613,10 +694,21 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 	// gives up after the grace rather than spinning to the full deadline.
 	var noEngineDeadline time.Time
 	engineSeen := false
+	narr := &benchNarration{mgmtURL: mgmtURL, out: out, offer: offer}
 	for {
 		// Try the benchmark; the handler returns 425 until the engine and
 		// model are both ready.
-		status, body, err := benchPost(mgmtURL+"/waired/v1/inference/benchmark", nil)
+		status, body, err, abandoned := narr.post(benchmarkURL(mgmtURL, mode))
+		if abandoned {
+			return nil, false, false
+		}
+		if narr.measured {
+			// A measurement ran on this request and did not end in a
+			// result (a switch made elsewhere cancelled it). The engine
+			// wait starts over from here, not from before the measurement.
+			deadline = time.Now().Add(benchPollDeadline)
+			narr.measured = false
+		}
 		switch {
 		case err != nil:
 			// Transport error — the daemon isn't reachable (not started
@@ -834,19 +926,139 @@ func dismissRecommendation(mgmtURL, fromVariantID, toVariantID string) error {
 	return err
 }
 
+// benchmarkURL is the benchmark endpoint with its mode.
+func benchmarkURL(mgmtURL, mode string) string {
+	u := mgmtURL + "/waired/v1/inference/benchmark"
+	if mode == "" {
+		return u
+	}
+	return u + "?mode=" + url.QueryEscape(mode)
+}
+
+// benchNarration is what the benchmark wait says while the daemon measures:
+// that it started, how long it has been going, and — once — that it is past
+// the line.
+type benchNarration struct {
+	mgmtURL string
+	out     io.Writer
+	offer   func(management.BenchmarkStatusResponse) bool
+
+	// measured is true once a measurement has been seen running on the
+	// request in flight; startedAt / saidAt time the progress lines.
+	measured          bool
+	announced         bool
+	overSaid          bool
+	startedAt, saidAt time.Time
+}
+
+// post sends the benchmark request and, while it is in flight, reads the
+// daemon's benchmark status every benchPollInterval to narrate the
+// measurement. abandoned reports that offer chose to leave the measurement;
+// the request is cancelled before post returns.
+//
+// The request carries no client timeout. The daemon's measurement has none
+// either once it runs (decision 4 of docs/decisions/20260913/2245), and a
+// CLI budget shorter than the daemon's destroys the answer rather than
+// making it late (see mgmtWriteRoute's note on budgets).
+func (n *benchNarration) post(target string) (status int, body []byte, err error, abandoned bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		status int
+		body   []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, b, e := benchPost(ctx, target, nil)
+		done <- result{s, b, e}
+	}()
+	tick := time.NewTicker(benchPollInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case r := <-done:
+			return r.status, r.body, r.err, false
+		case <-tick.C:
+			st, ok := fetchBenchmarkStatus(n.mgmtURL)
+			if !ok || st.State != management.BenchmarkStateRunning {
+				continue
+			}
+			if n.observe(st) {
+				return 0, nil, nil, true
+			}
+		}
+	}
+}
+
+// observe narrates one running status, and reports whether offer chose to
+// leave the measurement.
+func (n *benchNarration) observe(st management.BenchmarkStatusResponse) bool {
+	now := time.Now()
+	n.measured = true
+	if !n.announced {
+		writePromptf(n.out, "%s Timing this computer on the model it will serve. A few minutes...\n",
+			emo("⏱", "*"))
+		n.announced, n.startedAt, n.saidAt = true, now, now
+	}
+	sm := st.SpeedMeasurement
+	if sm.OverBudget && !n.overSaid {
+		n.overSaid = true
+		label := benchModelLabel(n.mgmtURL, st.ModelID)
+		if label != "" {
+			writePromptf(n.out, "\n%s %s takes %s %s.\n", emo("🐢", "!"), label, speedPhrase(sm), speedTarget(sm))
+		} else {
+			writePromptf(n.out, "\n%s This computer takes %s %s.\n", emo("🐢", "!"), speedPhrase(sm), speedTarget(sm))
+		}
+		if n.offer != nil && n.offer(st) {
+			return true
+		}
+		writePrompt(n.out, "   Waiting for the measurement to finish.")
+		n.saidAt = time.Now()
+		return false
+	}
+	if now.Sub(n.saidAt) >= benchNarrateEvery {
+		elapsed := now.Sub(n.startedAt)
+		if sm.ElapsedSeconds > 0 {
+			elapsed = time.Duration(sm.ElapsedSeconds * float64(time.Second))
+		}
+		writePromptf(n.out, "   still measuring, %s so far %s\n", elapsed.Round(time.Second), speedTarget(sm))
+		n.saidAt = now
+	}
+	return false
+}
+
+// fetchBenchmarkStatus GETs /inference/benchmark/status. ok=false on any
+// error, including a daemon that has no such endpoint.
+func fetchBenchmarkStatus(mgmtURL string) (st management.BenchmarkStatusResponse, ok bool) {
+	body, err := httpGet(mgmtURL + "/waired/v1/inference/benchmark/status")
+	if err != nil {
+		return management.BenchmarkStatusResponse{}, false
+	}
+	if err := json.Unmarshal(body, &st); err != nil {
+		return management.BenchmarkStatusResponse{}, false
+	}
+	return st, true
+}
+
 // benchPost performs a status-aware POST: it returns the HTTP status code
 // and body separately (unlike httpPost, which collapses non-2xx into an
 // error) so the caller can branch on 425 / 404.
-func benchPost(rawURL string, body []byte) (int, []byte, error) {
+func benchPost(ctx context.Context, rawURL string, body []byte) (int, []byte, error) {
 	// The benchmark is a mutating verb, so it travels over the local IPC
 	// socket like every other write (waired#838) — the loopback TCP port
-	// refuses it. benchHTTP's long timeout still applies: a benchmark can
-	// run for minutes.
-	target, client, viaSocket, err := mgmtWriteRoute(rawURL, benchHTTP.Timeout)
+	// refuses it. No client timeout: a measurement can run for minutes, and
+	// ctx is how the caller leaves it.
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, 0)
 	if err != nil {
 		return 0, nil, err
 	}
-	resp, err := client.Post(target, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		if viaSocket {
 			return 0, nil, ipcclient.WrapDialError(err)

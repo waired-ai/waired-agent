@@ -379,15 +379,14 @@ type InferenceConfig struct {
 	// the chosen engine and host VRAM/RAM).
 	PreferredModelID string `json:"preferred_model_id"`
 
-	// InteractiveFloorTokps is the minimum boot-benchmark throughput
-	// (tokens/sec, true decode per #764) below which the agent
-	// recommends a lighter model (issue #133). 0 means "use the
-	// built-in default" (router.CodingAgentSelectionFloorTokps = 60,
-	// #670/#765) — resolved at the consumer so the constant stays the
-	// single source of truth.
-	// Lower it on a host whose coding agent tolerates slower output to
-	// suppress the nag; the recommendation is advisory only and never
-	// auto-switches.
+	// InteractiveFloorTokps is RETIRED (waired-ai/waired-agent#1341;
+	// decision 3 of docs/decisions/20260913/2245). It was the decode rate
+	// below which the agent recommended a lighter model; the verdict is now
+	// one request's seconds against hostfit.ModelTurnBudgetSeconds, which is
+	// one constant every surface and the control plane read, and has no
+	// per-host override. Still parsed, so an agent.json, environment or
+	// service command line that sets it keeps loading; the daemon logs that
+	// it is ignored.
 	InteractiveFloorTokps float64 `json:"interactive_floor_tokps"`
 
 	// AllowAutoFallback controls bootstrap behaviour when the persisted
@@ -1152,7 +1151,7 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 		"force a specific manifest model_id (\"\" lets the auto-picker decide)")
 	fs.Float64Var(&c.Inference.InteractiveFloorTokps, "inference-interactive-floor-tokps",
 		c.Inference.InteractiveFloorTokps,
-		"min boot-benchmark tokens/sec below which a lighter model is recommended (0 = default 60)")
+		"retired and ignored: the lighter-model recommendation is judged in seconds per request (waired-agent#1341)")
 	fs.BoolVar(&c.Inference.AllowAutoFallback, "inference-allow-auto-fallback",
 		c.Inference.AllowAutoFallback,
 		"allow bootstrap to fall back when the chosen runtime is unavailable; false means exit non-zero")

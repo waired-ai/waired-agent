@@ -22,8 +22,7 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 | お知らせ | 意味 | 対処 |
 |---|---|---|
-| **⚠ Lighter model recommended — switch to …** | 動かしているモデルで、このパソコンの計測結果が、Wairedが快適な応答に必要とみなす速度を下回りました。本文に数値が示されます。*This computer answers at 14 tok/s with qwen3.5-9b, below the 20 tok/s floor.* | 行を選択すると切り替わります。［No］と答えると、そのモデルの組み合わせについては再び聞かれません。 |
-| **⬆ Better model available — switch to …** | 逆の状況です。このパソコンには、いま動かしているモデルより強いモデルを載せる余裕があります。本文に、強いモデルの見込みの速度が示されます。 | 同じ行、同じ2つの答えです。 |
+| **⚠ Lighter model recommended — switch to …** | 動かしているモデルで、コーディングエージェントと同じ大きさのリクエスト1つに、このパソコンでは目標より長くかかりました。本文に数値が示されます。*This computer takes 228 s per request with qwen3.8-27b (target: 190 s or less).* | 行を選択すると切り替わります。［No］と答えると、そのモデルの組み合わせについては再び聞かれません。 |
 | **⬆ Update available — install …** | このパソコンが動かしているものより新しいWairedのバージョンがあります。本文に現在のバージョンが示されます。 | 行を選択します。管理者権限を求められ、その場で更新されます。[Wairedをアップデートする](/ja/getting-started/update/)を参照してください。 |
 | **⚠ Ollama is not running the version Waired pins** | ここでリクエストに答えている推論エンジンが、このビルドのWairedが想定するバージョンではありません。自分でインストールしたものか、古いWairedが残したものであることが普通です。 | 本文に、戻すためのコマンドが示されます。 |
 | **⬆ Ollama sized this model for this computer** | 問題ではありません。推論エンジンが意図的に調整を行いました。たとえば、速度を少し犠牲にして長いコンテキストウィンドウを保つ、といった調整です。 | 何もしません。調整が見えるようにするための行です。 |

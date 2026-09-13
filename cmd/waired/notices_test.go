@@ -29,7 +29,7 @@ func noticeDaemon(t *testing.T, ns []notices.Notice, found bool) string {
 }
 
 func lighterNotice() notices.Notice {
-	return notices.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 42, 60)
+	return notices.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 228, 0, 190)
 }
 
 // TestSanitiseStripsEveryMarkThisCLIFolds
@@ -106,7 +106,7 @@ func TestPrintNotices_RendersTheBlock(t *testing.T) {
 	for _, want := range []string{
 		"Notices:",
 		"Lighter model recommended — switch to qwen3-8b-instruct",
-		"This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor.",
+		"This computer takes 228 s per request with qwen3-30b-a3b (target: 190 s or less).",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q:\n%s", want, out)
@@ -157,7 +157,7 @@ func TestNoticeFindings_BecomeWarnRows(t *testing.T) {
 	for _, want := range []string{
 		"⚠ model suggestion — Lighter model recommended",
 		"switch to qwen3-8b-instruct.",
-		"below the 60 tok/s floor.",
+		"(target: 190 s or less).",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("rendered = %q, missing %q", rendered, want)
@@ -196,20 +196,20 @@ func TestNoticeFindings_NeverMoveTheExitCode(t *testing.T) {
 // TestNoticeFindings_InfoSeverityIsNotADoctorRow
 //
 // PRODUCT CONTRACT (owner ruling, 2026-09-05, on what each surface
-// shows). Doctor reports on the health of the setup; a better model
+// shows). Doctor reports on the health of the setup; a newer release
 // being available is not a fault in it, and rendering it would have
 // meant inventing a fifth status mark for a case none of doctor's four
 // describes. It still shows in `waired status` and the tray.
 func TestNoticeFindings_InfoSeverityIsNotADoctorRow(t *testing.T) {
 	url := noticeDaemon(t, []notices.Notice{
-		notices.BetterModel("qwen3-8b-instruct", "qwen3-30b-a3b", 118, 64),
+		notices.UpdateAvailable("0.1.0", "0.2.0"),
 	}, true)
 
 	if got := noticeFindings(url); len(got) != 0 {
-		t.Fatalf("got %+v, want no doctor rows for a step-up suggestion", got)
+		t.Fatalf("got %+v, want no doctor rows for an info notice", got)
 	}
 	// …and the same notice does reach the other surface.
-	if out := captureStdout(t, func() { printNotices(url) }); !strings.Contains(out, "Better model available") {
+	if out := captureStdout(t, func() { printNotices(url) }); !strings.Contains(out, "Update available") {
 		t.Errorf("`waired status` dropped it too:\n%s", out)
 	}
 }

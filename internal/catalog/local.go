@@ -89,12 +89,12 @@ type State struct {
 	MeasuredVariants map[string]VariantMeasurement `json:"measured_variants,omitempty"`
 }
 
-// VariantMeasurement is one variant's measured decode rate on this
-// host — a figure, never a verdict. The floor it is compared against
-// belongs to the caller (router.CodingAgentSelectionFloorTokps by
-// default, overridable per host through agent config), and different
-// questions may well settle on different numbers, so what is stored
-// here stays the raw measurement.
+// VariantMeasurement is one variant's speed measurement on this host — a
+// figure, never a verdict. The line it is compared against belongs to the
+// caller (hostfit.ModelTurnBudgetSeconds), so what is stored here stays the
+// raw measurement: the rates at depth and the seconds per request they cost
+// (waired-ai/waired-agent#1341). An entry written before that — a shallow
+// decode rate with no TurnSeconds — makes no claim any more.
 type VariantMeasurement struct {
 	// ModelID and VariantID name what was measured. BenchmarkRecord
 	// below deliberately names neither — its identity is the generation
@@ -121,6 +121,23 @@ type VariantMeasurement struct {
 	EngineVersion string `json:"engine_version,omitempty"`
 
 	MeasuredAt time.Time `json:"measured_at"`
+
+	// The served-model measurement (waired-ai/waired-agent#1341):
+	// MeasuredTokps above is its decode rate; these are the prefill rate,
+	// the depth, and the seconds per request. A stored figure is reused only
+	// for the same engine release, GPU and serving configuration, so those
+	// travel too (decision 7 of docs/decisions/20260913/2245).
+	PrefillTokps  float64 `json:"prefill_tokps,omitempty"`
+	DepthTokens   int     `json:"depth_tokens,omitempty"`
+	TurnSeconds   float64 `json:"turn_seconds,omitempty"`
+	Samples       int     `json:"samples,omitempty"`
+	SpreadPct     float64 `json:"spread_pct,omitempty"`
+	GPUModel      string  `json:"gpu_model,omitempty"`
+	VRAMTotalMB   int     `json:"vram_total_mb,omitempty"`
+	DriverVersion string  `json:"driver_version,omitempty"`
+	AppliedWindow int     `json:"applied_window,omitempty"`
+	KVCacheType   string  `json:"kv_cache_type,omitempty"`
+	NumParallel   int     `json:"num_parallel,omitempty"`
 }
 
 // BenchmarkRecord is the persisted completion record of a benchmark
@@ -167,6 +184,18 @@ type BenchmarkRecord struct {
 	// reads as "unknown ending" and keeps the old flattening.
 	Outcome    string    `json:"outcome,omitempty"`
 	MeasuredAt time.Time `json:"measured_at"`
+
+	// The served-model measurement (waired-ai/waired-agent#1341): the rates
+	// at depth, the depth, the seconds per request or — for a run that
+	// stalled — only a lower bound, the verdict against the line, and
+	// whether the figure was a stored one answered without measuring.
+	PrefillTokps     float64 `json:"prefill_tokps,omitempty"`
+	DecodeTokps      float64 `json:"decode_tokps,omitempty"`
+	DepthTokens      int     `json:"depth_tokens,omitempty"`
+	TurnSeconds      float64 `json:"turn_seconds,omitempty"`
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+	OverBudget       bool    `json:"over_budget,omitempty"`
+	Cached           bool    `json:"cached,omitempty"`
 }
 
 // DismissalKey builds the map key for DismissedRecommendations from the

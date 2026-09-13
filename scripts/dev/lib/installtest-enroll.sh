@@ -1605,11 +1605,17 @@ assert_inference() {
   esac
 
   # The end-of-init benchmark (offerBenchmark, non-bypass) must report a
-  # THROUGHPUT NUMBER.
+  # MEASURED FIGURE: the served model's seconds per request
+  # (waired-ai/waired-agent#1341), which the CLI prints as "... takes N s per
+  # request on this computer." / "... (target: M s or less)." / "... here".
+  # The suffix is part of the pattern because the host-speed row prints
+  # "N s per request, measured with a small model" whether or not the model
+  # was benchmarked, and matching that row would pass a run that measured
+  # nothing. This used to require "N tok/s".
   #
   # This assert used to also accept the bare "Local inference works" line, on
   # the theory that a host too slow to measure a stable rate reports
-  # MeasuredTokps=0 yet still ran a real generation. But a benchmark whose
+  # no figure yet still ran a real generation. But a benchmark whose
   # warm-up got an engine 500 printed exactly that same line, so this assert
   # passed 13 seconds before the routing sentinel found a dead engine
   # (waired-agent#29). A current daemon now 503s a failed run and the CLI
@@ -1642,7 +1648,7 @@ assert_inference() {
   # driver; head-closing a multi-match grep (SIGPIPE 141) would too.
   tps=""; notready=""
   if [ -f "$initlog" ]; then
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
+    tps="$(grep -oE '[0-9]+(\.[0-9]+)? s (or more )?per request( on this computer| here| \(target)' "$initlog" | head -1 || true)"
     notready="$(grep -oE "$IT_BENCH_NOT_READY_RE" "$initlog" | head -1 || true)"
   fi
   if [ -n "$tps" ]; then
@@ -1667,7 +1673,7 @@ assert_inference() {
     gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 | sed 's/^/    status| /' || true
     it_prepull_evidence "$guest"
   else
-    bad "no benchmark THROUGHPUT figure in init transcript ($initlog)"
+    bad "no benchmark figure (seconds per request) in init transcript ($initlog)"
     grep -iE 'benchmark|inference|engine' "$initlog" 2>/dev/null | tail -20 | sed 's/^/    init| /' || true
     # Surface the daemon's own boot benchmark slog and the engine's log — a
     # failed benchmark is usually the engine's fault, and engine.log is where

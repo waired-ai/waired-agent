@@ -5,14 +5,15 @@ import (
 	"net/http"
 )
 
-// handleInferenceBenchmark forces a fresh on-device throughput benchmark
-// of the active model and returns the resulting recommendation — lighter
-// when below the interactive floor (issue #133), upgrade when the host
-// has headroom for a higher quality tier.
+// handleInferenceBenchmark measures the active model — or, with
+// mode=ensure, answers from the stored measurement — and returns the
+// verdict in seconds per request and the lighter-model recommendation when
+// the request is over the line (issue #133; waired-ai/waired-agent#1341).
 //
-//	POST /waired/v1/inference/benchmark
-//	200 → {"ran":true,"measured_tokps":N,"recommendation":{...}|absent,"upgrade":{...}|absent}
+//	POST /waired/v1/inference/benchmark[?mode=rerun|ensure]
+//	200 → {"ran":true,"turn_seconds":N,"budget_seconds":M,"over_budget":B,"recommendation":{...}|absent}
 //	425 → engine/model not ready yet (the caller should poll status)
+//	400 → an unknown mode
 //
 // Acceptance is out-of-band: the caller POSTs /preferred-model with the
 // recommendation's to_model_id. Decline goes to /recommendation/dismiss.
@@ -28,22 +29,12 @@ type BenchmarkRunResponse struct {
 	ModelID string `json:"model_id,omitempty"`
 	// Recommendation carries LIGHTER suggestions only — its wire
 	// semantics are frozen so old clients keep rendering it as "local
-	// inference is slow". Upgrades ride the separate Upgrade key,
-	// which old clients simply ignore.
+	// inference is slow". The upgrade suggestion that used to ride a
+	// separate key is retired (waired-ai/waired-agent#1342).
 	Recommendation *BenchmarkRecommendation `json:"recommendation,omitempty"`
-	Upgrade        *BenchmarkRecommendation `json:"upgrade,omitempty"`
 
-	// BelowFloor and FloorTokps report the speed verdict independently
-	// of whether there is a lighter model to propose.
-	//
-	// Absent recommendation used to be read as "fast enough", which is
-	// false on a host already serving the smallest model Waired offers:
-	// there is nothing lighter, so no recommendation is produced, and
-	// the run's own conclusion was lost (waired-agent#784). An older
-	// client that does not decode these keeps its previous reading,
-	// which is what it had before the fields existed.
-	BelowFloor bool    `json:"below_floor,omitempty"`
-	FloorTokps float64 `json:"floor_tokps,omitempty"`
+	// SpeedMeasurement is the verdict in seconds per request.
+	SpeedMeasurement
 }
 
 func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +47,17 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	out, ok, err := s.inference.RunBenchmark(r.Context())
+	mode := r.URL.Query().Get("mode")
+	switch mode {
+	case "":
+		mode = BenchmarkModeRerun
+	case BenchmarkModeRerun, BenchmarkModeEnsure:
+	default:
+		writeJSON(w, http.StatusBadRequest, errorBody("invalid_mode",
+			"mode must be "+BenchmarkModeRerun+" or "+BenchmarkModeEnsure))
+		return
+	}
+	out, ok, err := s.inference.RunBenchmark(r.Context(), mode)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("benchmark_failed", err.Error()))
 		return
@@ -90,18 +91,14 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 		Ran:           true,
 		MeasuredTokps: out.MeasuredTokps,
 		ModelID:       out.ModelID,
-		BelowFloor:    out.BelowFloor,
-		FloorTokps:    out.FloorTokps,
+
+		SpeedMeasurement: out.Speed,
 	}
 	// A nil / empty-ToModelID entry means "benched fine, nothing to
 	// suggest" in that direction.
 	if out.Lighter != nil && out.Lighter.ToModelID != "" {
 		rc := *out.Lighter
 		resp.Recommendation = &rc
-	}
-	if out.Upgrade != nil && out.Upgrade.ToModelID != "" {
-		rc := *out.Upgrade
-		resp.Upgrade = &rc
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -172,6 +169,18 @@ type BenchmarkStatusResponse struct {
 	// wall_clock. A wall_clock result carries request overhead and must
 	// be treated as low-confidence downstream.
 	Method string `json:"method,omitempty"`
+
+	// SpeedMeasurement is the served model's figure in seconds per request:
+	// the running request's elapsed seconds and, past the line, its bound;
+	// the finished figure once done (waired-ai/waired-agent#1341).
+	SpeedMeasurement
+
+	// Recommendation is the lighter-model suggestion as it stands now —
+	// set while a run is still going once it is over the line, so a caller
+	// waiting on the measurement can offer the switch at that moment
+	// (decision 4 of docs/decisions/20260913/2245), and after a finished
+	// run that came in over it. nil otherwise.
+	Recommendation *BenchmarkRecommendation `json:"recommendation,omitempty"`
 }
 
 // Benchmark job states — values of BenchmarkStatusResponse.State.

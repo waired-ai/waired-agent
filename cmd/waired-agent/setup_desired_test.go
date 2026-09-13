@@ -79,7 +79,6 @@ type fakeSetupProvider struct {
 	modelStateAsked []string
 	// hostSpeedProgress scripts how far the install-time measurement has got.
 	hostSpeedProgress hostSpeedProgress
-	prefillProgress   prefillSetupProgress
 	bench             management.BenchmarkStatusResponse
 	benchStarts       []int
 	// engineStarts records the reason of every startSetupEngine call, in
@@ -271,12 +270,6 @@ func (f *fakeSetupProvider) setupHostSpeedProgress() hostSpeedProgress {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.hostSpeedProgress
-}
-
-func (f *fakeSetupProvider) setupPrefillProgress() prefillSetupProgress {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.prefillProgress
 }
 
 func (f *fakeSetupProvider) BenchmarkStatus() management.BenchmarkStatusResponse {
@@ -951,6 +944,26 @@ func TestSetupApplySkipsPresentModelAndAnsweredBenchmark(t *testing.T) {
 	}
 	if len(f.benchStarts) != 0 {
 		t.Fatalf("answered (failed) gen rerun: %v", f.benchStarts)
+	}
+}
+
+// TestSetupApplyMeasuresAfterTheCounterRestarts: a revoked device that is
+// re-enrolled has its onboarding state cleared on the control plane, and
+// the benchmark counter starts again from 1 — while this host still holds
+// the generation of its previous enrolment. A stored generation AHEAD of
+// the request is that restart, and it must not answer the new request.
+// Before this the guard asked "behind", so every request of the new
+// enrolment read as already answered and the model chosen after
+// re-enrolment was never measured.
+func TestSetupApplyMeasuresAfterTheCounterRestarts(t *testing.T) {
+	f := &fakeSetupProvider{
+		modelState: catalog.ModelStateReady, activeModel: "qwen3-8b-instruct",
+		bench: management.BenchmarkStatusResponse{State: management.BenchmarkStateDone, Gen: 5},
+	}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.Apply(context.Background(), desiredFrame("", "qwen3-8b-instruct", 1))
+	if len(f.benchStarts) != 1 || f.benchStarts[0] != 1 {
+		t.Fatalf("benchStarts = %v, want one start at the restarted gen 1", f.benchStarts)
 	}
 }
 

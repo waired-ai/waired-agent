@@ -73,10 +73,10 @@ waired runtimes install [engine]    # ollama（既定）またはvllm
 waired runtimes upgrade <engine>    # インストール済みの推論エンジンをこのビルドのバージョンにする
 waired runtimes uninstall <engine>
 waired runtimes refresh             # 推論エンジンとモデルの選択を評価し直す
-waired runtimes benchmark           # このパソコンの実際の速度を計測する
+waired runtimes benchmark           # このパソコンの実際の速度をベンチマークする
 ```
 
-**`benchmark`**は、このパソコンが動かしているモデルでスループットを計測します。別のモデルのほうが適していれば切り替えを提案し、両方のモデルの名前と、どちらの方向への提案かを表示します。[モデルを変更する](/ja/guides/choose-a-model/#switch-models)を参照してください。
+**`benchmark`**は、このパソコンが動かしているモデルでリクエスト1つの所要時間を計り、Wairedが保存していた値を置き換えます。目標より長くかかれば、より軽いモデルを提案し、両方のモデルの名前を表示します。[モデルを変更する](/ja/guides/choose-a-model/#switch-models)を参照してください。
 
 **`upgrade`**は、`waired update`が代わりに実行するものです。このパソコンにすでにある推論エンジンを変更し、推論エンジンのないパソコンでは何もしません。vLLMでは、`upgrade`は入れ替えではなく再構築です。新しい環境は使用中の環境のとなりに構築され、準備ができてから引き継ぐので、実行中も応答は止まりません。vLLMのバージョンを動かすアップデートは約4GBをダウンロードし、5〜15分かかり、両方がディスクにある間は約8GBの空きが必要です。
 

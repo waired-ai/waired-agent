@@ -287,7 +287,7 @@ jobs:
             echo "## install+inference (${{ matrix.os }})"
             echo "- result: **${{ job.status }}**"
             if [ -f it-inf.log ]; then
-              grep -iE 'summary:|[0-9.]+ *(tok|tokens)/s' it-inf.log \
+              grep -iE 'summary:|[0-9.]+ s (or more )?per request' it-inf.log \
                 | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -6 || true
             fi
           } >> "$GITHUB_STEP_SUMMARY"

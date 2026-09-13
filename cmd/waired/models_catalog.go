@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	notices "github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 )
 
@@ -113,6 +114,14 @@ type catalogDetailFamily struct {
 	// from population constants; this one exists only where there is a
 	// measurement (waired-agent#784).
 	MeasuredTokps float64 `json:"measured_tokps"`
+
+	// MeasuredTurnSeconds is what one request with this model costs on THIS
+	// computer, and MeasuredTurnFloorSeconds the lower bound of a
+	// measurement that ran past the line — the figures the recommended
+	// mark moves on since waired-agent#1341. Absent until the model has
+	// been downloaded and measured.
+	MeasuredTurnSeconds      float64 `json:"measured_turn_seconds"`
+	MeasuredTurnFloorSeconds float64 `json:"measured_turn_floor_seconds"`
 }
 
 // catalogDetailFit is the subset of hostfit.Presentation this view
@@ -406,11 +415,12 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 	// the column is what the rules PREDICT, and this is what happened.
 	//
 	// It is also the only thing on the row that explains a badge which
-	// has moved. Since waired-agent#784 a model measured below this
-	// host's floor loses "· recommended" to the next one down, and
-	// without the figure the row shows a demotion with no cause.
-	if f.MeasuredTokps > 0 {
-		out += fmt.Sprintf(" · measured %.0f tok/s here", f.MeasuredTokps)
+	// has moved. Since waired-agent#784 a model measured too slow on this
+	// host loses "· recommended" to the next one down — over the line in
+	// seconds per request since waired-agent#1341 — and without the figure
+	// the row shows a demotion with no cause.
+	if f.MeasuredTurnSeconds > 0 || f.MeasuredTurnFloorSeconds > 0 {
+		out += " · " + notices.RequestSeconds(f.MeasuredTurnSeconds, f.MeasuredTurnFloorSeconds) + " per request here"
 	}
 	return out
 }

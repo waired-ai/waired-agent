@@ -24,7 +24,7 @@ type inferenceDaemon struct {
 	statusSeq   []management.InferenceStatus
 	statusCalls int32
 	benchOK     bool
-	benchTokps  float64
+	benchTokps  float64 // turn_seconds the /benchmark call answers
 	loginPolls  int32
 	// setupState, when set, adds the executor routes so the run reaches
 	// init the way a browser-driven install does. Without it the routes
@@ -79,7 +79,7 @@ func (d *inferenceDaemon) server() *httptest.Server {
 			w.WriteHeader(http.StatusTooEarly)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: d.benchTokps})
+		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, SpeedMeasurement: management.SpeedMeasurement{TurnSeconds: d.benchTokps, BudgetSeconds: 190}})
 	})
 	return httptest.NewServer(mux)
 }

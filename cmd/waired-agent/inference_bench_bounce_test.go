@@ -55,13 +55,12 @@ func (b *bouncingEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b.inner(w, r)
 }
 
-// newBouncingEngine serves a healthy 100 tok/s host except where dieOn
-// says otherwise.
+// newBouncingEngine serves a healthy host (decode 100 tok/s) except where
+// dieOn says otherwise. A clean run is three requests: the warm-up, the
+// calibration and the timed sample.
 func newBouncingEngine(t *testing.T, dieOn func(path string, n int) bool, moveGen bool) (*bouncingEngine, BenchDeps) {
 	t.Helper()
-	// eval_count 200 over 2 s = 100 tok/s, so a successful run is
-	// Capacity = floor(100/30) = 3.
-	fake := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{2_000_000_000}}
+	fake := &fakeOllamaEngine{}
 	eng := &bouncingEngine{inner: fake.handler(), dieOn: dieOn, moveGen: moveGen}
 	srv := httptest.NewServer(eng)
 	t.Cleanup(srv.Close)
@@ -235,13 +234,13 @@ func TestRunBootBenchmark_RestartUnderTheWarmUpIsNotAFailure(t *testing.T) {
 	if got.Outcome != benchOutcomeMeasured {
 		t.Errorf("Outcome = %q, want %q", got.Outcome, benchOutcomeMeasured)
 	}
-	if got.TokensPerSec < 99 || got.TokensPerSec > 101 {
-		t.Errorf("TokensPerSec = %.1f, want ≈ 100", got.TokensPerSec)
+	if got.DecodeTokps < 99 || got.DecodeTokps > 101 {
+		t.Errorf("DecodeTokps = %.1f, want ≈ 100", got.DecodeTokps)
 	}
 	// The killed warm-up, then a full clean run.
-	if want := int64(2 + benchSampleCount); eng.calls.Load() != want {
-		t.Errorf("engine saw %d requests, want %d (killed warm-up + warm-up + %d samples)",
-			eng.calls.Load(), want, benchSampleCount)
+	if want := int64(1 + 3); eng.calls.Load() != want {
+		t.Errorf("engine saw %d requests, want %d (killed warm-up + warm-up, calibration, sample)",
+			eng.calls.Load(), want)
 	}
 }
 
@@ -251,21 +250,21 @@ func TestRunBootBenchmark_RestartUnderTheWarmUpIsNotAFailure(t *testing.T) {
 //
 // PRODUCT CONTRACT — #582/#601.
 func TestRunBootBenchmark_RestartUnderTheMeasurementIsNotAFailure(t *testing.T) {
-	// Request 1 is the warm-up; request 2 is the first /api/generate.
+	// Request 1 is the warm-up, 2 the calibration, 3 the timed sample.
 	eng, deps := newBouncingEngine(t,
-		func(path string, n int) bool { return n == 2 }, true)
+		func(path string, n int) bool { return n == 3 }, true)
 
 	got := RunBootBenchmark(context.Background(), deps)
 
 	if got.Failed {
 		t.Fatalf("Failed=true (%q), want the retry's measurement", got.Err)
 	}
-	if got.TokensPerSec < 99 || got.TokensPerSec > 101 {
-		t.Errorf("TokensPerSec = %.1f, want ≈ 100", got.TokensPerSec)
+	if got.DecodeTokps < 99 || got.DecodeTokps > 101 {
+		t.Errorf("DecodeTokps = %.1f, want ≈ 100", got.DecodeTokps)
 	}
-	if want := int64(2 + 1 + benchSampleCount); eng.calls.Load() != want {
-		t.Errorf("engine saw %d requests, want %d (warm-up + killed sample + warm-up + %d samples)",
-			eng.calls.Load(), want, benchSampleCount)
+	if want := int64(3 + 3); eng.calls.Load() != want {
+		t.Errorf("engine saw %d requests, want %d (warm-up, calibration, killed sample, then a clean run)",
+			eng.calls.Load(), want)
 	}
 }
 
@@ -324,7 +323,7 @@ func TestRunBootBenchmark_BounceGraceIsBounded(t *testing.T) {
 //
 // Record of today's behaviour, not a contract.
 func TestRunBootBenchmark_NilQuietAndGenKeepTodaysPath(t *testing.T) {
-	fake := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{2_000_000_000}}
+	fake := &fakeOllamaEngine{}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
 
@@ -337,8 +336,8 @@ func TestRunBootBenchmark_NilQuietAndGenKeepTodaysPath(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("Failed=true (%q), want the plain measurement", got.Err)
 	}
-	if got.TokensPerSec < 99 || got.TokensPerSec > 101 {
-		t.Errorf("TokensPerSec = %.1f, want ≈ 100", got.TokensPerSec)
+	if got.DecodeTokps < 99 || got.DecodeTokps > 101 {
+		t.Errorf("DecodeTokps = %.1f, want ≈ 100", got.DecodeTokps)
 	}
 }
 

@@ -54,6 +54,7 @@ func (p *agentInferenceProvider) localNodeForRouting() router.LocalNode {
 		// its owner's turn is busy.
 		f.capacityUsed = p.servingInFlight()
 		f.prefill = localPrefillForRouting(p)
+		f.speed = localSpeedForRouting(p)
 	}
 	return localNodeFrom(f)
 }
@@ -80,6 +81,7 @@ type localFacts struct {
 	capacity       int
 	capacityUsed   int
 	prefill        *router.PrefillRate
+	speed          *router.PeerSpeedReading
 }
 
 // localNodeFrom decides whether this device is a routing candidate, and
@@ -113,6 +115,26 @@ func localNodeFrom(f localFacts) router.LocalNode {
 		Capacity:       f.capacity,
 		CapacityUsed:   f.capacityUsed,
 		Prefill:        f.prefill,
+		Speed:          f.speed,
+	}
+}
+
+// localSpeedForRouting is this host's served-model measurement in the shape
+// a peer's /healthz carries it, so this device is ranked on the same seconds
+// per request as every peer (decision 9 of docs/decisions/20260913/2245).
+func localSpeedForRouting(p *agentInferenceProvider) *router.PeerSpeedReading {
+	s := p.SpeedForHealth()
+	if s == nil {
+		return nil
+	}
+	return &router.PeerSpeedReading{
+		VariantID:        s.VariantID,
+		DepthTokens:      s.DepthTokens,
+		PrefillTokps:     s.PrefillTokps,
+		DecodeTokps:      s.DecodeTokps,
+		TurnSeconds:      s.TurnSeconds,
+		TurnFloorSeconds: s.TurnFloorSeconds,
+		MeasuredAt:       s.MeasuredAt,
 	}
 }
 

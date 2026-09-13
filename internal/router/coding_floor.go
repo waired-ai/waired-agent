@@ -51,11 +51,12 @@ const (
 	// hosts ~35% — in true-decode terms the felt threshold already sat
 	// in this 60–80 band, so this is a re-expression on the corrected
 	// scale more than a loosening.
-	// This is the default for the #133 lighter/upgrade recommendation
-	// floor (config interactive_floor_tokps overrides it); it is NOT
-	// the Phase-7 admission divisor, which stays at 30 tok/s — that one
-	// models sustained per-session consumption, not acceptable latency
-	// (see cmd/waired-agent/inference_bench.go).
+	// It no longer judges a measurement (waired-ai/waired-agent#1341;
+	// decision 3 of docs/decisions/20260913/2245): the lighter-model
+	// recommendation and the measured narrow judge one request's seconds
+	// against hostfit.ModelTurnBudgetSeconds, and the upgrade
+	// recommendation is retired. What is left of 60 is the anchor the
+	// spill caps below are derived from (docs/decisions/20260714/0245).
 	CodingAgentSelectionFloorTokps = 60.0
 
 	// CodingAgentContextFloorTokens is the serve-time floor window:

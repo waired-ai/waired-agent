@@ -17,7 +17,7 @@ func degradedActiveRow() catalogDetailFamily {
 		Fits:            true,
 		Active:          true,
 		Downloaded:      true,
-		MeasuredTokps:   21,
+		MeasuredTokps:   15.8,
 		ServingWarning:  svMagServingWarning,
 		ServingDegraded: true,
 	}

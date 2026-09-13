@@ -704,7 +704,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			case benchRun:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
-				resp, benchFailed, _ = benchmarkWithScanner(mgmtURL, nonInteractive, stdout, stdin, isTerminal(os.Stdout))
+				resp, benchFailed, _ = benchmarkWithScanner(mgmtURL, management.BenchmarkModeEnsure, nonInteractive, stdout, stdin, isTerminal(os.Stdout))
 			}
 			// Claude Code request routing (#294). The installers deleted
 			// their own post-init `waired claude enable` and forward the
@@ -754,14 +754,6 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// route before the model download (waired-agent#311), so the window
 			// was unresolvable then and the key was left out. It resolves now.
 			topUpIntegrationWindows(context.Background(), o.StateDir, gatewayBaseURL)
-
-			// The mesh speed measurement runs last and takes minutes,
-			// and until waired-agent#1301 nothing waited for it: the box
-			// below printed while the engine was still saturated and
-			// peers were being refused. Before the status read, so the
-			// facts the box is built from are read after the work that
-			// changes them.
-			waitPrefillMeasurement(o.MgmtURL, stdout)
 
 			// One read of the inference status for the two facts the ending
 			// below is built from, taken together so they cannot describe
@@ -1270,7 +1262,7 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
 	case s.noModelChosen:
 		printDaemonNoModelBox(out, s.accountEmail, s.claudeRouted, s.hostSpeed)
-	case s.bench.Measured && s.bench.BelowFloor:
+	case s.bench.OverLine():
 		printDaemonBelowFloorBox(out, s)
 	case s.modelUnmeasured && !s.bench.Measured:
 		printDaemonStillMeasuringBox(out, s)
@@ -1314,7 +1306,8 @@ func printDaemonUnansweredBox(out io.Writer, s daemonSummary) {
 }
 
 // printDaemonBelowFloorBox is the summary for a computer that finished
-// setup serving a model measurably too slow for a coding agent.
+// setup serving a model measurably too slow for a coding agent: one request
+// takes longer than the line (waired-ai/waired-agent#1341).
 //
 // The run that reaches it most often is `--non-interactive`: the daemon
 // picks a model from the hardware BEFORE anything is measured, the
@@ -1326,10 +1319,10 @@ func printDaemonUnansweredBox(out io.Writer, s daemonSummary) {
 // A box of its own because the success box makes a claim this host cannot
 // support. Not "Local inference is running on this computer" — that is
 // true, and it is the trouble: on the rc6 review's RTX 4070 Laptop the
-// run measured 11 tok/s against a 60 tok/s floor, said so, and then
+// run measured a model too slow for interactive use, said so, and then
 // closed on "setup is complete" with "Claude routed through Waired" and
-// nothing between the two. The rate the run had just called too slow for
-// interactive use was the rate Claude Code was about to be pointed at.
+// nothing between the two. The model the run had just called too slow was
+// the one Claude Code was about to be pointed at.
 //
 // The `Claude` row is left exactly as it is. Routing IS configured, and
 // saying otherwise would be a second untruth in the other direction; what
@@ -1347,8 +1340,8 @@ func printDaemonBelowFloorBox(out io.Writer, s daemonSummary) {
 	lines = append(lines, fmt.Sprintf("%-9s %s", "Model", yellow(benchmarkRowValue(s.bench))))
 	lines = append(lines, claudeSummaryLine(s.claudeRouted))
 	lines = append(lines, dim(fmt.Sprintf(
-		"Local inference is running here, at %.0f tok/s against the %.0f tok/s a coding agent needs.",
-		s.bench.Tokps, s.bench.FloorTokps)))
+		"Local inference is running here at %s %s.",
+		speedPhrase(s.bench.Speed), speedTarget(s.bench.Speed))))
 	lines = append(lines, dim("Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers."))
 	boxWarn(out, emo("⚠", "!"), "Waired is signed in — this computer is slower than a coding agent needs", lines)
 }
@@ -1649,7 +1642,7 @@ func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the
 // daemon-driven journey. The daemon owns the runtime, so we only surface the
-// account, (when the benchmark ran) the measured throughput, and where
+// account, (when the benchmark ran) the measured request time, and where
 // Claude Code's requests now go.
 //
 // claudeRouted is reported either way (#294): "routed" is the whole point
@@ -1658,19 +1651,19 @@ func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool
 // did.
 // benchmarkRowValue is the success box's `Model` row.
 //
-// The row is labelled for a model and its value used to be a bare rate,
-// so it read as a second speed measurement beside `Speed` rather than as
-// the thing it is: how fast the model this computer chose produces words
-// (waired-agent#1027). Naming the model is what makes the label true.
+// The row is labelled for a model and its value used to be a bare figure,
+// so it read as a second measurement beside `Speed` rather than as the
+// thing it is: what one request costs with the model this computer chose
+// (waired-agent#1027; seconds per request since waired-agent#1341). Naming
+// the model is what makes the label true.
 //
-// Falls back to the bare rate when the daemon did not send a name, which
-// is what a daemon older than the field does — the row is then
-// byte-identical to the one it printed before.
+// Falls back to the bare figure when the daemon did not send a name, which
+// is what a daemon older than the field does.
 func benchmarkRowValue(bench benchmarkOutcome) string {
 	if bench.ModelID == "" {
-		return fmt.Sprintf("%.0f tok/s", bench.Tokps)
+		return speedPhrase(bench.Speed)
 	}
-	return fmt.Sprintf("%s — %.0f tok/s", bench.ModelID, bench.Tokps)
+	return fmt.Sprintf("%s — %s", bench.ModelID, speedPhrase(bench.Speed))
 }
 
 func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOutcome, claudeRouted bool, hostSpeed *management.HostSpeedStatus) {
@@ -1679,11 +1672,10 @@ func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOu
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	// Two different measurements, and they are not interchangeable.
-	// `Model` is the chosen model's decode rate on this host; `Speed` is
-	// what one whole coding question costs, measured on a small stand-in
-	// before the model was downloaded. The second is the one an operator
-	// can compare against another computer, and it is the only one a host
-	// that declined the benchmark has.
+	// `Model` is what one request costs with the chosen model on this host;
+	// `Speed` is the same kind of figure measured on a small stand-in before
+	// the model was downloaded, at a shallower depth and against its own
+	// target. The second is the one a host that declined the benchmark has.
 	// Asked as "is there a figure" rather than of one field: a host judged
 	// from the prefill bound alone leaves TurnSeconds at zero and fills
 	// TurnFloorSeconds (waired-agent#579).

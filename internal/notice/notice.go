@@ -65,12 +65,12 @@ const maxTextRunes = 400
 type Kind string
 
 const (
-	// KindLighterModel is the #133 step-down suggestion: this computer
-	// measured below the interactive floor with the model it runs.
+	// KindLighterModel is the #133 step-down suggestion: one request with
+	// the model this computer runs takes longer than the line
+	// (hostfit.ModelTurnBudgetSeconds). The step-up suggestion that used to
+	// sit beside it is retired (waired-ai/waired-agent#1342); its kind text
+	// "better_model" is not reused.
 	KindLighterModel Kind = "lighter_model"
-	// KindBetterModel is the step-up suggestion: this computer has the
-	// headroom for a higher tier than the model it runs.
-	KindBetterModel Kind = "better_model"
 	// KindUpdateAvailable is a newer Waired release than the one this
 	// computer runs.
 	KindUpdateAvailable Kind = "update_available"
@@ -155,32 +155,18 @@ type Notice struct {
 	ExpiresAt time.Time `json:"-"`
 }
 
-// LighterModel is the #133 suggestion to step down. measured and floor
-// are tok/s; from and to are model ids.
-func LighterModel(from, to string, measured, floor float64) Notice {
+// LighterModel is the #133 suggestion to step down: one request with
+// from takes turnSeconds on this computer, or — for a measurement still
+// running past the line — at least turnFloorSeconds, against budget, the
+// line. from and to are model ids.
+func LighterModel(from, to string, turnSeconds, turnFloorSeconds, budget float64) Notice {
 	return Notice{
 		Kind:     KindLighterModel,
 		Severity: SeverityWarn,
 		Subject:  "model suggestion",
 		Title:    sanitise("Lighter model recommended — switch to " + to),
-		Text: sanitise("This computer answers at " + tokps(measured) + " with " + from +
-			", below the " + tokps(floor) + " floor."),
-		Action: ActionModelSuggestion,
-		Target: sanitise(to),
-	}
-}
-
-// BetterModel is the suggestion to step up. measured is what this
-// computer manages with the model it runs; predicted is the estimate for
-// the suggested one.
-func BetterModel(from, to string, measured, predicted float64) Notice {
-	return Notice{
-		Kind:     KindBetterModel,
-		Severity: SeverityInfo,
-		Subject:  "model suggestion",
-		Title:    sanitise("Better model available — switch to " + to),
-		Text: sanitise("This computer answers at " + tokps(measured) + " with " + from +
-			"; " + to + " should manage about " + tokps(predicted) + " here."),
+		Text: sanitise("This computer takes " + RequestSeconds(turnSeconds, turnFloorSeconds) +
+			" per request with " + from + " " + TargetClause(budget) + "."),
 		Action: ActionModelSuggestion,
 		Target: sanitise(to),
 	}
@@ -400,9 +386,21 @@ func statusMark(r rune) bool {
 	return false
 }
 
-// tokps renders a throughput figure the way every other surface that
-// quotes one already does: whole tok/s, no decimal (the %.0f in
-// cmd/waired/init_benchmark.go, which prints the same measurement to the
-// same person during setup). A notice that rounded differently from the
-// setup line would read as a second, disagreeing measurement.
-func tokps(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) + " tok/s" }
+// RequestSeconds renders the served model's request time the way every
+// surface that quotes it does — whole seconds, "228 s", or "190 s or more"
+// for a lower bound (docs-site/TRANSLATION.md, the `per request` row). The
+// caller appends " per request". Every surface calls this one function, so a
+// notice, the tray, and the setup line cannot round the same measurement two
+// ways and read as two disagreeing measurements.
+func RequestSeconds(turnSeconds, turnFloorSeconds float64) string {
+	if turnSeconds <= 0 && turnFloorSeconds > 0 {
+		return strconv.FormatFloat(turnFloorSeconds, 'f', 0, 64) + " s or more"
+	}
+	return strconv.FormatFloat(turnSeconds, 'f', 0, 64) + " s"
+}
+
+// TargetClause is the "(target: 190 s or less)" that follows a request time
+// (docs-site/TRANSLATION.md, the `target` row).
+func TargetClause(budget float64) string {
+	return "(target: " + strconv.FormatFloat(budget, 'f', 0, 64) + " s or less)"
+}

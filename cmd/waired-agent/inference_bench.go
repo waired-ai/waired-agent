@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -44,8 +43,22 @@ type BenchResult struct {
 	// SpreadPct is (max-min)/median over the samples behind
 	// TokensPerSec, in percent. 0 for single-sample results.
 	SpreadPct float64
-	Failed    bool
-	Err       string
+
+	// The served model's speed at depth (waired-ai/waired-agent#1341):
+	// the engine's prefill and decode rates on a
+	// hostfit.SpeedMeasurementDepthTokens request, the depth it actually
+	// prefilled, and the verdict figure — TurnSeconds, or for a request
+	// that stalled, only TurnFloorSeconds. TokensPerSec above is the same
+	// DecodeTokps, kept for the readers that still quote a rate.
+	PrefillTokps     float64
+	DecodeTokps      float64
+	DepthTokens      int
+	TurnSeconds      float64
+	TurnFloorSeconds float64
+	Samples          int
+
+	Failed bool
+	Err    string
 	// Outcome says WHY there is or is not a number, so an absent engine
 	// stops reading as a slow host (#203). Failed stays the "do not treat
 	// this as a measurement" flag every consumer already gates on --
@@ -101,6 +114,17 @@ type BenchProgress struct {
 	MedianTokps float64
 	SpreadPct   float64
 	Method      string
+
+	// ElapsedSeconds is how long the measurement request has run, from
+	// when it was sent; BudgetSeconds the line; DepthTokens the planned
+	// prompt depth. Past the line OverBudget is set and TurnFloorSeconds
+	// carries the lower bound (decision 4 of
+	// docs/decisions/20260913/2245).
+	ElapsedSeconds   float64
+	BudgetSeconds    float64
+	DepthTokens      int
+	OverBudget       bool
+	TurnFloorSeconds float64
 }
 
 // Benchmark phases — values of BenchProgress.Phase.
@@ -157,74 +181,11 @@ func (d BenchDeps) report(p BenchProgress) {
 // that encoding stays.
 const unmeasuredCapacity = 1
 
-// resolveInteractiveFloor returns the throughput (tokens/sec) below
-// which the agent recommends a lighter model (issue #133). A
-// configured value > 0 wins; 0 (the default) falls back to the
-// coding-agent selection floor (#670/#765): true decode below
-// ~60 tok/s at shallow context degrades to under ~48 tok/s at the
-// ~200k coding window, below the band interactive coding-agent use
-// tolerates (see router.CodingAgentSelectionFloorTokps).
-func resolveInteractiveFloor(cfg float64) float64 {
-	if cfg > 0 {
-		return cfg
-	}
-	return router.CodingAgentSelectionFloorTokps
-}
-
-// benchPromptCompletionTokens is the target completion length the
-// benchmark requests. 200 tokens is long enough to cover the first
-// few decoder iterations (where most overhead lives), short enough
-// to keep the boot path under ~10 s on a midrange GPU.
-const benchPromptCompletionTokens = 200
-
-// benchSampleCount is how many measurements the benchmark takes after
-// warm-up; the reported rate is their median (#764). Run-to-run spread
-// was measured at ~8%, so the median mostly guards against a single
-// warm-up blip rather than averaging noise.
+// benchSampleCount is how many samples the install-time host cutoff takes;
+// the reported figure is their median. Run-to-run spread was measured at
+// ~8%, so the median mostly guards against a single blip rather than
+// averaging noise.
 const benchSampleCount = 3
-
-// benchSlopeShortTokens / benchSlopeLongTokens are the two completion
-// lengths of the slope method (#764): measuring a short and a long run
-// and dividing the token delta by the elapsed delta cancels the fixed
-// per-request overhead (HTTP, scheduling, prompt prefill, first-token
-// latency) that a single wall-clock run silently attributes to decode
-// — that bias understated fast hosts by ~35%. Used on engines whose
-// OpenAI-compat response carries no decode-timing counters (vLLM).
-const (
-	benchSlopeShortTokens = 64
-	benchSlopeLongTokens  = 256
-)
-
-// benchMeasureBudget bounds the whole multi-sample measurement loop.
-// When it expires with at least one valid sample, the median of what
-// completed is used; a healthy host finishes all samples in seconds.
-const benchMeasureBudget = 120 * time.Second
-
-// benchMethod* record how BenchResult.TokensPerSec was measured, in
-// descending order of fidelity. The fallback chain is
-// ollama_eval → openai_slope → wall_clock (#764).
-const (
-	// benchMethodOllamaEval: pure decode rate from ollama's native
-	// /api/generate eval_count / eval_duration counters — the same
-	// source the depth benchmark uses, so the #133 shallow-vs-depth
-	// floor comparison is apples to apples.
-	benchMethodOllamaEval = "ollama_eval"
-	// benchMethodSlope: two-length wall-clock slope over the
-	// OpenAI-compat endpoint; overhead-corrected but engine-agnostic.
-	benchMethodSlope = "openai_slope"
-	// benchMethodWallClock: the legacy completion_tokens/elapsed of the
-	// best single run. Still overhead-contaminated (understates fast
-	// hosts); only used when both corrected methods are unavailable.
-	benchMethodWallClock = "wall_clock"
-)
-
-// benchTimeout caps the timed measurement request only — the warm-up
-// that precedes it absorbs model-load latency under its own deadline.
-// CUDA OOM, network errors, or a misbehaving engine should not block
-// agent startup — RunBootBenchmark logs and returns Capacity=1
-// (= serialise) on timeout so the agent comes up degraded rather than
-// not at all.
-const benchTimeout = 30 * time.Second
 
 // benchWarmupCompletionTokens is the tiny completion the warm-up
 // requests — just enough to force the engine to fully load the model
@@ -398,6 +359,64 @@ type BenchDeps struct {
 	// every existing caller keeps today's straight-to-failBench behaviour.
 	EngineGen func() uint64
 
+	// AppliedWindow is the context window the engine serves this model
+	// with, 0 when unknown. The measurement prompt fits inside it
+	// (modelSpeedDepth).
+	AppliedWindow int
+
+	// KVCacheType and NumParallel complete the serving configuration the
+	// measurement describes. With AppliedWindow they are cache-key inputs:
+	// a new window, KV type or slot count serves the same weights at a
+	// different speed, so a stored figure must not answer for it.
+	KVCacheType string
+	NumParallel int
+
+	// ServingInFlight, when non-nil, reports this host's serving traffic.
+	// A measurement request gives the engine back the moment it is
+	// non-zero rather than make a person's turn wait behind 32,768 tokens.
+	ServingInFlight func() int
+
+	// IdleBefore, when positive, is how long serving traffic must have been
+	// absent before a measurement starts — set after a measurement yielded,
+	// so it does not start again into the next turn of the same session.
+	IdleBefore time.Duration
+
+	// TuningPending reports that the engine's post-load verification has
+	// not settled yet: it can still restart the engine with a smaller
+	// window, and a measurement sent into that restart measures a dying
+	// engine. The measurement declines (not-ready) meanwhile.
+	TuningPending bool
+
+	// StoredMeasurement, when non-nil, answers from the state ledger when
+	// the disk cache misses (agentInferenceProvider.storedSpeedMeasurement).
+	StoredMeasurement func() (BenchResult, bool)
+
+	// Selected, when non-nil, reports the selection being served now, as
+	// selectionKey(model, variant). A
+	// measurement stops when it changes: a model switch is one of the two
+	// things that end one (decision 4 of docs/decisions/20260913/2245).
+	Selected func() string
+
+	// CacheOnly answers from a stored figure or not at all: the boot tail's
+	// synchronous attempt, which must not hold the daemon's start for the
+	// minutes a measurement takes. The loop behind it measures.
+	CacheOnly bool
+
+	// SkipCacheLoad measures even when a stored figure exists, and stores
+	// the new one over it: a person asked for a new number
+	// (management.BenchmarkModeRerun).
+	SkipCacheLoad bool
+
+	// Nonce leads the measurement prompt; empty derives one from Now.
+	Nonce string
+
+	// LineSeconds, StallCap and ProgressEvery are test seams; zero means
+	// hostfit.ModelTurnBudgetSeconds, modelSpeedStallCap and
+	// modelSpeedProgressEvery.
+	LineSeconds   float64
+	StallCap      time.Duration
+	ProgressEvery time.Duration
+
 	// Now defaults to time.Now if nil. Test injection.
 	Now func() time.Time
 
@@ -514,7 +533,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		deps.Logger.Info("inference boot benchmark: caching is off",
 			"reason", benchCacheDisabledReason(deps.GPUModel, deps.VariantSHA, deps.EngineVersion))
 	}
-	if cacheKey != "" && deps.Cache != nil {
+	if cacheKey != "" && deps.Cache != nil && !deps.SkipCacheLoad {
 		if cached, measuredAt, hit, err := deps.Cache.Load(cacheKey); err != nil {
 			deps.Logger.Warn("inference boot benchmark: cache load failed; will measure",
 				"err", err)
@@ -537,14 +556,47 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			deps.Logger.Info("inference boot benchmark: cache hit",
 				"key", cacheKey,
 				"capacity", cached.Capacity,
-				"tokens_per_sec", cached.TokensPerSec,
+				"turn_seconds", cached.TurnSeconds,
 				"method", cached.Method,
 				"measured_at", measuredAt.UTC().Format(time.RFC3339),
 				"age", deps.Now().Sub(measuredAt).Truncate(time.Second).String())
 			return cached
 		} else {
-			deps.Logger.Info("inference boot benchmark: cache miss; measuring",
+			deps.Logger.Info("model speed measurement: cache miss",
 				"key", cacheKey)
+		}
+	}
+	if !deps.SkipCacheLoad && deps.StoredMeasurement != nil {
+		if stored, ok := deps.StoredMeasurement(); ok {
+			stored.ModelID = deps.ModelID
+			stored.VariantID = deps.VariantID
+			stored.Outcome = benchOutcomeMeasured
+			stored.Cached = true
+			stored.Capacity = unmeasuredCapacity
+			if deps.WarmSlots != nil {
+				if n := deps.WarmSlots(); n > 0 {
+					stored.Capacity = n
+				}
+			}
+			deps.Logger.Info("model speed measurement: answered from the state ledger",
+				"turn_seconds", stored.TurnSeconds)
+			return stored
+		}
+	}
+	if deps.CacheOnly {
+		return notReadyBenchResult(deps, "not measured yet")
+	}
+	if deps.TuningPending {
+		return notReadyBenchResult(deps, "engine busy: its tuning is still being verified")
+	}
+
+	// A measurement that just gave the engine back to this host's own
+	// traffic waits for the traffic to be gone a while before it takes the
+	// engine again; the next turn of the same session is usually seconds
+	// behind the last.
+	if deps.IdleBefore > 0 && deps.ServingInFlight != nil {
+		if !awaitServingIdle(ctx, deps, deps.IdleBefore) {
+			return notReadyBenchResult(deps, "engine busy: this host is serving traffic")
 		}
 	}
 
@@ -560,7 +612,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	if deps.EngineClaim != nil {
 		release, ok := deps.EngineClaim()
 		if !ok {
-			deps.Logger.Warn("inference boot benchmark not run: the engine is busy",
+			deps.Logger.Warn("model speed measurement not run: the engine is busy",
 				"reason", benchOutcomeEngineNotReady,
 				"engine", deps.EngineKind,
 				"port", deps.EnginePort,
@@ -574,12 +626,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	// ordered (#582/#601). Every iteration re-asks whether the engine is
 	// quiet, so a run that arrives while the host is still installing
 	// leaves through the 425 door instead of measuring the contention.
-	var (
-		tokps   float64
-		spread  float64
-		samples int
-		method  string
-	)
+	var speed modelSpeed
 	bounceGrace := benchEngineBounceGrace
 	for {
 		// A busy engine is not a slow one — the same distinction #203 draws
@@ -588,7 +635,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		// starting a measurement while a download is in flight is starting
 		// one under a restart that has already been decided.
 		if deps.EngineQuiet != nil && !deps.EngineQuiet(ctx) {
-			deps.Logger.Warn("inference boot benchmark not run: the engine is busy",
+			deps.Logger.Warn("model speed measurement not run: the engine is busy",
 				"reason", benchOutcomeEngineNotReady,
 				"engine", deps.EngineKind,
 				"port", deps.EnginePort)
@@ -599,17 +646,13 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		gen := deps.engineGen()
 
 		// Warm-up: one tiny untimed completion so the engine loads the
-		// model OUTSIDE the measured window. Without it a cold multi-GB
-		// load dominated the elapsed time and the host read as an order of
-		// magnitude slower than its real decode rate.
-		//
-		// Announced before it starts: this is the longest silent stretch of
-		// the whole run (#199).
-		deps.report(BenchProgress{Phase: benchPhaseWarmup, Trials: benchSampleCount})
+		// model OUTSIDE the measured request. Announced before it starts:
+		// on a cold multi-GB model this is minutes of silence (#199).
+		deps.report(BenchProgress{Phase: benchPhaseWarmup, Trials: 1, BudgetSeconds: deps.modelSpeedLine()})
 		if err := warmUpEngine(ctx, deps); err != nil {
 			if bounceGrace > 0 && deps.engineGen() != gen {
 				bounceGrace--
-				deps.Logger.Info("inference boot benchmark interrupted by an engine restart during warm-up; retrying without charging the attempt",
+				deps.Logger.Info("model speed measurement interrupted by an engine restart during warm-up; retrying without charging the attempt",
 					"grace_left", bounceGrace, "err", err)
 				continue
 			}
@@ -617,19 +660,24 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		}
 
 		var err error
-		tokps, spread, samples, method, err = measureDecodeRate(ctx, deps)
+		speed, err = measureModelSpeed(ctx, deps)
 		if err != nil {
+			if errors.Is(err, errSelectionChanged) {
+				deps.Logger.Info("model speed measurement stopped: the model was switched")
+				return notReadyBenchResult(deps, "the model was switched during the measurement")
+			}
+			if errors.Is(err, errYieldedToTraffic) {
+				deps.Logger.Info("model speed measurement gave the engine back to serving traffic; it is owed again once the host is idle")
+				return notReadyBenchResult(deps, "engine busy: this host is serving traffic")
+			}
 			if bounceGrace > 0 && deps.engineGen() != gen {
 				bounceGrace--
-				deps.Logger.Info("inference boot benchmark interrupted by an engine restart during the measurement; retrying without charging the attempt",
+				deps.Logger.Info("model speed measurement interrupted by an engine restart; retrying without charging the attempt",
 					"grace_left", bounceGrace, "err", err)
 				continue
 			}
-			// Distinguish timeout (context deadline) from other errors
-			// in the log line so operators can tell "model loading too
-			// slow" from "engine not listening".
-			if errors.Is(err, context.DeadlineExceeded) {
-				return failBench(deps, "timeout", err)
+			if ctx.Err() != nil {
+				return failBench(deps, "stopped", err)
 			}
 			return failBench(deps, "measure", err)
 		}
@@ -648,23 +696,40 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			cap = n
 		}
 	}
-	deps.Logger.Info("inference boot benchmark completed",
+	deps.Logger.Info("model speed measurement completed",
 		"engine_kind", deps.EngineKind,
 		"variant", deps.VariantID,
 		"engine_model", deps.EngineModel,
-		"method", method,
-		"samples", samples,
-		"spread_pct", fmt.Sprintf("%.1f", spread),
-		"tokens_per_sec", tokps,
+		"method", speed.Method,
+		"depth_tokens", speed.DepthTokens,
+		"prefill_tokps", fmt.Sprintf("%.1f", speed.PrefillTokps),
+		"decode_tokps", fmt.Sprintf("%.1f", speed.DecodeTokps),
+		"turn_seconds", fmt.Sprintf("%.1f", speed.TurnSeconds),
+		"turn_floor_seconds", fmt.Sprintf("%.1f", speed.TurnFloorSeconds),
+		"line_seconds", deps.modelSpeedLine(),
+		"samples", speed.Samples,
+		"spread_pct", fmt.Sprintf("%.1f", speed.SpreadPct),
 		"capacity", cap)
 	result := BenchResult{
-		TokensPerSec: tokps,
-		Capacity:     cap,
-		VariantID:    deps.VariantID,
-		ModelID:      deps.ModelID,
-		Method:       method,
-		SpreadPct:    spread,
-		Outcome:      benchOutcomeMeasured,
+		TokensPerSec:     speed.DecodeTokps,
+		Capacity:         cap,
+		VariantID:        deps.VariantID,
+		ModelID:          deps.ModelID,
+		Method:           speed.Method,
+		SpreadPct:        speed.SpreadPct,
+		PrefillTokps:     speed.PrefillTokps,
+		DecodeTokps:      speed.DecodeTokps,
+		DepthTokens:      speed.DepthTokens,
+		TurnSeconds:      speed.TurnSeconds,
+		TurnFloorSeconds: speed.TurnFloorSeconds,
+		Samples:          speed.Samples,
+		Outcome:          benchOutcomeMeasured,
+	}
+	if speed.bound() {
+		// A stalled engine: a verdict for now, never a stored figure. It
+		// is not a speed, and storing it would keep the host marked slow
+		// across restarts until someone asked again.
+		return result
 	}
 	// Phase 7 follow-up (C2): persist only successful measurements.
 	// failBench paths return above without reaching this point so
@@ -678,6 +743,9 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			EngineKind:    deps.EngineKind,
 			EngineModel:   deps.EngineModel,
 			EngineVersion: deps.EngineVersion,
+			AppliedWindow: deps.AppliedWindow,
+			KVCacheType:   deps.KVCacheType,
+			NumParallel:   deps.NumParallel,
 		}
 		if err := deps.Cache.Store(cacheKey, result, meta, deps.Now()); err != nil {
 			deps.Logger.Warn("inference boot benchmark: cache store failed",
@@ -804,277 +872,6 @@ func engineHTTPError(resp *http.Response) error {
 	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, reason)
 }
 
-// errNoEvalCounters signals the engine's native endpoint is absent or
-// its response carries no usable eval counters (older ollama, an
-// OpenAI-compat proxy on the engine port). The caller falls back to
-// the slope method instead of failing the benchmark.
-var errNoEvalCounters = errors.New("no decode counters in engine response")
-
-// errSlopeDegenerate signals every slope pair collapsed (long run not
-// measurably longer than the short one — proxy caching, coarse clock).
-// The caller may salvage a wall-clock rate from the best single run.
-var errSlopeDegenerate = errors.New("all slope sample pairs degenerate")
-
-// measureDecodeRate runs the #764 measurement chain and returns the
-// median decode rate with its sample spread and the benchMethod* that
-// produced it: ollama's native eval counters when available, the
-// two-length slope on the OpenAI-compat surface otherwise, and the
-// legacy single-run wall clock when even the slope is degenerate. The
-// whole loop shares one benchMeasureBudget deadline; each request
-// keeps its own benchTimeout.
-func measureDecodeRate(ctx context.Context, deps BenchDeps) (float64, float64, int, string, error) {
-	mctx, cancel := context.WithTimeout(ctx, benchMeasureBudget)
-	defer cancel()
-	if deps.EngineKind == signer.InferenceTypeOllama {
-		tokps, spread, samples, err := measureOllamaNative(mctx, deps)
-		if err == nil {
-			return tokps, spread, samples, benchMethodOllamaEval, nil
-		}
-		if !errors.Is(err, errNoEvalCounters) {
-			return 0, 0, 0, "", err
-		}
-		deps.Logger.Warn("inference boot benchmark: engine returned no decode counters; falling back to two-length slope",
-			"err", err)
-	}
-	tokps, spread, samples, best, err := measureOpenAISlope(mctx, deps)
-	if err == nil {
-		return tokps, spread, samples, benchMethodSlope, nil
-	}
-	if errors.Is(err, errSlopeDegenerate) && best.tokens > 0 && best.elapsed > 0 {
-		deps.Logger.Warn("inference boot benchmark: slope degenerate; falling back to single-run wall clock (overhead-contaminated, understates fast hosts)",
-			"err", err)
-		return float64(best.tokens) / best.elapsed.Seconds(), 0, 1, benchMethodWallClock, nil
-	}
-	return 0, 0, 0, "", err
-}
-
-// ollamaGenerateOnce issues one native /api/generate completion and
-// returns the pure decode rate from eval_count/eval_duration — the
-// same counters (and endpoint) the depth benchmark reads, so the #133
-// shallow-vs-depth floor comparison shares one measurement basis.
-// timeout is passed rather than read from benchTimeout so the caller can
-// size it to the completion it just asked for — a 200-token request under
-// a 30 s cap is unsatisfiable below ~7 tok/s, which is how a working
-// engine came to report a benchmark failure (#203). Taking it as an
-// argument is also what makes that case writable in a test.
-func ollamaGenerateOnce(ctx context.Context, deps BenchDeps, numPredict int, timeout time.Duration) (float64, error) {
-	rctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	body, err := json.Marshal(map[string]any{
-		"model":  deps.EngineModel,
-		"prompt": benchPrompt,
-		"stream": false,
-		"options": map[string]any{
-			"num_predict": numPredict,
-			"temperature": 0,
-		},
-	})
-	if err != nil {
-		return 0, err
-	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/generate", deps.EnginePort)
-	req, err := http.NewRequestWithContext(rctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := deps.HTTPClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		// Nothing native behind this port (proxy, non-ollama server).
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return 0, fmt.Errorf("%w: /api/generate returned 404", errNoEvalCounters)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, engineHTTPError(resp)
-	}
-	var gen struct {
-		EvalCount    int   `json:"eval_count"`
-		EvalDuration int64 `json:"eval_duration"` // ns
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&gen); err != nil {
-		return 0, err
-	}
-	if gen.EvalCount <= 0 || gen.EvalDuration <= 0 {
-		return 0, fmt.Errorf("%w: eval_count=%d eval_duration=%d",
-			errNoEvalCounters, gen.EvalCount, gen.EvalDuration)
-	}
-	return float64(gen.EvalCount) / (float64(gen.EvalDuration) / 1e9), nil
-}
-
-// measureOllamaNative takes up to benchSampleCount native decode
-// samples and reduces them to (median, spread, count). An error after
-// at least one valid sample truncates the loop instead of discarding
-// it — the shared measurement budget is the usual cause.
-// Each sample is sized from what the previous ones measured
-// (planBenchSizing): the first is a short probe, and the rest grow to
-// benchPromptCompletionTokens only on a host fast enough to decode that
-// many inside its share of the shared budget. Before that, every sample
-// asked for 200 tokens under a fixed 30 s cap, so a host below ~7 tok/s
-// failed at i=0 with nothing to salvage and the benchmark reported a
-// working engine as broken (#203).
-func measureOllamaNative(ctx context.Context, deps BenchDeps) (float64, float64, int, error) {
-	var rates []float64
-	// The budget is tracked here as well as read off the context: a caller
-	// without a deadline (a direct measureOllamaNative, a test) would
-	// otherwise see the full budget before every sample and keep sizing as
-	// if nothing had been spent.
-	started := time.Now()
-	deadline, hasDeadline := ctx.Deadline()
-	for i := 0; i < benchSampleCount; i++ {
-		remaining := benchMeasureBudget - time.Since(started)
-		if hasDeadline {
-			remaining = min(remaining, time.Until(deadline))
-		}
-		plan := planBenchSizing(benchSizingFacts{
-			ObservedTokps: medianFloat(rates),
-			Remaining:     remaining,
-			SamplesLeft:   benchSampleCount - i,
-		})
-		r, err := ollamaGenerateOnce(ctx, deps, plan.CompletionTokens, plan.RequestTimeout)
-		if err != nil {
-			if len(rates) > 0 {
-				deps.Logger.Warn("inference boot benchmark: sample failed; using completed samples",
-					"completed", len(rates), "err", err)
-				break
-			}
-			return 0, 0, 0, err
-		}
-		rates = append(rates, r)
-		deps.report(sampleProgress(rates, r, benchMethodOllamaEval))
-	}
-	return medianFloat(rates), spreadPercent(rates), len(rates), nil
-}
-
-// sampleProgress builds the report for one completed sample: the sample
-// itself plus the running median and spread over everything measured so
-// far. Running rather than final on purpose — the number on screen then
-// converges instead of jumping, and MeasuredTokps stays what it has
-// always meant (the finished answer, waired#934 §7.2).
-func sampleProgress(all []float64, sample float64, method string) BenchProgress {
-	return BenchProgress{
-		Phase:       benchPhaseMeasuring,
-		Trial:       len(all),
-		Trials:      benchSampleCount,
-		SampleTokps: sample,
-		MedianTokps: medianFloat(all),
-		SpreadPct:   spreadPercent(all),
-		Method:      method,
-	}
-}
-
-// benchSingleRun is one completed OpenAI-compat run, retained so the
-// wall-clock fallback can salvage a rate when every slope pair is
-// degenerate.
-type benchSingleRun struct {
-	tokens  int
-	elapsed time.Duration
-}
-
-// track keeps the run with the highest wall-clock rate seen so far.
-func (b *benchSingleRun) track(tokens int, elapsed time.Duration) {
-	if tokens <= 0 || elapsed <= 0 {
-		return
-	}
-	if b.elapsed <= 0 ||
-		float64(tokens)/elapsed.Seconds() > float64(b.tokens)/b.elapsed.Seconds() {
-		b.tokens, b.elapsed = tokens, elapsed
-	}
-}
-
-// measureOpenAISlope estimates the decode rate as the slope between a
-// short and a long completion of the same prompt:
-//
-//	tokps = (tok_long − tok_short) / (elapsed_long − elapsed_short)
-//
-// The subtraction cancels the fixed per-request overhead (HTTP,
-// scheduling, prefill, first-token latency) that a single wall-clock
-// run silently attributes to decode. Up to benchSampleCount pairs are
-// measured; the median slope wins. Degenerate pairs are skipped; if
-// none survive, errSlopeDegenerate is returned along with the best
-// single run for the caller's wall-clock fallback.
-func measureOpenAISlope(ctx context.Context, deps BenchDeps) (float64, float64, int, benchSingleRun, error) {
-	var slopes []float64
-	var best benchSingleRun
-	for i := 0; i < benchSampleCount; i++ {
-		shortTok, shortEl, err := timedChatCompletion(ctx, deps, benchSlopeShortTokens)
-		if err != nil {
-			if len(slopes) > 0 {
-				deps.Logger.Warn("inference boot benchmark: sample failed; using completed samples",
-					"completed", len(slopes), "err", err)
-				break
-			}
-			return 0, 0, 0, best, err
-		}
-		best.track(shortTok, shortEl)
-		longTok, longEl, err := timedChatCompletion(ctx, deps, benchSlopeLongTokens)
-		if err != nil {
-			if len(slopes) > 0 {
-				break
-			}
-			return 0, 0, 0, best, err
-		}
-		best.track(longTok, longEl)
-		if longEl <= shortEl || longTok <= shortTok {
-			continue // degenerate pair; nothing to divide
-		}
-		slope := float64(longTok-shortTok) / (longEl - shortEl).Seconds()
-		slopes = append(slopes, slope)
-		// One PAIR is one data point here, and that is what the wizard
-		// counts. #199 settles the vocabulary: the UI says "measurement n
-		// of 3" and never exposes that a slope sample is two requests.
-		deps.report(sampleProgress(slopes, slope, benchMethodSlope))
-	}
-	if len(slopes) == 0 {
-		return 0, 0, 0, best, errSlopeDegenerate
-	}
-	return medianFloat(slopes), spreadPercent(slopes), len(slopes), best, nil
-}
-
-// timedChatCompletion issues one non-streaming chat completion and
-// returns (completion tokens, wall-clock elapsed). On its own the
-// elapsed still contains fixed request overhead — callers cancel it
-// via the slope, or accept the bias in the wall-clock fallback.
-func timedChatCompletion(ctx context.Context, deps BenchDeps, maxTokens int) (int, time.Duration, error) {
-	rctx, cancel := context.WithTimeout(ctx, benchTimeout)
-	defer cancel()
-	req, err := benchChatRequest(rctx, deps, maxTokens)
-	if err != nil {
-		return 0, 0, err
-	}
-	start := deps.Now()
-	resp, err := deps.HTTPClient.Do(req)
-	elapsed := deps.Now().Sub(start)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, 0, engineHTTPError(resp)
-	}
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-	if err != nil {
-		return 0, 0, err
-	}
-	tokens, err := extractCompletionTokens(respBody)
-	if err != nil {
-		return 0, 0, err
-	}
-	if tokens <= 0 {
-		return 0, 0, fmt.Errorf("response reported %d completion tokens", tokens)
-	}
-	if elapsed <= 0 {
-		// Clock that doesn't move — only happens with broken Now
-		// injection. Error out so the test surface doesn't paper
-		// over a real wiring bug.
-		return 0, 0, fmt.Errorf("elapsed time was %v", elapsed)
-	}
-	return tokens, elapsed, nil
-}
-
 // medianFloat returns the median of xs (0 for an empty slice); xs is
 // not mutated.
 func medianFloat(xs []float64) float64 {
@@ -1130,6 +927,7 @@ func notReadyBenchResult(deps BenchDeps, reason string) BenchResult {
 	return BenchResult{
 		Capacity:  unmeasuredCapacity,
 		VariantID: deps.VariantID,
+		ModelID:   deps.ModelID,
 		Failed:    true,
 		Err:       reason,
 		Outcome:   benchOutcomeEngineNotReady,
@@ -1157,49 +955,9 @@ func failBench(deps BenchDeps, reason string, err error) BenchResult {
 	return BenchResult{
 		Capacity:  unmeasuredCapacity,
 		VariantID: deps.VariantID,
+		ModelID:   deps.ModelID,
 		Failed:    true,
 		Err:       err.Error(),
 		Outcome:   benchOutcomeFailed,
 	}
-}
-
-// extractCompletionTokens reads the OpenAI-compatible response
-// envelope and pulls out usage.completion_tokens. Ollama mirrors
-// this shape since v0.5 and vLLM does so by spec. Falls back to
-// counting tokens from the message content (whitespace-split) when
-// the engine omits usage — a degraded but non-fatal accuracy hit.
-func extractCompletionTokens(body []byte) (int, error) {
-	var env struct {
-		Usage struct {
-			CompletionTokens int `json:"completion_tokens"`
-		} `json:"usage"`
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		return 0, err
-	}
-	if env.Usage.CompletionTokens > 0 {
-		return env.Usage.CompletionTokens, nil
-	}
-	if len(env.Choices) == 0 {
-		return 0, errors.New("response has no choices and no usage")
-	}
-	// Whitespace-based fallback. Off by ~10% vs the real tokeniser
-	// but adequate for tok/s on the order-of-magnitude scale the
-	// admission cap consumes.
-	content := env.Choices[0].Message.Content
-	if content == "" {
-		return 0, errors.New("choices[0].message.content is empty")
-	}
-	tokens := 1 // start at 1 to capture the leading non-space chunk
-	for _, c := range content {
-		if c == ' ' || c == '\n' || c == '\t' {
-			tokens++
-		}
-	}
-	return tokens, nil
 }

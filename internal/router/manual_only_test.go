@@ -126,25 +126,6 @@ func TestManualOnly_WithheldFromEveryAutomaticPath(t *testing.T) {
 			},
 		},
 		{
-			// The upgrade proposal, from the lowest rung with plenty
-			// of measured headroom so the prediction clears the bar
-			// for every candidate above it.
-			name: "UpgradeCandidate",
-			pick: func(t *testing.T, in PickInput) string {
-				p, _, ok := UpgradeCandidate(UpgradeInput{
-					Pick:            in,
-					ActiveModelID:   "plain-low",
-					ActiveVariantID: "q4-gguf",
-					MeasuredTokps:   400,
-					FloorTokps:      10,
-				})
-				if !ok {
-					return ""
-				}
-				return p.Manifest.ModelID
-			},
-		},
-		{
 			// The lighter-model proposal. It steps down from the
 			// ACTIVE variant, so the case needs an active heavier
 			// than every candidate — otherwise the answer is the

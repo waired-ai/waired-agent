@@ -24,7 +24,7 @@ func noticesRequest(t *testing.T, srv *Server, method string) *httptest.Response
 
 func TestNoticesEndpointServesWhatTheProviderPublishes(t *testing.T) {
 	srv := newServer(Status{}, fakePinger{}).WithNotices(stubNotices{ns: []notice.Notice{
-		notice.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 42, 60),
+		notice.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 228, 0, 190),
 	}})
 
 	rec := noticesRequest(t, srv, http.MethodGet)
@@ -122,7 +122,7 @@ func TestNoticesRouteIsSocketOnly(t *testing.T) {
 func TestNoticesEndpointClampsALongList(t *testing.T) {
 	var many []notice.Notice
 	for i := range notice.MaxActive + 4 {
-		many = append(many, notice.LighterModel("from", string(rune('a'+i)), 1, 2))
+		many = append(many, notice.LighterModel("from", string(rune('a'+i)), 228, 0, 190))
 	}
 	srv := newServer(Status{}, fakePinger{}).WithNotices(stubNotices{ns: many})
 

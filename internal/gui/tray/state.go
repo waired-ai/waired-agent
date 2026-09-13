@@ -310,9 +310,10 @@ type NoticeRow struct {
 }
 
 // noticeMarker is the glyph a severity gets in the menu. Info's is an
-// arrow because every Info notice today is a step-up model suggestion,
-// which is what `waired init` already marks that way — a record of
-// today's producers, not a rule about severities.
+// arrow, the mark the step-up model suggestion introduced; that suggestion
+// is retired (waired-ai/waired-agent#1342) and the arrow now marks every
+// Info notice — a newer release, an engine note. A record of today's
+// marks, not a rule about severities.
 func noticeMarker(s notice.Severity) string {
 	if s == notice.SeverityWarn {
 		return "⚠"
@@ -2386,9 +2387,10 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 	// because everything above is what the rules predict and this is
 	// what happened — and because it is the only thing here that
 	// explains a "recommended" mark which has moved to another row
-	// (waired-agent#784).
-	if f.MeasuredTokps > 0 {
-		measured := fmt.Sprintf("Measured %.0f tok/s on this computer.", f.MeasuredTokps)
+	// (waired-agent#784; seconds per request since waired-agent#1341).
+	if f.MeasuredTurnSeconds > 0 || f.MeasuredTurnFloorSeconds > 0 {
+		measured := notice.RequestSeconds(f.MeasuredTurnSeconds, f.MeasuredTurnFloorSeconds) +
+			" per request on this computer."
 		if sentences == "" {
 			sentences = measured
 		} else {

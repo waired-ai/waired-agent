@@ -240,16 +240,10 @@ func TestBenchDescribes(t *testing.T) {
 	}
 }
 
-// TestActivationRemeasuresTheNewModel: activating a model the measurement
-// on file does not describe starts a fresh one.
-//
-// Without it the takeover path leaves a host serving a model nothing ever
-// measured — init exits while the pull is still running, so the only
-// result on file belongs to whatever was serving before, and every asking
-// surface reads it as this model's (waired-ai/waired-agent#783). The
-// daemon still does not ACT on the verdict: stepping a host down needs
-// consent it cannot ask for.
-func TestActivationRemeasuresTheNewModel(t *testing.T) {
+// TestActivationStartsNoMeasurement: activating a model starts no
+// measurement of its own — the daemon's speed loop measures the new
+// selection (waired-ai/waired-agent#1341).
+func TestActivationStartsNoMeasurement(t *testing.T) {
 	newProvider := func(t *testing.T, runs chan<- string) *agentInferenceProvider {
 		t.Helper()
 		store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
@@ -281,62 +275,6 @@ func TestActivationRemeasuresTheNewModel(t *testing.T) {
 		return p
 	}
 
-	t.Run("a model no result on file describes is measured", func(t *testing.T) {
-		runs := make(chan string, 4)
-		p := newProvider(t, runs)
-		// What is on file belongs to a model this host no longer serves.
-		p.SetLastBench(BenchResult{TokensPerSec: 12, Capacity: 1, ModelID: "previous", Outcome: benchOutcomeMeasured})
-
-		done := p.remeasureForActiveModel("bundled")
-		if done == nil {
-			t.Fatal("no benchmark started for a model nothing on file describes")
-		}
-
-		select {
-		case <-runs:
-		case <-time.After(10 * time.Second):
-			t.Fatal("the run started but never reached the measurement")
-		}
-		// The run is detached; wait for it, or it writes into the temp
-		// directory after this subtest has returned.
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			t.Fatal("the benchmark run never completed")
-		}
-	})
-
-	t.Run("nothing measured yet still gets a run", func(t *testing.T) {
-		// The takeover path's own shape: the boot benchmark ran before any
-		// model existed, so what is on file is a skip, not a verdict.
-		runs := make(chan string, 4)
-		p := newProvider(t, runs)
-		p.SetLastBench(BenchResult{Capacity: 0, Outcome: benchOutcomeSkipped})
-
-		done := p.remeasureForActiveModel("bundled")
-		if done == nil {
-			t.Fatal("a skipped run stood the measurement down")
-		}
-		<-runs
-		<-done
-	})
-
-	t.Run("a real measurement of this model is left alone", func(t *testing.T) {
-		runs := make(chan string, 4)
-		p := newProvider(t, runs)
-		p.SetLastBench(BenchResult{TokensPerSec: 80, Capacity: 2, ModelID: "bundled", Outcome: benchOutcomeMeasured})
-
-		if done := p.remeasureForActiveModel("bundled"); done != nil {
-			t.Fatal("re-measured a model the result on file already describes")
-		}
-
-		select {
-		case <-runs:
-			t.Fatal("a benchmark ran anyway")
-		case <-time.After(200 * time.Millisecond):
-		}
-	})
-
 	// Where the trigger is NOT. The boot activations
 	// (activateBundledIfReady, bootstrapPreferredModel) reach main.go's own
 	// benchmark a moment later, orchestrated with the cache and the engine
@@ -359,40 +297,24 @@ func TestActivationRemeasuresTheNewModel(t *testing.T) {
 	})
 }
 
-// TestRunPullJob_ReMeasuresTheModelItJustMadeActive proves the pull path
-// actually REACHES remeasureForActiveModel.
-//
-// It is here because the condition guarding that call was narrowed twice
-// while getting it right, and after the second narrowing no test in the
-// package reached the call at all. A draft that DEADLOCKED the daemon
-// there — blocking on a benchmark that waits for a quiet engine, from
-// inside the very function whose deferred endPull is what lets the engine
-// go quiet — passed the entire suite on the strength of that absence.
-//
-// The comment beside the call explains why it must not block. A comment is
-// not executable, and the next person to doubt it will try blocking and
-// see everything green. This is what fails instead.
-//
-// Still true after waired-agent#821, and now for a sharper reason: there IS
-// a wait for a quiet engine on this path, and the whole of why it sits on a
-// goroutine of its own is that it cannot sit here. What this test pins is
-// the boundary — runPullJob returns, its defers run, and only then can the
-// wait past that boundary succeed. The waits themselves are covered in
-// inference_remeasure_test.go.
-func TestRunPullJob_ReMeasuresTheModelItJustMadeActive(t *testing.T) {
+// TestRunPullJob_StartsNoMeasurementOfItsOwn pins where the measurement of
+// a model that just became active comes from since waired-ai/waired-agent#1341:
+// the daemon's speed loop notices the new selection on its next tick and
+// measures it through the single-flight job (or answers from the stored
+// figure). The pull path used to start a run of its own, a second trigger
+// racing the loop for the engine.
+func TestRunPullJob_StartsNoMeasurementOfItsOwn(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := bounceProvider(t, r)
 	p.cfg.BundledModelID = "model-a" // so the completed pull activates it
 	p.profiler = cpuSwapProfiler(t)
 
 	entered := make(chan struct{}, 1)
-	release := make(chan struct{})
 	p.benchRun = func(context.Context) BenchResult {
 		select {
 		case entered <- struct{}{}:
 		default:
 		}
-		<-release
 		return BenchResult{TokensPerSec: 55, Capacity: 1, ModelID: "model-a", Outcome: benchOutcomeMeasured}
 	}
 
@@ -404,21 +326,13 @@ func TestRunPullJob_ReMeasuresTheModelItJustMadeActive(t *testing.T) {
 	p.waitForPulls()
 
 	if got := p.activeModelID(); got != "model-a" {
-		t.Fatalf("active model after the pull = %q, want model-a — the fixture no "+
-			"longer sets up the transition this test is about", got)
+		t.Fatalf("active model after the pull = %q, want model-a", got)
 	}
 	select {
 	case <-entered:
-	case <-time.After(waitBackstop):
-		t.Fatal("the pull that made model-a active never reached the re-measurement: " +
-			"the trigger's condition no longer matches the path it guards")
+		t.Fatal("the pull started a measurement of its own; the speed loop owns that")
+	case <-time.After(200 * time.Millisecond):
 	}
-
-	// Join the run and let it finish, so nothing is still writing into the
-	// temp directory when this test returns.
-	done := p.startBenchmarkJob(0)
-	close(release)
-	waitDone(t, done)
 }
 
 // TestActivatePreferredIfNeeded guards the issue #347 reconcile: the

@@ -298,6 +298,14 @@ func run(ctx context.Context, args []string) error {
 		logger.Info("agent log: writing to a rotating file", "path", agentLogPath)
 	}
 
+	// interactive_floor_tokps is retired (waired-ai/waired-agent#1341): the
+	// lighter-model recommendation is judged in seconds per request against
+	// one line every surface reads. Said once, so an operator who set it
+	// is not left wondering why it does nothing.
+	if cfgRoot.Inference.InteractiveFloorTokps > 0 {
+		logger.Warn("inference.interactive_floor_tokps is retired and ignored; the lighter-model recommendation is judged in seconds per request",
+			"set", cfgRoot.Inference.InteractiveFloorTokps)
+	}
 	if hostMemErr != nil {
 		logger.Warn("host memory: measurement unavailable; the OS deduction stays at its floor",
 			"err", hostMemErr)
@@ -1247,10 +1255,8 @@ func run(ctx context.Context, args []string) error {
 			// driver mid-life used to report the boot-time answer until
 			// the daemon restarted (#387). Its TTL is what paces the
 			// re-detection, so no extra ticker is needed. The boot sample
-			// below is still taken eagerly, because firstGPU keys the boot
-			// benchmark cache on driver_version.
+			// below is still taken eagerly so the first publish carries it.
 			var hwProfiler *hardware.Profiler
-			var firstGPU hardware.GPU
 			if !*disableInference {
 				hwProfiler = hardware.NewProfiler("",
 					hardware.WithTTL(hardwareResampleInterval),
@@ -1258,24 +1264,16 @@ func run(ctx context.Context, args []string) error {
 					// same record ensureHostMemoryMeasured just settled.
 					hardware.WithRAMAvailableAtInstall(
 						hostMemoryMeasurement(filepath.Dir(agentJSONPath), os.Getenv)))
-				prof := hwProfiler.Profile(ctx)
-				if len(prof.GPUs) > 0 {
-					firstGPU = prof.GPUs[0]
-				}
+				_ = hwProfiler.Profile(ctx)
 			}
 
-			// Phase 7: run the boot-time token/s benchmark to derive
-			// Capacity. Synchronous on the probe goroutine so the
-			// first probe tick already advertises the correct cap;
-			// failures (CUDA OOM, slow load) fall back to Capacity=1
-			// inside RunBootBenchmark rather than blocking startup.
+			// The served model's speed measurement: a stored figure seeds
+			// Capacity synchronously so the first probe tick already
+			// advertises it, and the loop measures what is not stored.
+			// The disk store lives at ~/.cache/waired/bench.json; empty
+			// path = no disk store (the state ledger still answers).
 			//
-			// Phase 7 follow-up (C2): a SHA-keyed cache on disk lets
-			// subsequent boots return the previous result instantly
-			// (typical save: 5-30 s per boot). The cache file lives at
-			// ~/.cache/waired/bench.json; empty path = caching disabled.
-			//
-			// Also gated on the runtime toggle (#465): the benchmark
+			// Also gated on the runtime toggle (#465): the measurement
 			// loads a model to time it, which is the one thing a device
 			// told not to serve locally must not do. The hardware
 			// profile above is NOT gated the same way — the control
@@ -1304,119 +1302,33 @@ func run(ctx context.Context, args []string) error {
 						}
 					}
 				}
-				// #203: an engine that has not finished installing is not a
-				// slow one. Without this the benchmark fires the instant
-				// enrollment succeeds — while `waired init` is still
-				// installing the engine and pulling the model — and reports
-				// the resulting dial failure as a performance verdict.
-				//
-				// #582/#601: ready is not enough either. The boot tail
-				// dispatches the host-speed probe's download and the
-				// operator's model together, and whichever lands LAST fires
-				// the serve-env reconcile that restarts the engine — under
-				// this warm-up when the timing falls that way. engineQuiet
-				// holds the run off while either is in flight, and engineGen
-				// tells a restart we ordered from a host that cannot answer.
-				var engineReady func() (bool, string)
-				var engineQuiet func(context.Context) bool
-				var engineClaim func() (func(), bool)
-				var engineGen func() uint64
-				var warmSlots func() int
-				if inferenceSub != nil && inferenceSub.provider != nil {
-					engineReady = inferenceSub.provider.EngineReady
-					engineQuiet = inferenceSub.provider.engineQuietForBench
-					// engineQuiet answers for an instant; this holds the
-					// engine for the run, which is what keeps the boot
-					// benchmark and the install-time host-speed measurement
-					// off each other (waired-agent#703).
-					engineClaim = inferenceSub.provider.claimEngineForBench
-					engineGen = inferenceSub.provider.engineProcessGen
-					warmSlots = inferenceSub.provider.WarmConversationSlots
-				}
 				var prov *agentInferenceProvider
 				if inferenceSub != nil {
 					prov = inferenceSub.provider
 				}
-				// Everything the benchmark measures WITH, read live per
-				// attempt rather than captured here.
+				// The served model's speed measurement
+				// (waired-ai/waired-agent#1341): one 32,768-token request,
+				// through the provider's single-flight job, with everything
+				// it measures WITH read live per attempt (speedDeps).
 				//
-				// The one-shot this replaces read them once, at boot,
-				// which on a fresh install is before any of them exist:
-				// the catalog has no committed selection, so the model
-				// id, the variant id and the variant digest are all
-				// empty — the last of those silently disabling the cache
-				// — and the engine target answered "ollama" for a host
-				// that was about to serve with vLLM. The probe loop below
-				// already re-reads the same pair per tick for the same
-				// reason (waired-agent#948, #656); the benchmark was the
-				// one caller left on the boot snapshot
-				// (waired-agent#1150). The "ollama" half of that is gone
-				// too: the reader is the provider's now, and it can say
-				// there is no engine (waired-agent#1206).
-				//
-				// The engine's own release keys both caches
-				// (waired-agent#1131): an engine upgrade must not leave a
-				// host serving, and advertising, what the engine it no
-				// longer runs measured. "" disables caching rather than
-				// producing a key that outlives the engine — and read
-				// live it stops being "" as soon as the engine is up,
-				// where the boot read was taken before it ever could be.
-				//
-				// The GPU comes from the KEPT profiler, whose TTL paces
-				// the re-detection, so a host that reads its driver back
-				// late no longer keys a cache entry on a blank (#387).
-				depsFor := func() BenchDeps {
-					kind, port := prov.probeTarget(cfgRoot.Inference)
-					engineVersion := ""
-					if prov != nil {
-						engineVersion = prov.servingEngineVersion(ctx)
-					}
-					gpu := firstGPU
-					if hwProfiler != nil {
-						if prof := hwProfiler.Profile(ctx); len(prof.GPUs) > 0 {
-							gpu = prof.GPUs[0]
-						}
-					}
-					return BenchDeps{
-						EngineKind:    kind,
-						EngineVersion: engineVersion,
-						EnginePort:    port,
-						EngineReady:   engineReady,
-						EngineQuiet:   engineQuiet,
-						EngineClaim:   engineClaim,
-						EngineGen:     engineGen,
-						EngineModel:   prov.activeEngineModel(),
-						VariantID:     prov.activeVariantID(),
-						ModelID:       prov.activeModelID(),
-						GPUModel:      gpu.Model,
-						VRAMTotalMB:   gpu.VRAMTotalMB,
-						DriverVersion: gpu.DriverVersion,
-						VariantSHA:    prov.activeVariantSHA(),
-						WarmSlots:     warmSlots,
-						Cache:         cache,
-						Logger:        logger,
-					}
-				}
-
-				// The one synchronous attempt the boot tail has always
-				// taken. Kept synchronous because a cache hit answers in
-				// microseconds and the first probe tick should advertise
-				// the measured capacity rather than the fail-safe; on a
-				// host that loses the engine-start race it returns just
-				// as fast, having logged the one not-ready line #633
-				// pinned, and the loop below takes it from there.
+				// The one synchronous attempt at boot answers only from a
+				// stored measurement: it costs microseconds, so the first
+				// probe tick advertises a measured host rather than the
+				// fail-safe, and it never makes the daemon's start wait on a
+				// minutes-long request. The loop behind it measures.
 				bench := BenchResult{}
-				if !infCtl.IsDisabled() {
-					bench, _ = prov.seedBootBenchmark(ctx, depsFor)
+				if prov != nil {
+					prov.benchCache = cache
+					prov.onSpeedVerdict = func(b BenchResult) { localAdmit.SeedCapacity(b.Capacity) }
+					if !infCtl.IsDisabled() {
+						bench = prov.seedBootBenchmark(ctx)
+					}
 				}
 				capacity = bench.Capacity
 				// Enforce what we just measured, without waiting for the
-				// control plane to echo it back. Until this the listener
-				// holds unmeasuredCapacity, and the echo is a benchmark's
-				// duration plus a publish round trip away
-				// (waired-agent#738). The relay drops this if the map has
-				// already served a figure — that one has the admin
-				// override folded in.
+				// control plane to echo it back (waired-agent#738). The relay
+				// drops this if the map has already served a figure — that
+				// one has the admin override folded in.
 				localAdmit.SeedCapacity(capacity)
 				// Feed the result to the provider so the management API
 				// can derive the #133 lighter-model recommendation.
@@ -1424,51 +1336,22 @@ func run(ctx context.Context, args []string) error {
 					prov.SetLastBench(bench)
 				}
 
-				// The two measurement loops. Both run whatever the toggle
-				// said a moment ago: each gates per tick on EngineReady,
-				// which reads the toggle live, so a host that turns local
-				// inference on later starts measuring on the next tick
-				// instead of never (waired-agent#1150).
+				// The measurement loop runs whatever the toggle said a moment
+				// ago: it gates per tick on EngineReady, which reads the
+				// toggle live, so a host that turns local inference on later
+				// starts measuring on the next tick instead of never
+				// (waired-agent#1150). At most one attempt per selection, so
+				// this is a retry and not the periodic synthetic
+				// re-measurement waired-agent#202 argues against. It also
+				// clears the readiness gate armed above once this host's
+				// speed is known, and re-arms it for a new selection.
 				//
-				// waired-agent#1150: the benchmark is a LOOP now, for the
-				// reason the speed measurement beside it already was. It
-				// is gated on EngineReady, and on a host whose engine
-				// takes ~60 s to come up the single boot-tail attempt
-				// lost that race almost every time — 5 completions in 82
-				// boots on one vLLM host, where the very same boot saw
-				// the prefill measurement complete 33 s after the
-				// benchmark had stood down. Nothing re-ran it, so the
-				// disk cache (whose only writer this is) stayed empty and
-				// the host had no standing decode rate. At most one
-				// attempt per selection, so this is a retry and not the
-				// periodic synthetic re-measurement waired-agent#202
-				// argues against.
-				//
-				// waired-agent#1127: measure what a turn on this host
-				// costs, and clear the readiness gate armed above. The
-				// loop also picks up a later model switch, which changes
-				// the answer.
-				//
-				// Both backgrounded, so the first probe tick still
-				// publishes promptly: a host that has not finished
-				// measuring should be VISIBLE and saying "measuring", not
-				// absent. The gate is what keeps peer traffic away
-				// meanwhile.
+				// Backgrounded, so the first probe tick still publishes
+				// promptly: a host that has not finished measuring should be
+				// VISIBLE and saying "measuring", not absent. The gate is what
+				// keeps peer traffic away meanwhile.
 				if prov != nil {
-					go prov.runBootBenchmarkLoop(ctx, depsFor,
-						func(b BenchResult, _ BenchDeps) {
-							localAdmit.SeedCapacity(b.Capacity)
-							prov.SetLastBench(b)
-						}, bootBenchPoll)
-					go prov.runSpeedMeasurement(ctx, func() PrefillDeps {
-						kind, port := prov.probeTarget(cfgRoot.Inference)
-						return PrefillDeps{
-							EngineKind:  kind,
-							EnginePort:  port,
-							EngineModel: prov.activeEngineModel(),
-							Logger:      logger,
-						}
-					}, speedMeasurementPoll)
+					go prov.runBootBenchmarkLoop(ctx, bootBenchPoll)
 					// Keep saying what this host has to say. The
 					// suggestions are derived fresh on every republish,
 					// so a condition that goes away simply stops being
@@ -1806,6 +1689,7 @@ func run(ctx context.Context, args []string) error {
 					// measured on.
 					cfg.IsMeasuringSpeed = inferenceSub.provider.IsMeasuringSpeed
 					cfg.PrefillRate = inferenceSub.provider.PrefillRateForHealth
+					cfg.Speed = inferenceSub.provider.SpeedForHealth
 				}
 			}
 			infSrv = inference.NewServerWithConfig(cfg)

@@ -44,12 +44,13 @@ type PickInput struct {
 	// manifest's variants and bypasses every narrowing pass.
 	PreferredModelID string
 
-	// Measured is what specific variants actually decoded on this host,
-	// keyed by catalog.VariantSHA, and FloorTokps is the rate below
-	// which such a variant stops being recommended. Zero floor is "no
-	// claim" and disables that pass (waired-agent#784).
-	Measured   map[string]MeasuredRate
-	FloorTokps float64
+	// Measured is what specific variants actually cost on this host, keyed
+	// by catalog.VariantSHA, and TurnBudgetSeconds the line above which such
+	// a variant stops being recommended (waired-agent#784; in seconds per
+	// request since waired-ai/waired-agent#1341). Zero is "no claim" and
+	// disables that pass.
+	Measured          map[string]MeasuredRate
+	TurnBudgetSeconds float64
 }
 
 // MeasuredRate and Pick are the shared shapes, aliased so this package's
@@ -97,14 +98,14 @@ func translateRankError(err error) error {
 // it from drifting away from the control plane again.
 func (in PickInput) shared() modelrank.PickInput {
 	return modelrank.PickInput{
-		Catalog:          in.Catalog,
-		Host:             in.Hardware.HostFit(),
-		GPUs:             in.Hardware.GPUSummaries(),
-		Engine:           in.Engine,
-		EngineVersion:    in.EngineVersion,
-		PreferredModelID: in.PreferredModelID,
-		Measured:         in.Measured,
-		FloorTokps:       in.FloorTokps,
+		Catalog:           in.Catalog,
+		Host:              in.Hardware.HostFit(),
+		GPUs:              in.Hardware.GPUSummaries(),
+		Engine:            in.Engine,
+		EngineVersion:     in.EngineVersion,
+		PreferredModelID:  in.PreferredModelID,
+		Measured:          in.Measured,
+		TurnBudgetSeconds: in.TurnBudgetSeconds,
 		// Left false deliberately: this side serves. See EngineVersion.
 		UnknownEngineVersionPasses: false,
 	}

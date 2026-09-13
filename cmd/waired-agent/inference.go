@@ -1522,12 +1522,12 @@ type agentInferenceProvider struct {
 	// engine-agnostic, because #1127 added a measurement that runs on
 	// vLLM too.
 	claimForBench func() (func(), bool)
-	// lastPrefill is the most recent prefill measurement of the SERVED
-	// model (nil = none yet), and speedMeasuring is the readiness latch
-	// that keeps peer traffic away until the first one lands
-	// (waired-agent#1127). Shares benchMu with lastBench.
-	lastPrefill    *PrefillMeasurement
+	// speedMeasuring is the readiness latch peer traffic is gated on
+	// until this host's served-model speed is known
+	// (inference_prefill_state.go).
 	speedMeasuring atomic.Bool
+	// lastBenchAt is when lastBench was recorded.
+	lastBenchAt time.Time
 	// speedMeasureArmedAt is when the gate was first armed for the
 	// current selection, in Unix nanos, 0 when it is not armed. It bounds
 	// the setup row below it: a measurement that never gets the engine
@@ -1543,6 +1543,34 @@ type agentInferenceProvider struct {
 	// with lastBench, which it is deliberately NOT derived from: lastBench
 	// carries no engine kind or release, and both change the answer.
 	bootBenchSettled string
+	// benchCache is the on-disk store of speed measurements
+	// (~/.cache/waired/bench.json), nil when there is none; set at boot.
+	benchCache *benchCache
+	// speedTuning counts the patience a measurement gives an unverified
+	// engine tuning (speedTuningPatience).
+	speedTuning speedTuningWatch
+	// benchJobGen is the generation the running job answers: the one it
+	// started under, raised by a later request for the same model that
+	// joined it (waired-agent#980).
+	benchJobGen int
+	// benchJobVariant is the selection the running job measures, as
+	// selectionKey(model, variant).
+	benchJobVariant string
+	// benchJobBench is the result of the last finished job, whatever its
+	// ending — what the daemon's loop reads to tell a verdict from a
+	// yield.
+	benchJobBench *BenchResult
+	// speedYielded records that the last measurement gave the engine back
+	// to this host's own traffic (maybeRunBootBenchmark).
+	speedYielded bool
+	// speedDepsHook, when non-nil (tests only), adjusts the deps speedDeps
+	// builds — the engine port and identity a fixture's fake engine needs,
+	// which production reads from the live adapter and config.
+	speedDepsHook func(*BenchDeps)
+	// onSpeedVerdict, when non-nil, is told every measurement verdict a
+	// job reaches — the daemon wires the admission ceiling to it
+	// (localAdmit.SeedCapacity).
+	onSpeedVerdict func(BenchResult)
 	// ollamaUsable reports whether the ollama engine is actually usable
 	// on this host: the waired-managed binary is resolvable (under the
 	// state dir, or on PATH where the install still lives outside it).
@@ -1670,17 +1698,10 @@ type agentInferenceProvider struct {
 	hostSpeedWindow time.Duration
 	// hostSpeedRetry is how long measureHostSpeedWhenQuiet waits before
 	// coming back at an engine another measurement had taken. Zero means
-	// hostSpeedRetryPause. A field for the reason remeasure is one: the
-	// loop outlives the call that started it, so a package var would be
-	// written by one test's Cleanup under another test's goroutine.
+	// hostSpeedRetryPause. A field rather than a package var: the loop
+	// outlives the call that started it, so a package var would be written
+	// by one test's Cleanup under another test's goroutine.
 	hostSpeedRetry time.Duration
-	// remeasure overrides the timing of the post-activation re-measurement
-	// loop (waired-agent#821) in tests. Zero fields mean the constants.
-	// A field for the same reason hostSpeedWindow is one, and here it is
-	// load-bearing rather than tidy: remeasureWhenQuiet outlives the call
-	// that started it, so package vars would be written by one test's
-	// Cleanup while another test's goroutine still reads them.
-	remeasure remeasureTiming
 	// hostCutoffClient is the client the host-cutoff measurement posts
 	// with. Nil in production — postOllamaGenerate then uses
 	// http.DefaultClient, which is what it has always done. A fixture sets
@@ -2769,11 +2790,10 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	// the feature — but InferenceStatus carried them unset from the
 	// initial populate onwards, so the row never appeared on any host.
 	//
-	// currentRecommendations already derives them and already guarantees
-	// at most one is non-nil (one compares below the interactive floor,
-	// the other above it). Its only other caller resolves an empty target
-	// for the dismissal endpoint.
-	lighter, upgrade := p.currentRecommendations(ctx)
+	// currentRecommendation derives the lighter one; the upgrade
+	// suggestion is retired (waired-ai/waired-agent#1342). Its only other
+	// caller resolves an empty target for the dismissal endpoint.
+	lighter := p.currentRecommendation(ctx)
 	return management.InferenceStatus{
 		Inflight:                inflight,
 		SubsystemState:          subState,
@@ -2782,7 +2802,6 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		ActiveEndpoints:         endpoints,
 		Active:                  activeFromCatalog(state.Active),
 		BenchmarkRecommendation: lighter,
-		BenchmarkUpgrade:        upgrade,
 		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
 		DesiredState:            desiredStateStr,
 		DesiredStateSet:         desiredStateSet,
@@ -2792,8 +2811,8 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		// rows use, so a daemon restart on an already-measured host reports
 		// "measured" here too rather than looking like an unstarted
 		// measurement for the length of its settle window (waired#1143).
-		HostSpeedStage:          p.setupHostSpeedProgress().Stage.String(),
-		PrefillMeasurementStage: p.setupPrefillProgress().Stage.String(),
+		HostSpeedStage: p.setupHostSpeedProgress().Stage.String(),
+		ModelSpeed:     p.modelSpeedStatus(),
 	}
 }
 
@@ -4738,7 +4757,6 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// no ActiveSelection). Guarded to the bundled model so an unrelated
 	// `waired models pull` can't hijack the active slot. See
 	// activateBundledIfUnset.
-	servedBefore := p.activeModelID()
 	if p.isBundledModel(modelID) {
 		p.activateBundledIfUnset(modelID, variantID)
 	}
@@ -4747,30 +4765,11 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
-	// A model that BECAME what this host serves, right here, is one no
-	// benchmark has seen. That is the takeover path's ending: init handed
-	// the download over and exited, so the only result on file belongs to
-	// whatever was serving before, and every asking surface reads it as
-	// this model's (waired-ai/waired-agent#783).
-	//
-	// A TRANSITION, not a state. "This pull's model is the active one" was
-	// not enough: pre-caching a better variant of the model already served
-	// (#361) satisfies it while changing nothing about what answers
-	// requests. Reading the selection either side of the two activation
-	// arms is what tells the two apart. Scoped to the model — activation
-	// never swaps a variant under an unchanged model id, so there is no
-	// same-model-new-variant case to catch here.
-	//
-	// Started and NOT waited for, and that part is load-bearing rather
-	// than convenience: endPull is one of this function's deferred calls,
-	// so this pull is still in pullsInFlight right here — and
-	// engineIsQuiet answers false while any pull is. Blocking on the run
-	// would have it wait for a quiet engine that cannot go quiet until
-	// this call returns. The job's own gates handle the ordering instead:
-	// by the time it has settled, the defers have run.
-	if servedBefore != modelID && p.activeModelID() == modelID {
-		_ = p.remeasureForActiveModel(modelID)
-	}
+	// A model that became what this host serves is measured by the
+	// daemon's speed loop, which notices the new selection on its next
+	// tick (runBootBenchmarkLoop); a stored measurement of the same weights
+	// and serving configuration answers without measuring again
+	// (waired-ai/waired-agent#1341).
 	// #320: the serve tuning was sized before this model existed on disk.
 	// resolveTuningTarget only reads the real variant once the model is
 	// Ready, so until this point the engine has been running on a guess —
@@ -5067,195 +5066,6 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 	if committed {
 		p.logger.Info("auto-activated bundled model", "model", modelID, "variant", variantID,
 			"decided_by", decidedBy)
-	}
-}
-
-// remeasureForActiveModel measures the model that just became the active
-// selection, unless one already on file measured it.
-//
-// The floor check is not a daemon-side decision — nothing here may step a
-// host down, because what is missing for that is consent and the daemon
-// cannot ask (the same reasoning setupReconciler's model step states). What
-// the daemon CAN do is make sure the number the asking surfaces read
-// describes the model actually serving. Until now the only measurement was
-// the one taken at boot: activate a model afterwards and every consumer —
-// `waired runtimes status`, the tray, the next `waired init` — compared the
-// new model against the old model's rate, or against nothing at all.
-//
-// Detached and single-flight (startBenchmarkJob), so a run already going —
-// the boot benchmark on a fresh install, or one `waired init` asked for —
-// is joined rather than duplicated, and its own gates (EngineReady,
-// EngineQuiet, EngineClaim) still decide whether it may proceed.
-// activeModelID is the committed active selection, read from this
-// provider's store. It used to have a twin, modelIDForActive, that answered
-// the same question from the process-wide default path because the
-// benchmark deps were built without a provider; the deps take one now
-// (waired-agent#1206) and this is the only reader left.
-func (p *agentInferenceProvider) activeModelID() string {
-	if p.store == nil {
-		return ""
-	}
-	st, err := p.store.Load()
-	if err != nil || st.Active == nil {
-		return ""
-	}
-	return st.Active.ModelID
-}
-
-// # It waits for a quiet engine, on a goroutine of its own
-//
-// The trigger fires from runPullJob's tail, which is the ONE moment the
-// engine cannot be measured: endPull is one of that function's DEFERRED
-// calls, so the pull is still in pullsInFlight and engineIsQuiet answers
-// false for it. Starting the job there and walking away spent the single
-// attempt on a gate that was always going to decline, and the model this
-// host had just activated stayed unmeasured — the state this whole function
-// exists to end (waired-agent#821, seen on the browser-takeover path).
-//
-// Retrying at the endPull boundary instead would not have been enough
-// either: runPullJob stores retuneDeferred unconditionally, so endPull
-// always fires a serve reconcile, and engineIsQuiet counts a PENDING
-// reconcile as busy for the same reason it counts a running one. The window
-// closes some time after that boundary, not at it.
-//
-// So the wait is real, and it lives on a NEW goroutine. What is
-// load-bearing is that runPullJob does not block: blocking there would make
-// the wait depend on the defers of the very call it is blocking, which is
-// the deadlock TestRunPullJob_ReMeasuresTheModelItJustMadeActive exists to
-// catch. Past that boundary there is nothing left to deadlock against, so
-// this may wait the way every other measurement on this host already does
-// (startHostSpeedMeasurement, awaitScreenQuiet).
-//
-// It returns a channel closed when the whole attempt has finished, or nil
-// when it started nothing. Callers in the daemon ignore it — the point is
-// that the attempt is detached — but a test that does not wait leaves a
-// goroutine writing into its temp directory after it has returned.
-func (p *agentInferenceProvider) remeasureForActiveModel(modelID string) <-chan struct{} {
-	// No profiler means nothing here can run a benchmark: runBenchmarkJob
-	// reads the hardware profile before it reaches its own gates. A
-	// provider assembled without one is not a host that should be measured
-	// (--disable-inference, and the narrow providers in tests).
-	if modelID == "" || p.profiler == nil {
-		return nil
-	}
-	if !p.activeModelNeedsMeasurement(modelID) {
-		return nil
-	}
-	p.logger.Info("benchmarking the newly active model", "model", modelID)
-	// The daemon's own context, so a shutdown ends the wait. Nil in the
-	// narrow test providers — the same fallback requestEngineReconcile
-	// makes for the same reason.
-	ctx := p.agentCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		p.remeasureWhenQuiet(ctx, modelID)
-	}()
-	return done
-}
-
-// activeModelNeedsMeasurement reports whether this host still lacks a
-// measurement of its own of modelID.
-//
-// Only a real measurement OF THIS MODEL answers false. Nothing on file, a
-// skipped run (Capacity 0), a failed one — which is what a run declined at
-// the engine gates leaves behind — an unlabelled one from a build predating
-// BenchResult.ModelID, or one of another model all leave this host's actual
-// model unmeasured. Note this is stricter than benchDescribes, which answers
-// a different question: whether an existing result may still be USED, where
-// an unlabelled one is kept rather than discarded.
-//
-// It is both the entry test and the success test of the retry loop below,
-// so "did the run work" is answered by the same predicate that decided to
-// start one, rather than by a second reading that could drift from it.
-func (p *agentInferenceProvider) activeModelNeedsMeasurement(modelID string) bool {
-	p.benchMu.Lock()
-	last := p.lastBench
-	p.benchMu.Unlock()
-	return last == nil || last.Failed || last.Capacity <= 0 || last.ModelID != modelID
-}
-
-// stillWantsRemeasure is the retry loop's "is this attempt still worth
-// making" test: modelID is what this host serves, and nothing has measured
-// it yet.
-//
-// Both halves can go false while the loop waits, and they mean different
-// things when they do. A changed selection means the work belongs to
-// whatever activation replaced it, which fires its own trigger; a
-// measurement appearing means someone else — the boot benchmark, or a run
-// `waired init` asked for — got there first and this attempt would only
-// re-measure what is already on file.
-func (p *agentInferenceProvider) stillWantsRemeasure(modelID string) bool {
-	return p.activeModelID() == modelID && p.activeModelNeedsMeasurement(modelID)
-}
-
-// remeasureWhenQuiet is the retry loop behind remeasureForActiveModel: wait
-// for an engine nothing else is using, start the single-flight benchmark,
-// and try again if the run it started (or joined) was declined anyway.
-//
-// The retry is not redundant with the wait. The two ask the same question at
-// two different moments — benchQuietNow can answer yes about an engine that
-// a request, a sibling pull or a reconcile takes away before
-// RunBootBenchmark re-asks — and it is that second reading, not the first,
-// that decides whether anything gets measured.
-//
-// Bounded by remeasureTiming.window from the first attempt, so a host that
-// never goes quiet gives up and says so once instead of spinning. Three
-// ways to stop before that, all silent: the model is no longer what this
-// host serves (whatever replaced it brings its own trigger), a measurement
-// of it appeared (the boot benchmark, or one `waired init` asked for), or
-// the daemon is shutting down.
-func (p *agentInferenceProvider) remeasureWhenQuiet(ctx context.Context, modelID string) {
-	t := p.remeasureTimers()
-	deadline := time.Now().Add(t.window)
-	declined := 0
-	for {
-		// Asked on EVERY pass, not only at the top and after a wait. The
-		// loop can run for minutes, both halves can go false while it
-		// does, and this is also what ends the goroutine promptly when the
-		// provider it belongs to is torn down — a wait loop that only
-		// re-asked on either side would go on polling a dead engine for
-		// the rest of the window.
-		if !p.stillWantsRemeasure(modelID) {
-			return
-		}
-		if time.Now().After(deadline) {
-			p.logger.Warn("the newly active model stays unmeasured",
-				"model", modelID, "waited", t.window, "declined_runs", declined)
-			return
-		}
-		if !p.benchQuietNow(ctx) {
-			select {
-			case <-time.After(min(t.poll, time.Until(deadline))):
-			case <-ctx.Done():
-				return
-			}
-			continue
-		}
-		select {
-		case <-p.startBenchmarkJob(0):
-		case <-ctx.Done():
-			return
-		}
-		if !p.activeModelNeedsMeasurement(modelID) {
-			return
-		}
-		// Declined after this loop had just read the engine as quiet. The
-		// two readings are taken at different moments, and the job also
-		// gates on things this loop does not test — EngineReady above all
-		// — so the pause is what keeps that disagreement from spinning
-		// through the whole window.
-		declined++
-		p.logger.Info("the benchmark of the newly active model was declined; retrying once the engine is quiet",
-			"model", modelID, "attempt", declined)
-		select {
-		case <-time.After(min(t.retry, time.Until(deadline))):
-		case <-ctx.Done():
-			return
-		}
 	}
 }
 
@@ -6149,11 +5959,11 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 		EngineVersion:    engineVersion,
 		PreferredModelID: cfg.PreferredModelID,
 		// "Refreshing would land somewhere better" must not name a model
-		// this host has already run and measured below its floor
+		// this host has already run and measured over the line
 		// (waired-agent#784). Inert when PreferredModelID is set, which
 		// bypasses every rung by design.
-		Measured:   measuredRatesFrom(state),
-		FloorTokps: resolveInteractiveFloor(cfg.InteractiveFloorTokps),
+		Measured:          measuredRatesFrom(state),
+		TurnBudgetSeconds: hostfit.ModelTurnBudgetSeconds,
 	})
 	if err != nil {
 		return nil

@@ -67,7 +67,9 @@ type InferenceProvider interface {
 	// ready yet (the handler maps this to 425/409 so a caller can
 	// poll), or the benchmark was skipped. err covers unexpected
 	// failures.
-	RunBenchmark(ctx context.Context) (out BenchmarkOutcome, ok bool, err error)
+	//
+	// mode is BenchmarkModeRerun or BenchmarkModeEnsure.
+	RunBenchmark(ctx context.Context, mode string) (out BenchmarkOutcome, ok bool, err error)
 
 	// DismissRecommendation records that the user declined the
 	// recommendation to switch from→to (variant IDs) so it is not
@@ -81,20 +83,16 @@ type InferenceProvider interface {
 	// disconnect can poll this instead of losing the measurement.
 	BenchmarkStatus() BenchmarkStatusResponse
 
-	// MeasuredRates reports what specific variants actually decoded on
-	// this host, keyed by catalog.VariantSHA, together with the floor
-	// this host judges those figures against.
+	// MeasuredRates reports what specific variants actually cost on this
+	// host, keyed by catalog.VariantSHA, together with the line this host
+	// judges those figures against (hostfit.ModelTurnBudgetSeconds;
+	// waired-ai/waired-agent#1341). They travel together so the catalog
+	// badge and the step-down proposal cannot disagree about what "too
+	// slow" means.
 	//
-	// The two travel together on purpose. The floor is configurable
-	// (agentconfig InteractiveFloorTokps, defaulting to
-	// router.CodingAgentSelectionFloorTokps), and a host whose operator
-	// moved it must not end up with the catalog badge and the step-down
-	// proposal disagreeing about what "too slow" means. Returning the
-	// number beside the figures leaves one answer for both.
-	//
-	// A zero floor means this host makes no speed claim, and the
-	// ranking then ignores the figures entirely.
-	MeasuredRates() (rates map[string]router.MeasuredRate, floorTokps float64)
+	// A zero line means this host makes no speed claim, and the ranking
+	// then ignores the figures entirely.
+	MeasuredRates() (rates map[string]router.MeasuredRate, turnBudgetSeconds float64)
 }
 
 // InferenceStatus is the body of GET /waired/v1/inference/status.
@@ -158,20 +156,9 @@ type InferenceStatus struct {
 	// declined this exact pairing, so the CLI/tray can stay quiet without
 	// re-deriving the decision.
 	//
-	// This field carries LIGHTER recommendations only. Upgrades go in
-	// BenchmarkUpgrade: an old tray/CLI reading an upgrade out of this
-	// field would render "local inference is slow — switch to the
-	// lighter model X" for a host with headroom, and its default-Yes
-	// prompt could auto-accept the multi-GB switch.
+	// This field carries LIGHTER recommendations only; the upgrade
+	// suggestion is retired (waired-ai/waired-agent#1342).
 	BenchmarkRecommendation *BenchmarkRecommendation `json:"benchmark_recommendation,omitempty"`
-
-	// BenchmarkUpgrade is the inverse suggestion: the most recent
-	// benchmark cleared the interactive floor with enough headroom that
-	// a higher-quality_tier model is predicted to still run above it
-	// (Direction="upgrade", PredictedTokps set). Same acceptance /
-	// dismissal endpoints as BenchmarkRecommendation; never set at the
-	// same time as a lighter recommendation.
-	BenchmarkUpgrade *BenchmarkRecommendation `json:"benchmark_upgrade,omitempty"`
 
 	// HostMemory is the install-time available-memory measurement every
 	// fit decision on this host is based on (waired-agent#568), and when
@@ -292,6 +279,13 @@ type InferenceStatus struct {
 	// implementation of the ruling in waired-agent's
 	// docs/decisions/20260829/1740-speed-is-measured-at-fixed-depths.md.
 	PrefillMeasurementStage string `json:"prefill_measurement_stage,omitempty"`
+
+	// ModelSpeed is the served model's own speed in seconds per request
+	// (waired-ai/waired-agent#1341): the stored measurement of the model
+	// this host serves, or the one running now. nil when there is neither.
+	// HostSpeed above is a different question — the install-time cutoff on
+	// a small stand-in model.
+	ModelSpeed *ModelSpeedStatus `json:"model_speed,omitempty"`
 
 	// Residency is the model-residency setting in force on this host
 	// (waired-agent#861): how long the engine holds the weights after the
@@ -530,23 +524,20 @@ type AvailableUpdate struct {
 	ExpectedSwapSeconds int      `json:"expected_swap_seconds,omitempty"`
 }
 
-// Direction values for BenchmarkRecommendation. The zero value (legacy
-// wire payloads from older daemons) means lighter.
-const (
-	RecommendationLighter = "lighter"
-	RecommendationUpgrade = "upgrade"
-)
+// RecommendationLighter is BenchmarkRecommendation's only direction. The
+// zero value (legacy wire payloads from older daemons) means lighter too;
+// the "upgrade" direction is retired (waired-ai/waired-agent#1342), and a
+// client must not render one it receives from an older daemon.
+const RecommendationLighter = "lighter"
 
 // BenchmarkRecommendation describes a benchmark-driven model-switch
-// suggestion: step down to a lighter model when the measurement is
-// below the interactive floor (issue #133), or step up to a higher
-// quality tier when the host has throughput headroom
-// (Direction="upgrade"). The switch is never applied automatically;
-// the user accepts it via the preferred-model endpoint or declines it
-// via the dismiss endpoint.
+// suggestion: step down to a lighter model when one request with the
+// active model takes longer than the line (issue #133;
+// waired-ai/waired-agent#1341). The switch is never applied
+// automatically; the user accepts it via the preferred-model endpoint or
+// declines it via the dismiss endpoint.
 type BenchmarkRecommendation struct {
-	// Direction is RecommendationLighter or RecommendationUpgrade.
-	// Empty means lighter (payloads from pre-upgrade daemons).
+	// Direction is RecommendationLighter. Empty means lighter.
 	Direction     string  `json:"direction,omitempty"`
 	FromModelID   string  `json:"from_model_id"`
 	FromVariantID string  `json:"from_variant_id"`
@@ -554,20 +545,22 @@ type BenchmarkRecommendation struct {
 	ToVariantID   string  `json:"to_variant_id"`
 	MeasuredTokps float64 `json:"measured_tokps"`
 	FloorTokps    float64 `json:"floor_tokps"`
-	// PredictedTokps is the bandwidth-scaled throughput estimate for
-	// the suggested model on this host. Upgrade direction only.
-	PredictedTokps float64 `json:"predicted_tokps,omitempty"`
-	Reason         string  `json:"reason,omitempty"`
+	// TurnSeconds / TurnFloorSeconds / BudgetSeconds are the verdict the
+	// suggestion rests on, in the SpeedMeasurement shape.
+	TurnSeconds      float64 `json:"turn_seconds,omitempty"`
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+	BudgetSeconds    float64 `json:"budget_seconds,omitempty"`
+	Reason           string  `json:"reason,omitempty"`
 	// Dismissed is true when the user already declined this exact
 	// from→to pairing; surfaces so the CLI/tray can stay silent.
 	Dismissed bool `json:"dismissed,omitempty"`
 }
 
-// BenchmarkOutcome is RunBenchmark's result: the raw measurement plus
-// at most one of (Lighter, Upgrade) — mutually exclusive by
-// construction (below floor → lighter; at/above floor → upgrade or
-// nothing).
+// BenchmarkOutcome is RunBenchmark's result: the measurement plus the
+// lighter-model recommendation when it is over the line.
 type BenchmarkOutcome struct {
+	// Speed is the verdict in seconds per request (waired-ai/waired-agent#1341).
+	Speed         SpeedMeasurement
 	MeasuredTokps float64
 	// ModelID is what was measured. The rate alone cannot say: a host
 	// swaps models and every surface that quotes a figure has to be able
@@ -575,7 +568,6 @@ type BenchmarkOutcome struct {
 	// that measured nothing.
 	ModelID string
 	Lighter *BenchmarkRecommendation
-	Upgrade *BenchmarkRecommendation
 	// Failed reports that the benchmark RAN and did not complete — the
 	// warm-up got an engine error, the measurement timed out, and so on.
 	// It is distinct from RunBenchmark's ok=false, which means "not ready
@@ -586,25 +578,6 @@ type BenchmarkOutcome struct {
 	Failed bool
 	// Error is the failure reason when Failed, for the caller to show.
 	Error string
-
-	// BelowFloor reports that the measurement is under FloorTokps, which
-	// is NOT the same claim as "Lighter is set".
-	//
-	// The two came apart on the host this exists for: one already
-	// serving the smallest model Waired offers has nothing lighter to
-	// step down to, so Lighter is nil — and before this field a caller
-	// could not tell that from a comfortable measurement. `waired init`
-	// printed "Local inference works" over a rate the same run had just
-	// judged too slow (waired-agent#784).
-	//
-	// False on a failed or skipped run: those are not measurements, and
-	// a zero rate must not read as the slowest possible host.
-	BelowFloor bool
-	// FloorTokps is the floor the measurement was judged against —
-	// configurable per host (agentconfig InteractiveFloorTokps), so a
-	// caller that hard-coded the default would say the wrong number.
-	// 0 when there was no measurement to judge.
-	FloorTokps float64
 }
 
 // ModelsSnapshot summarises model lifecycle states for display.

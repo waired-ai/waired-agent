@@ -16,8 +16,9 @@ symptom below.
 waired runtimes benchmark
 ```
 
-This measures what this computer does. If it comes out below what a coding
-assistant needs, Waired offers a lighter model. Accepting is usually right.
+This times one request the size of a coding agent's with the model this
+computer runs. If it takes longer than the target, Waired offers a lighter
+model. Accepting is usually right.
 
 Other things worth checking:
 

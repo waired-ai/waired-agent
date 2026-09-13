@@ -228,7 +228,14 @@ func (t openAITurn) probe() (hostfit.HostProbe, error) {
 
 // streamOpenAICompletion posts one streamed chat completion and times it.
 func streamOpenAICompletion(ctx context.Context, deps openAICutoffDeps, prompt string, maxTokens int) (openAITurn, error) {
-	body, err := json.Marshal(map[string]any{
+	return streamOpenAICompletionWith(ctx, deps, prompt, maxTokens, nil)
+}
+
+// streamOpenAICompletionWith is streamOpenAICompletion with extra request
+// fields — the served-model measurement asks vLLM for min_tokens, so a
+// model that would stop early still decodes its sample.
+func streamOpenAICompletionWith(ctx context.Context, deps openAICutoffDeps, prompt string, maxTokens int, extra map[string]any) (openAITurn, error) {
+	payload := map[string]any{
 		"model":       deps.Model,
 		"stream":      true,
 		"max_tokens":  maxTokens,
@@ -238,7 +245,11 @@ func streamOpenAICompletion(ctx context.Context, deps openAICutoffDeps, prompt s
 		// estimate hostfit refuses to build a verdict on.
 		"stream_options": map[string]any{"include_usage": true},
 		"messages":       []map[string]string{{"role": "user", "content": prompt}},
-	})
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return openAITurn{}, err
 	}

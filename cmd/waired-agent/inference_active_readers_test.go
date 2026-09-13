@@ -13,6 +13,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -186,7 +187,8 @@ func TestRunBenchmarkJob_EngineLessHostRecordsNothing(t *testing.T) {
 	p.cfg = agentconfig.InferenceConfig{}
 
 	done := make(chan struct{})
-	p.runBenchmarkJob(7, done)
+	p.benchJobGen = 7
+	p.runBenchmarkJob(management.BenchmarkModeEnsure, done)
 	select {
 	case <-done:
 	case <-time.After(waitBackstop):

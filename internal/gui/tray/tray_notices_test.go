@@ -19,7 +19,7 @@ import (
 func TestNoticeSlotCountMatchesTheRegistryCap(t *testing.T) {
 	var many []notice.Notice
 	for range notice.MaxActive + 3 {
-		many = append(many, notice.LighterModel("heavy", "light", 42, 60))
+		many = append(many, notice.LighterModel("heavy", "light", 228, 0, 190))
 	}
 	m := Update(noticeConnectedSnapshot(many))
 	if len(m.Notices) > notice.MaxActive {
@@ -36,7 +36,7 @@ func TestNoticeSlotCountMatchesTheRegistryCap(t *testing.T) {
 // a suggestion whose live details it does not have. A report that did
 // not mention the notice would make that click a non-sequitur.
 func TestStatusReport_CarriesTheNotices(t *testing.T) {
-	snap := noticeConnectedSnapshot([]notice.Notice{notice.LighterModel("heavy", "light", 42, 60)})
+	snap := noticeConnectedSnapshot([]notice.Notice{notice.LighterModel("heavy", "light", 228, 0, 190)})
 
 	_, details := statusReport(Update(snap), snap, "0.0.3-rc4", "90dd4a5", testReportNow())
 
