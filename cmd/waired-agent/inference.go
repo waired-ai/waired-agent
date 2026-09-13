@@ -715,6 +715,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		meshSnapshotFn:      deps.MeshSnapshotFn,
 		sticky:              deps.Sticky,
 		localInFlight:       deps.LocalInFlight,
+		assignments:         router.NewAssignments(),
 		stickyInFlight:      deps.StickyInFlight,
 		localRTT:            deps.LocalRTT,
 		localErrors:         deps.LocalErrors,
@@ -1659,8 +1660,12 @@ type agentInferenceProvider struct {
 	// Phase 7 routing signals threaded into the loopback Selector.
 	// All optional; nil keeps the pre-Phase-7 mesh-fallback
 	// deterministic-pick behaviour.
-	sticky         *router.StickyStore
-	localInFlight  *router.InFlightTracker
+	sticky        *router.StickyStore
+	localInFlight *router.InFlightTracker
+	// assignments is shared by every Selector this provider builds — one
+	// per request — so requests that arrive together rank one after another
+	// and see each other's first choice (waired-agent#1354).
+	assignments    *router.Assignments
 	stickyInFlight *router.StickyInFlight
 	localRTT       func() map[string]uint32
 	localErrors    func() map[string]float32
@@ -5582,6 +5587,7 @@ func (p *agentInferenceProvider) selectorInputs(ctx context.Context, pref state.
 	// agent's outbound traffic.
 	in.Sticky = p.sticky
 	in.LocalInFlight = p.localInFlight
+	in.Assignments = p.assignments
 	in.StickyInFlight = p.stickyInFlight
 	in.LocalRTT = p.localRTT
 	in.LocalErrors = p.localErrors
