@@ -213,6 +213,8 @@ var producedInProto = []exemption{
 		"the ladder's verdict, built by modelrank.RankModels"},
 	{reflect.TypeFor[modelrank.Pick](), "DecodeEstimate",
 		"the ladder's verdict, built by modelrank.RankModels"},
+	{reflect.TypeFor[modelrank.Pick](), "MeasuredTurnSeconds",
+		"the ladder's verdict, built by modelrank.RankModels"},
 	{reflect.TypeFor[hostfit.Estimate](), "MeetsSpeedFloor",
 		"the roofline decode prediction's own verdict; the ladder's candidate loop seeds it and EstimateOllamaDecode fills it"},
 
@@ -335,6 +337,19 @@ var producerPending = []exemption{
 	// this field's producer and shown nothing here at all. Empty again,
 	// and that is the point.
 
+	// waired-ai/waired-agent#1341. The seconds verdict's wire landed alone
+	// ahead of the served-model measurement that fills it
+	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2).
+	// The other fields added with these already have same-named writers
+	// elsewhere (HostSpeed.TurnSeconds and friends), so by the name-matching
+	// rule above only these are visible here; the #1341 PR writes all of
+	// them and deletes these entries.
+	{reflect.TypeFor[signer.SetupBenchmark](), "ElapsedSeconds",
+		"waired-ai/waired-agent#1341: the served-model measurement publishes how long its request has run"},
+	{reflect.TypeFor[signer.SetupBenchmark](), "OverBudget",
+		"waired-ai/waired-agent#1341: the served-model measurement publishes that its request is over the line"},
+	{reflect.TypeFor[modelrank.PickInput](), "TurnBudgetSeconds",
+		"waired-ai/waired-agent#1341: the lighter-model and catalog pickers pass hostfit.ModelTurnBudgetSeconds"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

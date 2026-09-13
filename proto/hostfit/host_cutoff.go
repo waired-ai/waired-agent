@@ -176,8 +176,7 @@ func (p HostProbe) TurnSeconds() float64 {
 	if !p.Measured() {
 		return 0
 	}
-	depth := float64(HostCutoffProbeDepthTokens)
-	return depth/p.PrefillTokps + (depth/HostCutoffPromptCompletionRatio)/p.DecodeTokps
+	return TurnSecondsAt(HostCutoffProbeDepthTokens, p.PrefillTokps, p.DecodeTokps)
 }
 
 // TurnFloorSeconds is a LOWER BOUND on the TurnSeconds of a host whose
