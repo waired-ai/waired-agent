@@ -42,8 +42,8 @@ background service on the same computer and shows its state.
                 forwards encrypted WG packets only
 ```
 
-1. **Enroll.** `waired init` signs you in with Google and registers the
-   device with the control plane.
+1. **Enroll.** `waired init` signs you in with Google or GitHub and registers
+   the device with the control plane.
 2. **Discover.** The control plane streams each agent a signed Network Map:
    the public keys, endpoints, and relay URLs of the other devices on your
    network.

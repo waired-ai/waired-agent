@@ -3,7 +3,7 @@ title: サインインする
 description: waired initがこのパソコンをサインインさせる仕組み、各段階でターミナルに表示される内容、あとからサインインし直す方法を説明します。
 meta:
   audience: 中断したセットアップを再開する人、--no-initでインストールした人、サインインし直す人
-  needs: Googleアカウントと、パソコンの管理者権限
+  needs: GoogleかGitHubのアカウントと、パソコンの管理者権限
   time: 2分
 ---
 
@@ -14,7 +14,7 @@ import Screenshot from '../../../../components/Screenshot.astro';
 インストールコマンドがサインインを始めるので、はじめてのセットアップでこのページは必要ありません。`waired init`を自分で実行するのは、セットアップが中断したとき、`--no-init`でインストールしたとき、サインインし直したいときです。
 
 <Aside type="tip" title="同じアカウントなら同じネットワーク">
-	すべてのパソコンで同じGoogleアカウントでサインインしてください。同じアカウントでサインインしていることが、1台のパソコンから別のパソコンのモデルを使える条件です。アカウントが違うと、互いに届かない別々のネットワークになります。
+	すべてのパソコンで同じアカウントでサインインしてください。同じアカウントでサインインしていることが、1台のパソコンから別のパソコンのモデルを使える条件です。アカウントが違うと、互いに届かない別々のネットワークになります。GoogleアカウントとGitHubアカウントは、メールアドレスが同じでも、Webコンソールの［Settings］→［Identity providers］で一方をもう一方に追加しない限り別のアカウントです。
 </Aside>
 
 ## <a id="start-sign-in"></a>サインインを始める
@@ -69,7 +69,7 @@ Control Plane: https://app.waired.ai
 
 そのあとの動きは、コマンドを実行している環境で変わります。
 
-- **デスクトップのあるパソコン**では、Enterキーを押します。ターミナルがブラウザを開き、*「Opened your browser. If nothing appeared, open the link above yourself.」*と表示します。ブラウザでGoogleアカウントを選択します。
+- **デスクトップのあるパソコン**では、Enterキーを押します。ターミナルがブラウザを開き、*「Opened your browser. If nothing appeared, open the link above yourself.」*と表示します。ブラウザでGoogleかGitHubを選び、アカウントを選択します。
 - **デスクトップのないパソコン**、または`--no-browser`を付けた場合は、ターミナルにペアリングコードと*「Nothing to press here. Sign-in continues on its own once you open the link.」*が表示されます。スマートフォンか別のパソコンでリンクを開き、ページで求められたらコードを入力します。
 - **`--non-interactive`を付けた場合**、またはコマンドの入力がターミナルでない場合は、キー入力を待たずにブラウザが開きます。
 
@@ -123,7 +123,7 @@ Setup is continuing in your browser...
 sudo waired init --force-reauth
 ```
 
-ターミナルは先に`Sign in to this computer again with Google?`と確認します。「いいえ」と答えると、パソコンは何も変わりません。
+ターミナルは先に`Sign in to this computer again?`と確認します。「いいえ」と答えると、パソコンは何も変わりません。
 
 サインインの有効期限が切れて更新できない場合は、通常の`waired init`が自動でサインインし直します。
 

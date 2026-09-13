@@ -24,7 +24,7 @@ func confirmRenew(in lineReader, out io.Writer, existing *identity.Identity, byp
 		writePrompt(out, "Non-interactive: signing in again.")
 		return true
 	}
-	return ynPrompt(out, in, "Sign in to this computer again with Google?", true)
+	return ynPrompt(out, in, "Sign in to this computer again?", true)
 }
 
 func displayOrDash(s string) string {

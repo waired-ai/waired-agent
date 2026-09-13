@@ -92,7 +92,8 @@ automatic.
 
 ### How does signing in work?
 
-You sign in with Google. Every computer signed in with the same account joins
+You sign in with Google or GitHub. Every computer signed in with the same
+account joins
 the same private network and can reach the others. There is nothing to pair
 and no address to copy.
 

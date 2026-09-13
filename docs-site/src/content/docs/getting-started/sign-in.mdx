@@ -3,7 +3,7 @@ title: Sign in
 description: How waired init signs this computer in, what the terminal shows at each point, and how to sign in again later.
 meta:
   audience: Anyone resuming an interrupted setup, installing with --no-init, or signing in again
-  needs: A Google account, and administrator rights on the computer
+  needs: A Google or GitHub account, and administrator rights on the computer
   time: 2 minutes
 ---
 
@@ -16,9 +16,12 @@ this page. Run `waired init` yourself when setup was interrupted, when you
 installed with `--no-init`, or when you want to sign in again.
 
 <Aside type="tip" title="Same account, same network">
-	Sign in to every computer with the same Google account. That shared sign-in
-	is what lets one computer use another's model. Different accounts make
-	separate networks that cannot reach each other.
+	Sign in to every computer with the same account. That shared sign-in is
+	what lets one computer use another's model. Different accounts make separate
+	networks that cannot reach each other. A Google account and a GitHub account
+	are different accounts, even with the same email address, unless you add
+	one to the other under **Settings** → **Identity providers** in the web
+	console.
 </Aside>
 
 ## Start sign-in
@@ -82,7 +85,7 @@ What happens next depends on where you are running the command.
 
 - **On a computer with a desktop**, press Enter. The terminal opens your
   browser and says *“Opened your browser. If nothing appeared, use the link
-  above.”* Choose your Google account in the browser.
+  above.”* In the browser, choose Google or GitHub, then your account.
 - **On a computer with no desktop**, or with `--no-browser`, the terminal
   prints a pairing code and *“Nothing to press here — sign-in continues on
   its own once you open the link.”* Open the link on your phone or another
@@ -156,8 +159,8 @@ To sign in again on purpose, for example with a different account, run:
 sudo waired init --force-reauth
 ```
 
-The terminal asks `Sign in to this computer again with Google?` first. Answering
-no leaves the computer as it is.
+The terminal asks `Sign in to this computer again?` first. Answering no leaves
+the computer as it is.
 
 When a sign-in has expired and cannot be renewed, a plain `waired init` signs
 you in again by itself.

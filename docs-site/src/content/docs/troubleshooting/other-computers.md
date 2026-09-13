@@ -18,9 +18,10 @@ waired status --observability
 
 The **Mesh** line reads `enrolled / reachable / ready`. If `reachable` is 0:
 
-1. **Are both computers signed in with the same Google account?** This is by
-   far the most common cause. Compare the account line from `waired status`
-   on each.
+1. **Are both computers signed in with the same account?** This is by far the
+   most common cause. Compare the account line from `waired status` on each.
+   Google and GitHub count as different accounts unless one is added to the
+   other.
 2. **Is the other computer awake, with Waired running?** Run `waired doctor`
    there.
 3. **Is it sharing?** A computer answers other computers only when its own

@@ -3,7 +3,7 @@ title: クイックスタート
 description: コマンド1つでWairedをインストールしてサインインし、約10分で自分のモデルがClaude Codeに応答する状態にします。
 meta:
   audience: はじめてWairedをセットアップする人
-  needs: モデルを動かすパソコン1台、Googleアカウント、そのパソコンの管理者権限
+  needs: モデルを動かすパソコン1台、GoogleかGitHubのアカウント、そのパソコンの管理者権限
   time: 操作は約10分。ほかにダウンロードの待ち時間が5〜30分
 ---
 
@@ -16,7 +16,7 @@ import Expected from '../../../components/Expected.astro';
 ## 始める前に
 
 - モデルを動かすパソコン。手持ちでいちばん性能の高いパソコンを選びます。GPUを搭載したデスクトップか、AppleシリコンのMacが適しています。ノートパソコンからは、あとでどこからでもそのパソコンのモデルを使えます。パソコンが1台だけなら、その1台で動かして使います。
-- Googleアカウント。
+- GoogleかGitHubのアカウント。
 - そのパソコンの管理者権限。推論エンジンはシステム全体にインストールされます。
 
 <Aside type="note" title="GPUは任意です">
@@ -65,7 +65,7 @@ import Expected from '../../../components/Expected.astro';
 	スクリプトをダウンロードして内容を確認してから実行する手順は、OS別のページにあります：[Windows](/ja/getting-started/install/windows/#read-the-script-before-running-it)、[macOS](/ja/getting-started/install/macos/)、[Linux](/ja/getting-started/install/linux/)。
 </Aside>
 
-## 2. Googleでサインインする
+## 2. サインインする
 
 インストールが終わると、同じウィンドウにサインイン用のリンクが表示されます。
 
@@ -80,7 +80,7 @@ Control Plane: https://app.waired.ai
 ```
 </Expected>
 
-Enterキーを押します。ブラウザが開くので、Googleアカウントを選択します。表示されたリンクを自分で開いても構いません。このパソコンでも別のパソコンでも、どのブラウザでも使えます。どちらの場合も、ターミナルはサインインの完了を自動で検知します。
+Enterキーを押します。ブラウザが開くので、［Continue with Google］か［Continue with GitHub］を選び、アカウントを選択します。表示されたリンクを自分で開いても構いません。このパソコンでも別のパソコンでも、どのブラウザでも使えます。どちらの場合も、ターミナルはサインインの完了を自動で検知します。
 
 <Aside type="note" title="画面のないパソコンの場合">
 	開くブラウザがないため、ターミナルはリンクを表示したうえで*「Nothing to press here. Sign-in continues on its own once you open the link.」*（ここで押すキーはありません）と伝えます。スマートフォンか別のパソコンでリンクを開いてください。ターミナルはそのまま先へ進みます。
@@ -236,7 +236,7 @@ Downloading qwen3.8-27b: 41%  7.3 GB / 17.7 GB (44.0 MB/s, 3m 56s left)
 ## 次のステップ
 
 <CardGrid>
-	<LinkCard title="別のパソコンを追加する" href="/ja/getting-started/add-a-device/" description="同じGoogleアカウントでノートパソコンにもインストールすると、どこからでもこのパソコンのモデルに届きます。" />
+	<LinkCard title="別のパソコンを追加する" href="/ja/getting-started/add-a-device/" description="同じアカウントでノートパソコンにもインストールすると、どこからでもこのパソコンのモデルに届きます。" />
 	<LinkCard title="Wairedアプリの基本" href="/ja/getting-started/meet-the-app/" description="アイコン、最上部の行、お知らせが何を伝えているか。" />
 	<LinkCard title="モデルを変更する" href="/ja/guides/choose-a-model/" description="品質重視なら大きいモデル、速度重視なら小さいモデル。" />
 	<LinkCard title="トラブルシューティング" href="/ja/troubleshooting/" description="症状から探して、直すコマンドを見つけます。" />
