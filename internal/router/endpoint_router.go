@@ -1366,8 +1366,9 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	case state.RoutingModePinned:
 		// Pin to a specific peer. tryMeshFallbackK handles the
 		// strict / soft semantics: pin-unreachable returns
-		// ErrPinnedPeerUnreachable; pin-reachable-but-lacks-model
-		// soft-falls through to the rest of the eligible mesh.
+		// ErrPinnedPeerUnreachable; a reachable pin is served on, with
+		// what it runs; only a pin advertising nothing the catalog
+		// knows falls through to the rest of the eligible mesh.
 		// MeshSnapshotFn==nil happens on the overlay-side Selector,
 		// where this mode should never have been set in the first
 		// place — fall back to the local-only treatment defensively
@@ -1825,21 +1826,25 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	//      503 ErrPinnedPeerUnreachable. Silent fallback was rejected
 	//      because it would hide an explicit operator action, and that
 	//      half of the 2026-05-19 ruling stands.
+	//
+	// In 1 and 2 the list is cut to the pin alone. The rest of the mesh used
+	// to stay behind it, and the gateway's guard against walking past a pin
+	// keys on the Pinned flag of a candidate in the probed set. The admission
+	// pre-filter below drops a pin this requester already fills, and a
+	// public pin moved behind own peers by partitionOwnFirst can fall
+	// outside k; either way the guard saw no pin, and the request ran on
+	// another computer with nothing saying so (waired-agent#1365). With the
+	// pin alone, a full pin is PinnedPeerBusyError, which names it.
 	if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
-		hoisted := false
-		for i, c := range raw {
-			if c.deviceID != s.in.PinnedPeerDeviceID {
-				continue
+		var onPin []meshCandidate
+		for _, c := range raw {
+			if c.deviceID == s.in.PinnedPeerDeviceID {
+				onPin = append(onPin, c)
 			}
-			if i != 0 {
-				out := make([]meshCandidate, 0, len(raw))
-				out = append(out, c)
-				out = append(out, raw[:i]...)
-				out = append(out, raw[i+1:]...)
-				raw = out
-			}
-			hoisted = true
-			break
+		}
+		hoisted := len(onPin) > 0
+		if hoisted {
+			raw = onPin
 		}
 		if !hoisted {
 			// Pin not in the filtered candidate set. Distinguish
@@ -1853,7 +1858,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 			// put it in front.
 			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
 				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID, pinned[0].manifest.ModelID))
-				raw = append(pinned, raw...)
+				raw = pinned
 			} else if s.in.Recorder != nil {
 				// Nothing the catalog knows: there is no model to serve
 				// with, so the request does soft-fall to another peer.
