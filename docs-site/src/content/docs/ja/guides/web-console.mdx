@@ -52,9 +52,9 @@ Wairedアプリは目の前のパソコンを操作します。Webコンソー�
 
 このパソコンのモデルが、自分のほかのパソコンからのリクエストに使われているかどうかです。ルーティングをオフにすると、ほかのパソコンはここへ処理を送らなくなり、このパソコン自身の利用には影響しません。
 
-### <a id="claude-code-serving"></a>Claude Code serving
+### <a id="claude-code-serving"></a>Claude Code and OpenCode serving
 
-［Serve main conversation］と［Serve subagents］の2つのスイッチと、［Max concurrent requests］、［Priority］です。自分のほかのパソコンから何を受けるかを決めます。このパソコン自身のClaude Codeは常に動きます。それぞれの動作は[自分の別のパソコンと共有する](/ja/guides/sharing/#how-much-work-it-takes-at-once)を参照してください。
+［Serve main conversation］と［Serve subagents］の2つのスイッチと、［Max concurrent requests］、［Priority］です。自分のほかのパソコンのClaude CodeとOpenCodeから何を受けるかを決めます。このパソコン自身のClaude CodeとOpenCodeは常に動きます。それぞれの動作は[自分の別のパソコンと共有する](/ja/guides/sharing/#how-much-work-it-takes-at-once)を参照してください。
 
 <Aside type="note" title="並行処理はメモリを使います">
 	［Max concurrent requests］を上げると同時に多くの処理を実行できますが、同時のリクエストごとにVRAMを確保するため、すべてのリクエストが遅くなります。コンソールにはこのパソコンの推奨最大値が表示され、それを超える前に確認されます。

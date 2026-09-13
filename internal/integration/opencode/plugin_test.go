@@ -106,6 +106,27 @@ func TestRenderPlugin_ReadsTheRowsFromTheGateway(t *testing.T) {
 	}
 }
 
+// TestRenderPlugin_LimitCarriesTheOutputKeyOpenCodeRequires is
+// waired-agent#1367. OpenCode's config schema requires `output` wherever
+// `limit` appears, and OpenCode 1.18.30 logged a schema rejection on every
+// start for a limit carrying `context` alone. Record of today's behaviour:
+// 0 is what OpenCode stores when the key is absent, so writing it changes
+// nothing but the warning — measured on 1.18.30 (same resolved model, same
+// max_tokens on the wire).
+func TestRenderPlugin_LimitCarriesTheOutputKeyOpenCodeRequires(t *testing.T) {
+	body, err := renderPlugin("http://127.0.0.1:9473")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if !strings.Contains(s, "limit: { context: m.max_input_tokens, output: 0 }") {
+		t.Errorf("rendered plugin does not write output beside context:\n%s", s)
+	}
+	if strings.Count(s, "limit: {") != 1 {
+		t.Errorf("want exactly one limit entry, the one with output:\n%s", s)
+	}
+}
+
 func TestInstallRemovePlugin(t *testing.T) {
 	home := t.TempDir()
 	path, err := installPlugin(home, "http://127.0.0.1:9473")

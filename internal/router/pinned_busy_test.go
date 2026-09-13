@@ -123,3 +123,81 @@ func TestPinnedPeerBusyError_Wording(t *testing.T) {
 		t.Errorf("Error() = %q, want the display id when there is no name", got)
 	}
 }
+
+// TestSelectK_PinFullByThisRequesterIsNotSubstituted is waired-agent#1365.
+//
+// Product contract, ratifying source waired-agent#325 (a pin is not
+// substituted) and waired-agent#1303 (a busy pin is refused by name). The
+// pin is full by this requester's own outbound count and another peer is
+// idle. Measured on real hardware with OpenCode on a per-computer row: the
+// admission pre-filter dropped the pin, the idle peer was left as the only
+// candidate, the gateway's pin guard saw no Pinned candidate, and the turn
+// ran on the other computer for 47 s with no fallback header.
+func TestSelectK_PinFullByThisRequesterIsNotSubstituted(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			mkPeerWithCap("peer-A", "qwen3:8b-q4_K_M", 1),
+			mkPeerWithCap("peer-pin", "qwen3:8b-q4_K_M", 1),
+		},
+	}
+	tracker := NewInFlightTracker()
+	release, _ := tracker.Acquire("peer-pin", 1)
+	defer release()
+
+	s := NewSelector(Inputs{
+		Manifests:          []catalog.Manifest{qwen()},
+		LocalState:         emptyState(),
+		Hardware:           goodHardware(),
+		Runtimes:           registryWithOllama(),
+		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
+		LocalInFlight:      tracker,
+		RoutingMode:        state.RoutingModePinned,
+		PinnedPeerDeviceID: "peer-pin",
+	})
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	for _, c := range cands {
+		if c.PeerID != "peer-pin" {
+			t.Errorf("a pinned request was offered %q while the pin was full", c.PeerID)
+		}
+	}
+	if _, ok := PinnedPeerBusy(err); !ok {
+		t.Fatalf("err = %v, want a *PinnedPeerBusyError naming the pin", err)
+	}
+}
+
+// TestSelectK_PinnedListHoldsOnlyThePin: the other peers are not kept behind
+// a reachable pin, because nothing may serve from there (waired-agent#1365).
+// The gateway's guard against walking past a pin only works on a pin that is
+// inside the probed set, and the tail gave the Selector ways to hand it a
+// set without one. Product contract, same sources as above.
+func TestSelectK_PinnedListHoldsOnlyThePin(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			mkPeerWithCap("peer-A", "qwen3:8b-q4_K_M", 2),
+			mkPeerWithCap("peer-B", "qwen3:8b-q4_K_M", 2),
+			mkPeerWithCap("peer-C", "qwen3:8b-q4_K_M", 2),
+			mkPeerWithCap("peer-pin", "qwen3:8b-q4_K_M", 2),
+		},
+	}
+	s := NewSelector(Inputs{
+		Manifests:          []catalog.Manifest{qwen()},
+		LocalState:         emptyState(),
+		Hardware:           goodHardware(),
+		Runtimes:           registryWithOllama(),
+		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
+		LocalInFlight:      NewInFlightTracker(),
+		RoutingMode:        state.RoutingModePinned,
+		PinnedPeerDeviceID: "peer-pin",
+	})
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if len(cands) != 1 || cands[0].PeerID != "peer-pin" || !cands[0].Pinned {
+		ids := make([]string, 0, len(cands))
+		for _, c := range cands {
+			ids = append(ids, c.PeerID)
+		}
+		t.Fatalf("candidates = %v, want only the pinned peer-pin", ids)
+	}
+}

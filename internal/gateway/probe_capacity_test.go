@@ -226,6 +226,13 @@ func TestCapacityQueueBudget(t *testing.T) {
 		{"subagent", deps, "sub", 20 * time.Second},
 		{"no budget configured", Deps{}, "main", 0},
 		{"budget disabled for the class", Deps{TTFBBudget: func(string) time.Duration { return 0 }}, "main", 0},
+		// The OpenAI-compatible listener sets the wait without TTFBBudget,
+		// which would also put a deadline on its peer legs (#1366).
+		{"capacity budget alone", Deps{CapacityQueueBudget: deps.TTFBBudget}, "sub", 20 * time.Second},
+		{"capacity budget wins over TTFBBudget", Deps{
+			TTFBBudget:          deps.TTFBBudget,
+			CapacityQueueBudget: func(string) time.Duration { return 0 },
+		}, "main", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := capacityQueueBudget(tc.deps, tc.class); got != tc.want {

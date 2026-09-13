@@ -686,6 +686,12 @@ func queueAgain(attempt int, elapsed, capacityWait time.Duration, capacityFull b
 // so the condition that turned the wait off went with it — which is the
 // same reasoning, applied to every leg.
 func capacityQueueBudget(deps Deps, class string) time.Duration {
+	if deps.CapacityQueueBudget != nil {
+		if b := deps.CapacityQueueBudget(class); b > 0 {
+			return b
+		}
+		return 0
+	}
 	if deps.TTFBBudget == nil {
 		return 0
 	}
@@ -726,7 +732,16 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	// reached out over the WG mesh. Fast-path (local / external)
 	// slots carry a synthetic ProbeOK with zero latency and are
 	// suppressed; the gateway's request-level event covers them.
-	if h.deps.Recorder != nil || h.deps.OnPeerProbe != nil {
+	//
+	// When the first candidate is not remote, ParallelProbe takes its fast
+	// path and probes nothing: the remote slots behind it come back as the
+	// zero ProbeResult, whose Outcome is ProbeOK and whose Status is empty.
+	// Read as a probe, that recorded a zero-latency "ok" and told the
+	// PrefillWindow each of those peers had nothing in flight — every time
+	// this device ranked first, the busy peers behind it were marked idle
+	// (found while measuring waired-agent#1354).
+	probed := len(cands) > 0 && cands[0].ExecutionMode == "remote"
+	if probed && (h.deps.Recorder != nil || h.deps.OnPeerProbe != nil) {
 		for i, c := range cands {
 			if c.ExecutionMode != "remote" {
 				continue
@@ -806,25 +821,34 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 			// functionally. Reachable with a public cands[0] whenever
 			// the own-candidate set is empty (spec §8.5).
 			got.FallbackFrom = candidateDisplayID(cands[0])
-			got.Reason = firstFailureReason(results)
+			got.Reason = fallbackReason(results)
 		}
 		return got, true, nil
 	}
 	return probedSelection{probeResults: results, cands: cands}, false, nil
 }
 
-// firstFailureReason scans the probe results and returns the first
-// non-empty FailureReason. The Phase 8 plan uses the original first-
-// choice peer's reason as the surface signal — operators see "why did
-// my preferred peer get skipped" not "what's wrong with the eventual
-// winner".
-func firstFailureReason(results []router.ProbeResult) string {
-	for _, r := range results {
-		if reason := r.FailureReason(); reason != "" {
-			return reason
-		}
+// fallbackReason says why the Selector's first choice, results[0], did not
+// serve: operators see "why did my preferred peer get skipped", not
+// "what's wrong with the eventual winner", and not another candidate's
+// state either. X-Waired-Fallback-From names that first choice, so the
+// reason beside it has to be about the same machine.
+//
+// Two ways to get here. The first choice answered not-ready, and its own
+// FailureReason says why. Or it answered ready and then lost its slot at
+// Commit to a concurrent request — no failure in its probe at all — which
+// is a full machine, and "capacity_full" is the word the probe already uses
+// for one. This used to return the first failure anywhere in the round, so
+// a first choice that lost at Commit was reported with a later candidate's
+// "measuring" or "transport_error", or "unknown" (waired-agent#1355).
+func fallbackReason(results []router.ProbeResult) string {
+	if len(results) == 0 {
+		return "unknown"
 	}
-	return "unknown"
+	if reason := results[0].FailureReason(); reason != "" {
+		return reason
+	}
+	return "capacity_full"
 }
 
 // setSelectionHeaders surfaces the Phase 8 inference / fallback
