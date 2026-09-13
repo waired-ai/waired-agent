@@ -28,6 +28,13 @@ import (
 // leaves loginController.Start reporting its own "no control URL", the
 // pre-#174 behaviour, rather than silently enrolling somewhere else).
 func resolveDaemonControlURL(explicit, platformDefault string, logger *slog.Logger) string {
+	url, _ := resolveDaemonControlURLWithSource(explicit, platformDefault, logger)
+	return url
+}
+
+// resolveDaemonControlURLWithSource is resolveDaemonControlURL plus which
+// tier answered, for the log line a sign-in writes.
+func resolveDaemonControlURLWithSource(explicit, platformDefault string, logger *slog.Logger) (string, string) {
 	for _, tier := range []struct {
 		source string
 		raw    string
@@ -45,7 +52,24 @@ func resolveDaemonControlURL(explicit, platformDefault string, logger *slog.Logg
 				"source", tier.source, "value", tier.raw, "err", err)
 			continue
 		}
-		return norm
+		return norm, tier.source
 	}
-	return ""
+	return "", ""
+}
+
+// newDaemonControlURLResolver returns the resolver a sign-in calls when
+// its request names no control plane. explicit is the daemon's own
+// --control / $WAIRED_CONTROL_URL, fixed at boot; platformDefault is read
+// again on every call.
+//
+// Resolving once at boot was not enough (waired-agent#1343). The macOS
+// and Linux installers start the service before they write agent.env
+// (launchd RunAtLoad and the deb's postinst start it; the file is written
+// after), so a daemon that has not restarted since install still held the
+// production default, and the app's "Sign in…" — or any request that left
+// the control plane to the daemon — went to production.
+func newDaemonControlURLResolver(explicit string, platformDefault func() string, logger *slog.Logger) func() (string, string) {
+	return func() (string, string) {
+		return resolveDaemonControlURLWithSource(explicit, platformDefault(), logger)
+	}
 }

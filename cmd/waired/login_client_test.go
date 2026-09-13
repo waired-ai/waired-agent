@@ -367,6 +367,15 @@ func TestRunInitViaDaemonClassifiesAuthKeyErrorFromPollPath(t *testing.T) {
 		}
 	})
 
+	// A daemon with waired#1395 renders the same 400 from the envelope
+	// instead of the raw JSON; the classifier still has to see it.
+	t.Run("the rendered form is recognised too", func(t *testing.T) {
+		const rendered = `create login session: status 400: json: unknown field "auth_key" (invalid_request)`
+		if err := classifyAuthKeyError(errors.New(rendered), true); !errors.Is(err, errAuthKeyUnsupported) {
+			t.Fatalf("want errAuthKeyUnsupported for %q, got %v", rendered, err)
+		}
+	})
+
 	t.Run("without an auth key it passes through", func(t *testing.T) {
 		srv := newDaemon()
 		defer srv.Close()

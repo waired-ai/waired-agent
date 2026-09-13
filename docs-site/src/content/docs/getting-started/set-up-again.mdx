@@ -63,10 +63,11 @@ current model without redoing setup.
 
 ## Signing in again
 
-To replace this computer's sign-in, for example with a different account,
-run `sudo waired init --force-reauth`. Sign-in happens first, and then the
-confirmation above is asked. Answering No to it leaves the computer signed in
-and otherwise as it was. For details, see [Sign in](/getting-started/sign-in/#sign-in-again).
+To sign this computer in again, run `sudo waired init --force-reauth`. Sign-in
+happens first, and then the confirmation above is asked. Answering No to it
+leaves the computer signed in and otherwise as it was. To move the computer to
+a different account, run `waired logout` first, then `sudo waired init`. For
+details, see [Sign in](/getting-started/sign-in/#sign-in-again).
 
 ## What next
 

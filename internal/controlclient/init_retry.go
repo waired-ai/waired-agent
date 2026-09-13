@@ -1,6 +1,7 @@
 package controlclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -28,9 +29,15 @@ var DefaultEnrollRetryBackoff = []time.Duration{2 * time.Second, 5 * time.Second
 const maxRetryAfter = 30 * time.Second
 
 // httpStatusError is a non-200 control-plane response. It carries the
-// status so callers can tell a transient failure from a verdict, and
-// formats exactly as the bare error it replaced ("status %d: %s") so
-// existing messages, logs and docs are unchanged.
+// status so callers can tell a transient failure from a verdict.
+//
+// It renders as "status %d: " followed by what the control plane said.
+// When the body is the control plane's error envelope that is its message,
+// type and hint — "status 403: this device is already enrolled to a
+// different account (account_mismatch); <hint>" — rather than the raw JSON
+// the terminal used to print (waired#1395). Any other body is printed as
+// it came, trimmed. The message text is kept verbatim: classifyAuthKeyError
+// recognises an old control plane by it.
 type httpStatusError struct {
 	StatusCode int
 	Body       []byte
@@ -40,7 +47,17 @@ type httpStatusError struct {
 }
 
 func (e *httpStatusError) Error() string {
-	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Body)
+	if ae, ok := decodeAPIError(e.Body); ok && ae.Message != "" {
+		msg := fmt.Sprintf("status %d: %s", e.StatusCode, ae.Message)
+		if ae.Type != "" {
+			msg += " (" + ae.Type + ")"
+		}
+		if ae.Hint != "" {
+			msg += "; " + ae.Hint
+		}
+		return msg
+	}
+	return fmt.Sprintf("status %d: %s", e.StatusCode, bytes.TrimSpace(e.Body))
 }
 
 // retryable reports whether err is worth a second attempt: a transport

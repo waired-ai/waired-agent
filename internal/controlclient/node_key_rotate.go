@@ -121,16 +121,11 @@ func (c *Client) RotateNodeKey(ctx context.Context, p RotateNodeKeyParams) (*Rot
 // sentinel where the agent needs to branch (node_key_mismatch → re-poll
 // and retry); everything else is surfaced verbatim.
 func classifyRotateError(status int, body []byte) error {
-	var env struct {
-		Error struct {
-			Type string `json:"type"`
-		} `json:"error"`
-	}
-	_ = json.Unmarshal(body, &env)
-	if status == http.StatusConflict && env.Error.Type == "node_key_mismatch" {
+	env, _ := decodeAPIError(body)
+	if status == http.StatusConflict && env.Type == "node_key_mismatch" {
 		return ErrNodeKeyMismatch
 	}
-	return fmt.Errorf("rotate node key: status %d (%s): %s", status, env.Error.Type, body)
+	return fmt.Errorf("rotate node key: status %d (%s): %s", status, env.Type, body)
 }
 
 // rotateNodeKeyTranscript MUST match

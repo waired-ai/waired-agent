@@ -89,7 +89,7 @@ type loginGate struct {
 // block.
 // controlUnknown says controlURL is the built-in default reached because
 // this process could not read the installer's answer — see
-// daemonInitOpts.ControlUnknown.
+// daemonInitOpts.ControlUnknown and loginControlLine.
 func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, controlURL string, controlUnknown bool, mode browserGate) *loginGate {
 	g := &loginGate{mode: mode, in: in, url: loginURL}
 	writePromptf(out, "\nTo sign in, open this link:\n  %s\n", loginURL)
@@ -100,12 +100,12 @@ func presentLoginURL(in *stdinReader, out io.Writer, loginURL, userCode, control
 	// so. Same label as `waired status` (cmd/waired/main.go): one name for
 	// one thing.
 	//
-	// Except when this process could not read the file that records it. A
-	// default named as a fact is worse than no line at all: on an
-	// unelevated run against a host enrolled elsewhere, "Control Plane:
+	// Except when nobody here knows it: an older daemon did not report it
+	// and this process could not read the file that records it. A default
+	// named as a fact is worse than no line at all: on an unelevated run
+	// against a host enrolled elsewhere, "Control Plane:
 	// https://app.waired.ai" sat directly under a link to a different one
-	// (waired-agent#1300). The sign-in itself is unaffected — the daemon
-	// reads the file as root — so the honest line says which is which.
+	// (waired-agent#1300).
 	switch {
 	case controlUnknown:
 		writePromptf(out, "\nControl Plane: %s\n",
@@ -209,4 +209,20 @@ func openLoginURL(out io.Writer, loginURL string) {
 		return
 	}
 	writePromptf(out, "%s Opened your browser. If nothing appeared, open the link above yourself.\n", emo("🌐", "*"))
+}
+
+// loginControlLine picks what the "Control Plane:" line under the sign-in
+// link names, and whether it has to say it could not tell instead.
+//
+// The daemon's answer wins: it is the process that created the sign-in, so
+// its control plane is the link's host by construction, including when
+// this process could not read agent.env (waired-agent#1343). A daemon that
+// predates LoginStatus.ControlURL says nothing, and then this process's
+// own resolution is printed — or, when that was only a guess, the line
+// that says so.
+func loginControlLine(daemonURL, resolved string, resolvedUnknown bool) (string, bool) {
+	if daemonURL != "" {
+		return daemonURL, false
+	}
+	return resolved, resolvedUnknown
 }

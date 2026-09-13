@@ -179,15 +179,24 @@ func TestRunInit_DoesNotRetryVerdicts(t *testing.T) {
 		name   string
 		status int
 		body   string
+		// want is the rendered message when it is not "status N: body".
+		want string
 	}{
 		// The control plane consumes the registration ticket inside the
 		// enrolment transaction, so a replay of a committed enrol lands
 		// here. It has to stop the retry, not restart it.
-		{"ticket already consumed", http.StatusGone, "registration_ticket_consumed"},
-		{"bad request", http.StatusBadRequest, "missing_endpoint"},
-		{"machine signature invalid", http.StatusUnauthorized, "machine_signature_invalid"},
+		{name: "ticket already consumed", status: http.StatusGone, body: "registration_ticket_consumed"},
+		{name: "bad request", status: http.StatusBadRequest, body: "missing_endpoint"},
+		{name: "machine signature invalid", status: http.StatusUnauthorized, body: "machine_signature_invalid"},
 		// 500 means the request was handled and failed deterministically.
-		{"internal error", http.StatusInternalServerError, "internal_error"},
+		{name: "internal error", status: http.StatusInternalServerError, body: "internal_error"},
+		// The control plane's envelope is rendered, not dumped (waired#1395).
+		{
+			name:   "account mismatch",
+			status: http.StatusForbidden,
+			body:   `{"error":{"type":"account_mismatch","message":"this device is already enrolled to a different account","hint":"run waired logout first"}}` + "\n",
+			want:   "enroll: status 403: this device is already enrolled to a different account (account_mismatch); run waired logout first",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,9 +211,12 @@ func TestRunInit_DoesNotRetryVerdicts(t *testing.T) {
 			if got := cp.enrollCalls.Load(); got != 1 {
 				t.Fatalf("enrol attempts = %d, want 1", got)
 			}
-			// The rendered message is the one operators and the install
-			// test logs have always seen.
-			want := "enroll: status " + strconv.Itoa(tc.status) + ": " + tc.body
+			// A plain body renders as operators and the install test logs
+			// have always seen it.
+			want := tc.want
+			if want == "" {
+				want = "enroll: status " + strconv.Itoa(tc.status) + ": " + tc.body
+			}
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("error = %q, want it to contain %q", err.Error(), want)
 			}
@@ -314,5 +326,54 @@ func TestParseRetryAfterAndDelay(t *testing.T) {
 	// An unhealthy server's advice must not be able to hang the installer.
 	if got := retryDelay(&httpStatusError{StatusCode: 503, RetryAfter: time.Hour}, fallback); got != maxRetryAfter {
 		t.Errorf("oversized Retry-After: delay = %s, want the %s cap", got, maxRetryAfter)
+	}
+}
+
+// TestHTTPStatusError_RendersTheEnvelope: what a failed control-plane call
+// prints. The control plane's envelope becomes one readable line with its
+// message, type and hint (waired#1395); anything else prints as it came.
+// The message is kept word for word — `waired init` recognises an old
+// control plane by it.
+func TestHTTPStatusError_RendersTheEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "message, type and hint",
+			body: `{"error":{"type":"account_mismatch","message":"this device is already enrolled to a different account","hint":"sign in with the account this device belongs to"}}` + "\n",
+			want: "status 403: this device is already enrolled to a different account (account_mismatch); sign in with the account this device belongs to",
+		},
+		{
+			name: "no hint",
+			body: `{"error":{"type":"invalid_request","message":"json: unknown field \"auth_key\""}}`,
+			want: `status 403: json: unknown field "auth_key" (invalid_request)`,
+		},
+		{
+			name: "multi-line message stays on one line",
+			body: `{"error":{"type":"x","message":"first\nsecond"}}`,
+			want: "status 403: first second (x)",
+		},
+		{name: "plain text", body: "Service Unavailable\n", want: "status 403: Service Unavailable"},
+		{name: "envelope without a message", body: `{"error":{"type":"x"}}`, want: `status 403: {"error":{"type":"x"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (&httpStatusError{StatusCode: http.StatusForbidden, Body: []byte(tc.body)}).Error()
+			if got != tc.want {
+				t.Errorf("Error() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDecodeAPIError(t *testing.T) {
+	if ae, ok := decodeAPIError([]byte(`{"error":{"type":"t","message":"m","hint":"h"}}`)); !ok || ae != (apiError{"t", "m", "h"}) {
+		t.Errorf("envelope: %+v %v", ae, ok)
+	}
+	for _, body := range []string{``, `not json`, `{"other":1}`, `{"error":"flat string"}`} {
+		if _, ok := decodeAPIError([]byte(body)); ok {
+			t.Errorf("decodeAPIError(%q) ok, want not an envelope", body)
+		}
 	}
 }

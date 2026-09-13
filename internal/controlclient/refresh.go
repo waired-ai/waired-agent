@@ -184,13 +184,8 @@ func classifyRefreshError(status int, body []byte) error {
 	if status != http.StatusUnauthorized {
 		return fmt.Errorf("refresh: status %d: %s", status, body)
 	}
-	var env struct {
-		Error struct {
-			Type string `json:"type"`
-		} `json:"error"`
-	}
-	_ = json.Unmarshal(body, &env)
-	switch env.Error.Type {
+	env, _ := decodeAPIError(body)
+	switch env.Type {
 	case "invalid_refresh_token":
 		return ErrRefreshInvalid
 	case "expired_refresh_token":
@@ -206,7 +201,7 @@ func classifyRefreshError(status int, body []byte) error {
 	case "machine_signature_invalid":
 		return ErrMachineSigInvalid
 	default:
-		return fmt.Errorf("refresh: 401 (%s): %s", env.Error.Type, body)
+		return fmt.Errorf("refresh: 401 (%s): %s", env.Type, body)
 	}
 }
 
