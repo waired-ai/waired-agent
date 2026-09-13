@@ -46,6 +46,6 @@ func (c *Client) Logout(ctx context.Context) error {
 		// Token no longer resolves — already deauthed. Same end state.
 		return nil
 	default:
-		return fmt.Errorf("logout: status %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("logout: %s", statusText(resp.StatusCode, body))
 	}
 }
