@@ -28,7 +28,8 @@ func TestNetworkMapWithoutPublicShare_NoNewFieldsInCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
 	}
-	for _, key := range []string{"grant", "public_share", "public_capacity", "pseudonym"} {
+	for _, key := range []string{"grant", "public_share", "public_capacity", "pseudonym",
+		"team_share", "display_name"} {
 		if bytes.Contains(canonical, []byte(`"`+key+`"`)) {
 			t.Fatalf("canonical JSON unexpectedly contains %q:\n%s", key, canonical)
 		}
