@@ -99,31 +99,27 @@ func (p *agentInferenceProvider) publishRecommendationNotices(ctx context.Contex
 	p.notices.Publish(noticeSourceRecommendation, p.recommendationNotices(ctx))
 }
 
-// recommendationNotices turns the live recommendations into notices.
+// recommendationNotices turns the live recommendation into notices.
 //
-// The two are mutually exclusive by construction (one compares below the
-// interactive floor, the other above it), so this returns at most one —
-// but it returns a slice because the registry's unit is a producer's
-// whole set, and "nothing to say" has to be expressible.
+// There is at most one — the lighter-model suggestion; the upgrade one is
+// retired (waired-ai/waired-agent#1342) — but it returns a slice because
+// the registry's unit is a producer's whole set, and "nothing to say" has
+// to be expressible.
 //
 // A dismissed suggestion produces nothing, matching every other surface:
 // Dismissed exists so the CLI and tray stay quiet about a pairing the
 // person has already declined.
 func (p *agentInferenceProvider) recommendationNotices(ctx context.Context) []notice.Notice {
-	return noticesFromRecommendations(p.currentRecommendations(ctx))
+	return noticesFromRecommendation(p.currentRecommendation(ctx))
 }
 
 // noticesFromRecommendations is the mapping, split from the derivation
 // above so the rules it encodes are testable without a host profile or
 // an engine to ask for a version.
-func noticesFromRecommendations(lighter, upgrade *management.BenchmarkRecommendation) []notice.Notice {
-	if rec := lighter; showable(rec) {
+func noticesFromRecommendation(rec *management.BenchmarkRecommendation) []notice.Notice {
+	if showable(rec) {
 		return []notice.Notice{notice.LighterModel(
-			rec.FromModelID, rec.ToModelID, rec.MeasuredTokps, rec.FloorTokps)}
-	}
-	if rec := upgrade; showable(rec) {
-		return []notice.Notice{notice.BetterModel(
-			rec.FromModelID, rec.ToModelID, rec.MeasuredTokps, rec.PredictedTokps)}
+			rec.FromModelID, rec.ToModelID, rec.TurnSeconds, rec.TurnFloorSeconds, rec.BudgetSeconds)}
 	}
 	return nil
 }

@@ -310,9 +310,10 @@ type NoticeRow struct {
 }
 
 // noticeMarker is the glyph a severity gets in the menu. Info's is an
-// arrow because every Info notice today is a step-up model suggestion,
-// which is what `waired init` already marks that way — a record of
-// today's producers, not a rule about severities.
+// arrow because the Info notice today is a newer Waired release being
+// available (the step-up model suggestion that shared it is retired,
+// waired-ai/waired-agent#1342) — a record of today's producers, not a
+// rule about severities.
 func noticeMarker(s notice.Severity) string {
 	if s == notice.SeverityWarn {
 		return "⚠"

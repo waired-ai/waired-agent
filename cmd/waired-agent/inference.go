@@ -2769,11 +2769,10 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	// the feature — but InferenceStatus carried them unset from the
 	// initial populate onwards, so the row never appeared on any host.
 	//
-	// currentRecommendations already derives them and already guarantees
-	// at most one is non-nil (one compares below the interactive floor,
-	// the other above it). Its only other caller resolves an empty target
-	// for the dismissal endpoint.
-	lighter, upgrade := p.currentRecommendations(ctx)
+	// currentRecommendation derives the lighter one; the upgrade
+	// suggestion is retired (waired-ai/waired-agent#1342). Its only other
+	// caller resolves an empty target for the dismissal endpoint.
+	lighter := p.currentRecommendation(ctx)
 	return management.InferenceStatus{
 		Inflight:                inflight,
 		SubsystemState:          subState,
@@ -2782,7 +2781,6 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		ActiveEndpoints:         endpoints,
 		Active:                  activeFromCatalog(state.Active),
 		BenchmarkRecommendation: lighter,
-		BenchmarkUpgrade:        upgrade,
 		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
 		DesiredState:            desiredStateStr,
 		DesiredStateSet:         desiredStateSet,

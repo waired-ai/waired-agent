@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
-	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
@@ -35,7 +34,7 @@ func statusRecProvider(t *testing.T, bench BenchResult) *agentInferenceProvider 
 // PRODUCT CONTRACT (waired-agent#1150): the model-switch suggestion
 // reaches the surfaces built to show it.
 //
-// InferenceStatus.BenchmarkRecommendation / .BenchmarkUpgrade were never
+// InferenceStatus.BenchmarkRecommendation was never
 // assigned by anything, from the initial populate onwards. Everything
 // downstream was in place and waiting: the catalog handler copies both
 // fields (internal/management/inference_catalog.go), the tray renders
@@ -56,32 +55,6 @@ func TestStatus_CarriesTheBenchmarkRecommendation(t *testing.T) {
 		t.Errorf("ToModelID = %q, want the lighter family",
 			got.BenchmarkRecommendation.ToModelID)
 	}
-	if got.BenchmarkUpgrade != nil {
-		t.Errorf("both directions were offered at once: %+v", got.BenchmarkUpgrade)
-	}
-}
-
-// The inverse direction rides the same wiring, and the tray reads it
-// through a different field precisely so an old client cannot render an
-// upgrade as "local inference is slow — switch to the lighter model X".
-func TestStatus_CarriesTheBenchmarkUpgrade(t *testing.T) {
-	// storeWithActive serves "heavy"; measured fast, the ladder has
-	// nothing above it, so the fixture below starts from "light".
-	p := statusRecProvider(t, BenchResult{TokensPerSec: 400, Capacity: 4})
-	if err := p.store.Update(func(s *catalog.State) { s.Active.ModelID = "light" }); err != nil {
-		t.Fatalf("switch to the lighter family: %v", err)
-	}
-
-	got := p.Status(context.Background())
-	if got.BenchmarkUpgrade == nil {
-		t.Fatal("a host with headroom was offered nothing better")
-	}
-	if got.BenchmarkUpgrade.ToModelID != "heavy" {
-		t.Errorf("ToModelID = %q, want the heavier family", got.BenchmarkUpgrade.ToModelID)
-	}
-	if got.BenchmarkRecommendation != nil {
-		t.Errorf("both directions were offered at once: %+v", got.BenchmarkRecommendation)
-	}
 }
 
 // A host with no measurement offers nothing, rather than comparing a zero
@@ -94,8 +67,7 @@ func TestStatus_NoBenchmarkOffersNothing(t *testing.T) {
 	p.benchMu.Unlock()
 
 	got := p.Status(context.Background())
-	if got.BenchmarkRecommendation != nil || got.BenchmarkUpgrade != nil {
-		t.Errorf("an unmeasured host was offered a switch: lighter=%+v upgrade=%+v",
-			got.BenchmarkRecommendation, got.BenchmarkUpgrade)
+	if got.BenchmarkRecommendation != nil {
+		t.Errorf("an unmeasured host was offered a switch: %+v", got.BenchmarkRecommendation)
 	}
 }

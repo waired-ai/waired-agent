@@ -27,8 +27,7 @@ import (
 // is simply the first admitted candidate.
 //
 // The rank ladder is the one the rest of this flow already walks: the
-// auto-picker sorts by it (model_picker.go), UpgradeCandidate walks it in
-// the opposite direction, and the CLI decides whether anything is ranked
+// auto-picker sorts by it (model_picker.go), and the CLI decides whether anything is ranked
 // below the offer on it (cmd/waired/init_modelselect.go's
 // isLightestOfferedModel — "An ORDERING, not a floor"). Selecting the
 // step-down by footprint instead made the two halves of one flow disagree,
@@ -99,8 +98,7 @@ func LighterCandidate(in PickInput, activeModelID, activeVariantID string) (Pick
 			continue
 		}
 		// ranked is quality_tier desc, so the first candidate that clears
-		// both tests above is the best one — the same "first qualifying in
-		// rank order" rule UpgradeCandidate applies going the other way.
+		// both tests above is the best one.
 		best.Reasons = []string{
 			fmt.Sprintf("recommend lighter %s/%s (quality_tier=%d) — highest-ranked candidate lighter than %s/%s that fits the host",
 				best.Manifest.ModelID, best.Variant.VariantID, best.Variant.QualityTier,

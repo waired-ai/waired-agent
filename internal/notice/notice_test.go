@@ -115,8 +115,8 @@ func TestUnmarshalJSONSanitisesHostileWire(t *testing.T) {
 // a console that cannot draw it.
 func TestConstructorsCarryNoStatusMark(t *testing.T) {
 	for _, n := range []Notice{
-		LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 42.05, 60),
-		BetterModel("qwen3-8b-instruct", "qwen3-30b-a3b", 118, 64.2),
+		LighterModel("qwen3.8-27b", "qwen3.6-35b-a3b", 228.4, 0, 190),
+		LighterModel("qwen3.8-27b", "qwen3.6-35b-a3b", 0, 195, 190),
 	} {
 		for _, s := range []string{n.Subject, n.Title, n.Text, n.Target} {
 			for _, r := range s {
@@ -128,19 +128,22 @@ func TestConstructorsCarryNoStatusMark(t *testing.T) {
 	}
 }
 
-// TestConstructorsComposeTheShippedWording records today's behaviour:
-// these are the strings the tray already showed before the suggestion
-// moved into the notice field (internal/gui/tray/state.go), minus the
-// marker each surface now adds for itself.
+// TestConstructorsComposeTheShippedWording pins the wording approved for
+// waired-ai/waired-agent#1341: seconds per request and the target, in the
+// docs-site/TRANSLATION.md forms, minus the marker each surface adds.
 func TestConstructorsComposeTheShippedWording(t *testing.T) {
-	l := LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 42.05, 60)
-	if want := "Lighter model recommended — switch to qwen3-8b-instruct"; l.Title != want {
+	l := LighterModel("qwen3.8-27b", "qwen3.6-35b-a3b", 228.4, 0, 190)
+	if want := "Lighter model recommended — switch to qwen3.6-35b-a3b"; l.Title != want {
 		t.Errorf("lighter title = %q, want %q", l.Title, want)
 	}
-	if want := "This computer answers at 42 tok/s with qwen3-30b-a3b, below the 60 tok/s floor."; l.Text != want {
+	if want := "This computer takes 228 s per request with qwen3.8-27b (target: 190 s or less)."; l.Text != want {
 		t.Errorf("lighter text = %q, want %q", l.Text, want)
 	}
-	if l.Severity != SeverityWarn || l.Action != ActionModelSuggestion || l.Target != "qwen3-8b-instruct" {
+	bound := LighterModel("qwen3.8-27b", "qwen3.6-35b-a3b", 0, 195.2, 190)
+	if want := "This computer takes 195 s or more per request with qwen3.8-27b (target: 190 s or less)."; bound.Text != want {
+		t.Errorf("lighter text on a bound = %q, want %q", bound.Text, want)
+	}
+	if l.Severity != SeverityWarn || l.Action != ActionModelSuggestion || l.Target != "qwen3.6-35b-a3b" {
 		t.Errorf("lighter = %+v", l)
 	}
 	// The subject is what `waired doctor` puts in its first column,
@@ -148,14 +151,6 @@ func TestConstructorsComposeTheShippedWording(t *testing.T) {
 	// not a sentence.
 	if want := "model suggestion"; l.Subject != want {
 		t.Errorf("lighter subject = %q, want %q", l.Subject, want)
-	}
-
-	u := BetterModel("qwen3-8b-instruct", "qwen3-30b-a3b", 118, 64.2)
-	if want := "Better model available — switch to qwen3-30b-a3b"; u.Title != want {
-		t.Errorf("upgrade title = %q, want %q", u.Title, want)
-	}
-	if u.Severity != SeverityInfo {
-		t.Errorf("a step-up suggestion is not a problem: severity = %v", u.Severity)
 	}
 }
 
@@ -165,7 +160,7 @@ func TestConstructorsComposeTheShippedWording(t *testing.T) {
 // constructor from a catalog manifest, so it is not the producer's own
 // invention and cannot be assumed clean.
 func TestConstructorsSanitiseTheirInputs(t *testing.T) {
-	n := LighterModel("from", "evil\nid\x1b[2J", 1, 2)
+	n := LighterModel("from", "evil\nid\x1b[2J", 228, 0, 190)
 	if strings.ContainsAny(n.Title, "\n\x1b") || strings.ContainsAny(n.Target, "\n\x1b") {
 		t.Fatalf("constructor let a control character through: %+v", n)
 	}

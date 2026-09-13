@@ -40,9 +40,6 @@ func TestHandleInferenceBenchmark_Recommendation(t *testing.T) {
 	if got.Recommendation.ToModelID != "qwen3-4b-instruct" {
 		t.Errorf("to = %q, want qwen3-4b-instruct", got.Recommendation.ToModelID)
 	}
-	if got.Upgrade != nil {
-		t.Errorf("upgrade = %+v, want nil alongside a lighter recommendation", got.Upgrade)
-	}
 	if got.MeasuredTokps != 12 {
 		t.Errorf("measured_tokps = %v, want 12", got.MeasuredTokps)
 	}
@@ -88,44 +85,59 @@ func TestHandleInferenceBenchmark_FailedRunIsNot200(t *testing.T) {
 	}
 }
 
-// TestHandleInferenceBenchmark_Upgrade pins the wire split: upgrades
-// ride the NEW "upgrade" key while "recommendation" stays empty, so an
-// old CLI/tray decoding only the legacy key sees "nothing to suggest"
-// instead of mis-rendering a headroom host as slow.
-func TestHandleInferenceBenchmark_Upgrade(t *testing.T) {
+// TestHandleInferenceBenchmark_CarriesTheSecondsAndTheMode pins the
+// waired-ai/waired-agent#1341 wire: the verdict in seconds per request sits
+// beside the recommendation, a mode the caller names reaches the provider,
+// no mode means rerun, and an unknown mode is refused before anything runs.
+// The retired upgrade key never appears (waired-ai/waired-agent#1342).
+func TestHandleInferenceBenchmark_CarriesTheSecondsAndTheMode(t *testing.T) {
 	inf := &fakeInference{
 		benchOK: true,
 		benchOut: BenchmarkOutcome{
-			MeasuredTokps: 101,
-			Upgrade: &BenchmarkRecommendation{
-				Direction:   RecommendationUpgrade,
-				FromModelID: "qwen2.5-coder-7b-instruct", FromVariantID: "q4-gguf",
-				ToModelID: "qwen3-coder-30b-a3b-instruct", ToVariantID: "q4-gguf",
-				MeasuredTokps: 101, FloorTokps: 30, PredictedTokps: 236,
+			MeasuredTokps: 15.8,
+			Speed: SpeedMeasurement{
+				TurnSeconds: 228, BudgetSeconds: 190, OverBudget: true,
+				PrefillTokps: 252.9, DecodeTokps: 15.8, DepthTokens: 32768,
 			},
 		},
 	}
 	s := newCatalogTestServer(t, inf, t.TempDir())
 
-	r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/benchmark", nil)
-	r.RemoteAddr = "127.0.0.1:1"
-	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
+	post := func(url string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, url, nil)
+		r.RemoteAddr = "127.0.0.1:1"
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w
+	}
+
+	w := post("/waired/v1/inference/benchmark")
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
 	}
-	if body := w.Body.String(); strings.Contains(body, `"recommendation"`) {
-		t.Errorf("legacy recommendation key present in upgrade-only response: %s", body)
+	if inf.benchMode != BenchmarkModeRerun {
+		t.Errorf("no mode reached the provider as %q, want %q", inf.benchMode, BenchmarkModeRerun)
 	}
-	var got BenchmarkRunResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
+	body := w.Body.String()
+	for _, want := range []string{`"turn_seconds":228`, `"budget_seconds":190`, `"over_budget":true`, `"depth_tokens":32768`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %s: %s", want, body)
+		}
 	}
-	if got.Upgrade == nil || got.Upgrade.ToModelID != "qwen3-coder-30b-a3b-instruct" {
-		t.Fatalf("upgrade = %+v, want qwen3-coder-30b-a3b-instruct", got.Upgrade)
+	if strings.Contains(body, `"upgrade"`) {
+		t.Errorf("the retired upgrade key is on the wire: %s", body)
 	}
-	if got.Upgrade.Direction != RecommendationUpgrade || got.Upgrade.PredictedTokps != 236 {
-		t.Errorf("upgrade = %+v, want direction=upgrade predicted=236", got.Upgrade)
+
+	if w := post("/waired/v1/inference/benchmark?mode=ensure"); w.Code != http.StatusOK || inf.benchMode != BenchmarkModeEnsure {
+		t.Errorf("mode=ensure: code %d, provider saw %q", w.Code, inf.benchMode)
+	}
+
+	inf.benchMode = "untouched"
+	if w := post("/waired/v1/inference/benchmark?mode=sometimes"); w.Code != http.StatusBadRequest {
+		t.Errorf("an unknown mode answered %d, want 400", w.Code)
+	}
+	if inf.benchMode != "untouched" {
+		t.Errorf("an unknown mode still ran the provider (%q)", inf.benchMode)
 	}
 }
 

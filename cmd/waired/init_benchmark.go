@@ -241,42 +241,6 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			"throughput figure. Update Waired, then run `waired runtimes benchmark` to see it.")
 	}
 
-	if rec := resp.Upgrade; rec != nil && !rec.Dismissed {
-		from := bundledModelLabelDefault(rec.FromModelID)
-		to := bundledModelLabelDefault(rec.ToModelID)
-		// The direction is stated because the labels no longer carry a
-		// quality figure to compare (#537): the line said which model was
-		// faster and left "and is it better?" to two numbers beside the
-		// names. This flow only ever offers a stronger model, so it says so.
-		writePromptf(out, "\n%s This computer has headroom: %s is a stronger model and should run at about %.0f tok/s here, against %.0f tok/s measured on %s.\n",
-			emo("⬆", "^"), to, rec.PredictedTokps, rec.MeasuredTokps, from)
-
-		if nonInteractive {
-			writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
-				from)
-			return resp, false, nil
-		}
-
-		// Default No: an upgrade pulls a multi-GB download — the opposite
-		// trade-off of the lighter flow. The switch itself applies live
-		// (waired#812), so only the download is called out here.
-		answer := ynAsk(out, sc, fmt.Sprintf("Switch to %s? (downloads the model)", to), false)
-		if answer == ynNoAnswer {
-			return noAnswerKeeps(out, from, resp)
-		}
-		if answer == ynNo {
-			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
-				writePromptf(out, "Warning: couldn't record your choice: %v\n", err)
-			} else {
-				writePromptf(out, "Keeping %s. You can switch later from the Waired app or with `waired runtimes benchmark`.\n",
-					from)
-			}
-			return resp, false, nil
-		}
-		if switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty) {
-			resp = remeasureAfterSwitch(mgmtURL, out)
-		}
-	}
 	return resp, false, nil
 }
 
@@ -346,8 +310,10 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 // It is offered, not done. The bytes are re-downloadable but not free,
 // and an operator who expects to move back up after adding memory has a
 // real reason to keep them; that is a decision the person in front of
-// the machine owns, not the wizard. Default Yes follows the demotion
-// prompt above it: this host was measured too slow for that model.
+// the machine owns, not the wizard. Default No (owner decision
+// 2026-09-13, decision 8 of docs/decisions/20260913/2245): switching back
+// later reuses the stored measurement (decision 7), and it should not have
+// to download the weights again either.
 //
 // Non-interactive keeps the weights and says so, with the command that
 // removes them. Deleting gigabytes on nobody's authority is the one
@@ -362,7 +328,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 	}
 	// Never offer to delete the model this host is SERVING. The premise
 	// of the question — "Waired is not using it any more" — is what makes
-	// default Yes safe, and waired-agent#754 produced a step-down whose
+	// the offer safe at all, and waired-agent#754 produced a step-down whose
 	// two sides were the same model, which would have walked an operator
 	// through deleting the weights under the engine (DeleteModel drops
 	// the weights, clears state.Active, and clears the preference).
@@ -383,7 +349,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 		writePromptf(out, "Keeping %s. Remove it with `waired models rm %s`.\n", label, modelID)
 		return
 	}
-	answer := ynAsk(out, sc, fmt.Sprintf("Remove %s? Waired isn't using it any more.", label), true)
+	answer := ynAsk(out, sc, fmt.Sprintf("Remove %s? Waired isn't using it any more.", label), false)
 	if answer == ynNoAnswer {
 		// Same line the unattended arm above prints, for the same reason:
 		// deleting gigabytes on nobody's authority is the one answer this

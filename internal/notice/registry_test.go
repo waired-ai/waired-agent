@@ -33,7 +33,7 @@ func titles(ns []Notice) []string {
 // producer that dies cannot leave one on screen forever.
 func TestActiveDropsASourceNobodyRepublishes(t *testing.T) {
 	r, c := newTestRegistry(60 * time.Second)
-	r.Publish("inference", []Notice{LighterModel("a", "b", 1, 2)})
+	r.Publish("inference", []Notice{LighterModel("a", "b", 228, 0, 190)})
 
 	c.add(59 * time.Second)
 	if got := r.Active(); len(got) != 1 {
@@ -52,7 +52,7 @@ func TestActiveDropsASourceNobodyRepublishes(t *testing.T) {
 func TestRepublishRenewsTheLease(t *testing.T) {
 	r, c := newTestRegistry(60 * time.Second)
 	for range 6 {
-		r.Publish("inference", []Notice{LighterModel("a", "b", 1, 2)})
+		r.Publish("inference", []Notice{LighterModel("a", "b", 228, 0, 190)})
 		c.add(15 * time.Second)
 	}
 	if got := r.Active(); len(got) != 1 {
@@ -68,11 +68,11 @@ func TestRepublishRenewsTheLease(t *testing.T) {
 // what the ordering is for.
 func TestRepublishCarriesFirstSeenForward(t *testing.T) {
 	r, c := newTestRegistry(60 * time.Second)
-	r.Publish("inference", []Notice{LighterModel("a", "b", 1, 2)})
+	r.Publish("inference", []Notice{LighterModel("a", "b", 228, 0, 190)})
 	first := r.Active()[0].FirstSeen
 
 	c.add(15 * time.Second)
-	r.Publish("inference", []Notice{LighterModel("a", "b", 1, 2)})
+	r.Publish("inference", []Notice{LighterModel("a", "b", 228, 0, 190)})
 
 	if got := r.Active()[0].FirstSeen; !got.Equal(first) {
 		t.Fatalf("FirstSeen moved on republish: %v then %v", first, got)
@@ -87,8 +87,8 @@ func TestRepublishCarriesFirstSeenForward(t *testing.T) {
 // a whole lease — two suggestions naming different models at once.
 func TestPublishReplacesTheProducersWholeSet(t *testing.T) {
 	r, _ := newTestRegistry(60 * time.Second)
-	r.Publish("inference", []Notice{LighterModel("a", "old-target", 1, 2)})
-	r.Publish("inference", []Notice{LighterModel("a", "new-target", 1, 2)})
+	r.Publish("inference", []Notice{LighterModel("a", "old-target", 228, 0, 190)})
+	r.Publish("inference", []Notice{LighterModel("a", "new-target", 228, 0, 190)})
 
 	got := r.Active()
 	if len(got) != 1 {
@@ -106,7 +106,7 @@ func TestPublishReplacesTheProducersWholeSet(t *testing.T) {
 // immediately instead of leaving the row up until the lease lapses.
 func TestPublishEmptyClearsAtOnce(t *testing.T) {
 	r, _ := newTestRegistry(60 * time.Second)
-	r.Publish("inference", []Notice{LighterModel("a", "b", 1, 2)})
+	r.Publish("inference", []Notice{LighterModel("a", "b", 228, 0, 190)})
 	r.Publish("inference", nil)
 	if got := r.Active(); len(got) != 0 {
 		t.Fatalf("got %v, want none", titles(got))
@@ -120,8 +120,8 @@ func TestPublishEmptyClearsAtOnce(t *testing.T) {
 // none of them is a single slot the last writer wins.
 func TestProducersDoNotOverwriteEachOther(t *testing.T) {
 	r, _ := newTestRegistry(60 * time.Second)
-	r.Publish("one", []Notice{LighterModel("a", "b", 1, 2)})
-	r.Publish("two", []Notice{BetterModel("a", "c", 1, 2)})
+	r.Publish("one", []Notice{LighterModel("a", "b", 228, 0, 190)})
+	r.Publish("two", []Notice{UpdateAvailable("0.1.0", "0.2.0")})
 
 	if got := r.Active(); len(got) != 2 {
 		t.Fatalf("got %v, want both", titles(got))
@@ -132,9 +132,9 @@ func TestProducersDoNotOverwriteEachOther(t *testing.T) {
 // ordering: severity descending, then first appearance, then kind.
 func TestActiveOrdersWarningsFirstThenByFirstAppearance(t *testing.T) {
 	r, c := newTestRegistry(60 * time.Second)
-	r.Publish("early-info", []Notice{BetterModel("a", "b", 1, 2)})
+	r.Publish("early-info", []Notice{UpdateAvailable("0.1.0", "0.2.0")})
 	c.add(time.Second)
-	r.Publish("late-warn", []Notice{LighterModel("a", "c", 1, 2)})
+	r.Publish("late-warn", []Notice{LighterModel("a", "c", 228, 0, 190)})
 
 	got := r.Active()
 	if len(got) != 2 || got[0].Severity != SeverityWarn {
@@ -148,7 +148,7 @@ func TestActiveOrdersWarningsFirstThenByFirstAppearance(t *testing.T) {
 func TestActiveClampsToMaxActive(t *testing.T) {
 	r, _ := newTestRegistry(60 * time.Second)
 	for i := range MaxActive + 3 {
-		r.Publish(string(rune('a'+i)), []Notice{LighterModel("a", string(rune('a'+i)), 1, 2)})
+		r.Publish(string(rune('a'+i)), []Notice{LighterModel("a", string(rune('a'+i)), 228, 0, 190)})
 	}
 	if got := r.Active(); len(got) != MaxActive {
 		t.Fatalf("got %d notices, want %d", len(got), MaxActive)
@@ -163,7 +163,7 @@ func TestActiveIsSafeForConcurrentUse(t *testing.T) {
 	go func() {
 		defer close(done)
 		for range 200 {
-			r.Publish("inference", []Notice{LighterModel("a", "b", 1, 2)})
+			r.Publish("inference", []Notice{LighterModel("a", "b", 228, 0, 190)})
 		}
 	}()
 	for range 200 {

@@ -61,7 +61,7 @@ func TestRunBenchmark_NotReadyLeavesThroughThe425Door(t *testing.T) {
 	p := benchJobProvider(t, func(context.Context) BenchResult { return notReadyBench() })
 	seedActiveReady(t, p, "granite4-350m")
 
-	out, ok, err := p.RunBenchmark(context.Background())
+	out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 	if err != nil {
 		t.Fatalf("err = %v, want nil — not-ready is not an error", err)
 	}
@@ -93,7 +93,7 @@ func TestRunBenchmark_AFailedRunStillLeavesThroughThe503Door(t *testing.T) {
 	})
 	seedActiveReady(t, p, "granite4-350m")
 
-	out, ok, err := p.RunBenchmark(context.Background())
+	out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -143,7 +143,7 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 	}
 	got := make(chan result, 1)
 	go func() {
-		out, ok, err := p.RunBenchmark(context.Background())
+		out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 		got <- result{out, ok, err}
 	}()
 
@@ -241,7 +241,7 @@ func TestRunBenchmark_MeasuredRunIsUnaffected(t *testing.T) {
 	})
 	seedActiveReady(t, p, "granite4-350m")
 
-	out, ok, err := p.RunBenchmark(context.Background())
+	out, ok, err := p.RunBenchmark(context.Background(), management.BenchmarkModeRerun)
 	if err != nil || !ok {
 		t.Fatalf("RunBenchmark = (%+v, %v, %v), want a measured result", out, ok, err)
 	}

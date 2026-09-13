@@ -50,9 +50,8 @@ type benchStub struct {
 	// and deleteStatus refuses them (0 = 200 OK).
 	deleted      []string
 	deleteStatus int
-	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
-	downloading  bool                                // preferred-model response Downloading
-	statusSeq    []statusStep                        // scripted /status sequence (last repeats)
+	downloading  bool         // preferred-model response Downloading
+	statusSeq    []statusStep // scripted /status sequence (last repeats)
 	statusCalls  int
 	acceptedID   string
 	dismissFrom  string
@@ -107,7 +106,7 @@ func (b *benchStub) server() *httptest.Server {
 		//
 		belowFloor := b.floor > 0 && measured > 0 && measured < b.floor
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
-			Ran: true, MeasuredTokps: measured, Recommendation: b.rec, Upgrade: b.upgrade,
+			Ran: true, MeasuredTokps: measured, Recommendation: b.rec,
 			BelowFloor: belowFloor, FloorTokps: b.floor,
 		})
 	})
@@ -759,37 +758,6 @@ func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
 	}
 }
 
-// The upgrade recommendation names the from → to pair and contrasts
-// predicted vs measured throughput.
-//
-// It also has to SAY that the target is the stronger model. The line is
-// otherwise entirely about speed, and this flow is the one that offers a
-// multi-GB download — with the quality figures gone (#537) nothing else
-// in it tells the reader what they would be getting.
-func TestPromptBenchmark_UpgradeNamesFromTo(t *testing.T) {
-	upgrade := &management.BenchmarkRecommendation{
-		Direction:   "upgrade",
-		FromModelID: "qwen3.6-27b", FromVariantID: "q4-gguf",
-		ToModelID: "qwen3.6-35b-a3b", ToVariantID: "q4-gguf",
-		MeasuredTokps: 140, FloorTokps: 100, PredictedTokps: 110,
-	}
-	stub := &benchStub{ready: true, measured: 140, upgrade: upgrade}
-	srv := stub.server()
-	defer srv.Close()
-
-	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
-		t.Fatalf("prompt: %v", err)
-	}
-	want := "Qwen3.6 35B-A3B is a stronger model and should run at about 110 tok/s here, against 140 tok/s measured on Qwen3.6 27B"
-	if !strings.Contains(out.String(), want) {
-		t.Errorf("output missing %q; got:\n%s", want, out.String())
-	}
-	if strings.Contains(out.String(), "quality 89") || strings.Contains(out.String(), "quality 70") {
-		t.Errorf("upgrade line still prints a quality figure (#537); got:\n%s", out.String())
-	}
-}
-
 // statusStep is one scripted /inference/status response: code 0/200 encodes
 // st; any other code is returned bare (e.g. 500 during the restart window).
 type statusStep struct {
@@ -1254,6 +1222,28 @@ func TestOfferToRemoveRejected_NonInteractiveKeepsTheWeights(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (owner decision 2026-09-13, decision 8 of
+// docs/decisions/20260913/2245): Enter on the removal offer keeps the
+// weights. Switching back later reuses the stored measurement, and it
+// should not have to download the model again either.
+func TestOfferToRemoveRejected_EnterKeepsTheWeights(t *testing.T) {
+	stub := &benchStub{}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	offerToRemoveRejected(srv.URL, "heavy", "heavy", false, &out, bufio.NewScanner(strings.NewReader("\n")))
+	if len(stub.deleted) != 0 {
+		t.Fatalf("deleted = %v, want Enter to keep the weights", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "[y/N]") {
+		t.Errorf("the offer does not show No as its default:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Keeping heavy.") {
+		t.Errorf("Enter did not say it kept the model:\n%s", out.String())
+	}
+}
+
 // A removal that fails is reported and nothing else happens: the install
 // is finished and correct either way — the model is a leftover, not a
 // fault — so this must never fail the flow.
@@ -1307,21 +1297,6 @@ func TestPromptBenchmark_NoAnswerKeepsTheModel(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "keeping heavy") {
 		t.Errorf("no-answer did not say it kept the model:\n%s", out.String())
-	}
-}
-
-func TestPromptBenchmark_NoAnswerToAnUpgradeChangesNothing(t *testing.T) {
-	stub := &benchStub{ready: true, upgrade: sampleRec(), measured: 120}
-	srv := stub.server()
-	defer srv.Close()
-
-	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
-		bufio.NewScanner(strings.NewReader("")), false); err != nil {
-		t.Fatalf("prompt: %v", err)
-	}
-	if stub.acceptCount != 0 || stub.dismissCount != 0 {
-		t.Errorf("no answer must neither switch (%d) nor dismiss (%d)", stub.acceptCount, stub.dismissCount)
 	}
 }
 

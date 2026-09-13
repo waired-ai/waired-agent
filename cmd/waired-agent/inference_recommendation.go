@@ -96,22 +96,22 @@ func (p *agentInferenceProvider) AdvertisedCapacity() int {
 	return p.lastBench.Capacity
 }
 
-// currentRecommendations derives the live recommendations from the
-// last benchmark result: lighter when it measured below the
-// interactive floor, upgrade when it cleared the floor with enough
-// headroom for a higher tier. At most one of the two is non-nil. Safe
-// to call with no benchmark recorded yet (both nil).
-func (p *agentInferenceProvider) currentRecommendations(ctx context.Context) (lighter, upgrade *management.BenchmarkRecommendation) {
+// currentRecommendation derives the live lighter-model recommendation
+// from the last benchmark result: non-nil when it measured over the line
+// and a lighter model is available. Safe to call with no benchmark
+// recorded yet (nil). There is no upgrade recommendation any more
+// (waired-ai/waired-agent#1342; decision 6 of
+// docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md).
+func (p *agentInferenceProvider) currentRecommendation(ctx context.Context) *management.BenchmarkRecommendation {
 	p.benchMu.Lock()
 	last := p.lastBench
 	p.benchMu.Unlock()
 	if last == nil {
-		return nil, nil
+		return nil
 	}
 	hw := p.profiler.Profile(ctx)
 	engineVersion := p.servingEngineVersion(ctx)
-	return recommendationFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion),
-		upgradeFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion)
+	return recommendationFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion)
 }
 
 // benchDescribes reports whether a stored benchmark is evidence about
@@ -310,9 +310,8 @@ func recommendationFromBench(
 		return nil
 	}
 
-	// The engine the measurement was taken on, for upgradeFromBench's own
-	// stated reason further down: PickEngine's hardware heuristic can
-	// disagree with the engine actually serving, and cfg.PreferredEngine is
+	// The engine the measurement was taken on: PickEngine's hardware
+	// heuristic can disagree with the engine actually serving, and cfg.PreferredEngine is
 	// empty on every wizard-installed host (waired-agent#1028). st.Active is
 	// non-nil here — the guard above returned otherwise.
 	engine := st.Active.Runtime
@@ -372,112 +371,6 @@ func recommendationFromBench(
 	return rec
 }
 
-// upgradeFromBench is the inverse of recommendationFromBench: when a
-// reliable benchmark measured AT/ABOVE the interactive floor, it asks
-// router.UpgradeCandidate whether a higher-quality_tier model is
-// predicted (bandwidth scaling, safety margin) to still clear the
-// floor on this host, and surfaces it as a Direction="upgrade"
-// recommendation. nil when:
-//
-//   - the benchmark failed / was skipped (same reliability gates as
-//     the lighter flow)
-//   - measured throughput is below the floor (the lighter flow owns it)
-//   - no active model is committed yet
-//   - no fitting higher-tier candidate clears floor × margin
-//
-// Dismissals share the lighter flow's keying (active variant SHA →
-// target variant ID): direction never collides because a given target
-// variant is either heavier or lighter than the active one, and
-// switching the active model changes the SHA, clearing stale entries.
-func upgradeFromBench(
-	bench BenchResult,
-	store *catalog.Store,
-	hw hardware.Profile,
-	manifests []catalog.Manifest,
-	cfg agentconfig.InferenceConfig,
-	engineVersion string,
-) *management.BenchmarkRecommendation {
-	if bench.Failed || bench.Capacity == 0 {
-		return nil
-	}
-	floor := resolveInteractiveFloor(cfg.InteractiveFloorTokps)
-	if bench.TokensPerSec < floor {
-		return nil
-	}
-
-	st, err := store.Load()
-	if err != nil || st.Active == nil {
-		return nil
-	}
-	if !benchDescribes(bench, st.Active.ModelID) {
-		return nil
-	}
-
-	// Candidates must come from the engine the measurement was taken
-	// on (Active.Runtime) — the bandwidth scaling is only meaningful
-	// within one runtime, and PickEngine's hardware heuristic can
-	// disagree with the engine actually serving (NVIDIA hosts lean
-	// vllm there while the agent runs ollama).
-	engine := st.Active.Runtime
-	if engine == "" {
-		enginePick, err := router.PickEngine(router.EnginePickInput{
-			Hardware:   hw,
-			Preference: cfg.PreferredEngine,
-			Catalog:    manifests,
-		})
-		if err != nil {
-			return nil
-		}
-		engine = enginePick.Engine
-	}
-
-	// PreferredModelID is deliberately left empty: the upgrade looks
-	// across families for the best model the host can actually sustain.
-	cand, predicted, ok := router.UpgradeCandidate(router.UpgradeInput{
-		Pick: router.PickInput{
-			Catalog:       manifests,
-			Hardware:      hw,
-			Engine:        engine,
-			EngineVersion: engineVersion,
-			// An upgrade onto a model this host has already measured
-			// below the floor would walk it straight back into the
-			// step-down it just came out of. The prediction below scales
-			// the measured rate by weight; a real figure for those exact
-			// weights beats it (waired-agent#784).
-			Measured:   measuredRatesFrom(st),
-			FloorTokps: floor,
-		},
-		ActiveModelID:   st.Active.ModelID,
-		ActiveVariantID: st.Active.VariantID,
-		MeasuredTokps:   bench.TokensPerSec,
-		FloorTokps:      floor,
-	})
-	if !ok {
-		return nil
-	}
-
-	rec := &management.BenchmarkRecommendation{
-		Direction:      management.RecommendationUpgrade,
-		FromModelID:    st.Active.ModelID,
-		FromVariantID:  st.Active.VariantID,
-		ToModelID:      cand.Manifest.ModelID,
-		ToVariantID:    cand.Variant.VariantID,
-		MeasuredTokps:  bench.TokensPerSec,
-		FloorTokps:     floor,
-		PredictedTokps: predicted,
-		Reason: fmt.Sprintf("measured %.0f tok/s leaves headroom above the %.0f tok/s floor; %s is predicted to run at ~%.0f tok/s here",
-			bench.TokensPerSec, floor, cand.Manifest.ModelID, predicted),
-	}
-
-	if sha := activeVariantSHA(manifests, st.Active.ModelID, st.Active.VariantID); sha != "" {
-		key := catalog.DismissalKey(sha, cand.Variant.VariantID)
-		if _, dismissed := st.DismissedRecommendations[key]; dismissed {
-			rec.Dismissed = true
-		}
-	}
-	return rec
-}
-
 // benchJobTimeout bounds one detached benchmark run: warm-up is capped
 // at 180s and the measurement budget at 120s (inference_bench.go), so
 // 10 minutes covers the theoretical worst case with generous slack for
@@ -486,8 +379,7 @@ const benchJobTimeout = 10 * time.Minute
 
 // RunBenchmark forces a fresh on-device throughput benchmark of the
 // active model and returns the measurement plus the resulting
-// recommendation: lighter when below the interactive floor, upgrade
-// when there is headroom for a higher tier (mutually exclusive). ok is
+// lighter-model recommendation when it came in over the line. ok is
 // false (with a nil error) when the engine/model is not ready yet —
 // the handler maps that to 425 so an installer flow can poll.
 //
@@ -501,7 +393,8 @@ const benchJobTimeout = 10 * time.Minute
 // Unlike the boot benchmark, this bypasses the on-disk cache (Cache nil)
 // so an explicit re-run always re-measures — the user asked for a fresh
 // number.
-func (p *agentInferenceProvider) RunBenchmark(ctx context.Context) (management.BenchmarkOutcome, bool, error) {
+func (p *agentInferenceProvider) RunBenchmark(ctx context.Context, mode string) (management.BenchmarkOutcome, bool, error) {
+	_ = mode // TODO(#1341): ensure answers from the stored measurement
 	ready, _ := p.EngineReady()
 	if !ready {
 		return management.BenchmarkOutcome{}, false, nil
@@ -666,7 +559,6 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		// (waired-agent#1027).
 		ModelID: p.activeModelID(),
 		Lighter: recommendationFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
-		Upgrade: upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
 		// Carried, not dropped: the BenchmarkRecord below has recorded these
 		// two fields all along, and the outcome was the only place they were
 		// lost — which is what let the handler answer 200 for a run that
@@ -1013,11 +905,7 @@ func (p *agentInferenceProvider) DismissRecommendation(_ /*fromVariantID*/, toVa
 	}
 	to := toVariantID
 	if to == "" {
-		lighter, upgrade := p.currentRecommendations(context.Background())
-		rec := lighter
-		if rec == nil || rec.ToVariantID == "" {
-			rec = upgrade
-		}
+		rec := p.currentRecommendation(context.Background())
 		if rec == nil || rec.ToVariantID == "" {
 			return nil // nothing to dismiss
 		}

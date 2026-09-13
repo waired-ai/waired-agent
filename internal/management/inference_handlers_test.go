@@ -53,6 +53,7 @@ type fakeInference struct {
 	measuredFloor float64
 
 	benchOut      BenchmarkOutcome
+	benchMode     string
 	benchOK       bool
 	benchErr      error
 	benchStatus   BenchmarkStatusResponse
@@ -113,7 +114,8 @@ func (f *fakeInference) Select(_ context.Context, req router.Request) (router.Se
 	}
 	return out, nil
 }
-func (f *fakeInference) RunBenchmark(context.Context) (BenchmarkOutcome, bool, error) {
+func (f *fakeInference) RunBenchmark(_ context.Context, mode string) (BenchmarkOutcome, bool, error) {
+	f.benchMode = mode
 	return f.benchOut, f.benchOK, f.benchErr
 }
 func (f *fakeInference) BenchmarkStatus() BenchmarkStatusResponse {

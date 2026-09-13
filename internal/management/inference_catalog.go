@@ -160,13 +160,9 @@ type ModelCatalogResponse struct {
 	// BenchmarkRecommendation mirrors InferenceStatus.BenchmarkRecommendation
 	// so the tray's single catalog poll learns about a pending #133
 	// step-down suggestion without a second round-trip. nil when none.
-	// Lighter direction only — see InferenceStatus for why upgrades
-	// travel separately.
+	// Lighter direction only; the upgrade suggestion is retired
+	// (waired-ai/waired-agent#1342).
 	BenchmarkRecommendation *BenchmarkRecommendation `json:"benchmark_recommendation,omitempty"`
-
-	// BenchmarkUpgrade mirrors InferenceStatus.BenchmarkUpgrade (the
-	// headroom-driven higher-tier suggestion). nil when none.
-	BenchmarkUpgrade *BenchmarkRecommendation `json:"benchmark_upgrade,omitempty"`
 }
 
 // CatalogActive mirrors the relevant fields from catalog.ActiveSelection
@@ -412,7 +408,6 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		Host:                    hostFromProfile(hw),
 		Families:                make([]CatalogFamily, 0, len(manifests)),
 		BenchmarkRecommendation: status.BenchmarkRecommendation,
-		BenchmarkUpgrade:        status.BenchmarkUpgrade,
 	}
 
 	var activeModelID string
@@ -544,7 +539,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 //
 //  1. status.Active.Runtime — the committed selection in state.json, i.e.
 //     the outcome of chooseEngine/engineViable. Authoritative, and the
-//     same source upgradeFromBench already prefers for the same reason.
+//     same source the lighter-model recommendation reads for the same reason.
 //  2. Nothing committed yet (fresh install, pre-bootstrap): fall back to
 //     the auto-picker, which since waired-agent#319 also refuses vllm on
 //     a non-Linux host and since #522 refuses it on a host where no vllm

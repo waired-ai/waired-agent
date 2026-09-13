@@ -8,7 +8,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
-	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/router"
 )
 
@@ -176,90 +175,6 @@ func storeWithActiveLight(t *testing.T) *catalog.Store {
 		t.Fatalf("seed store: %v", err)
 	}
 	return store
-}
-
-func TestUpgradeFromBench_HeadroomSuggestsHigherTier(t *testing.T) {
-	// effBW = 450 × 1.5 = 675 GB/s; heavy (5 GB dense) predicts 135
-	// tok/s ≥ the 60 × 1.25 = 75 bar → upgrade light→heavy.
-	rec := upgradeFromBench(
-		BenchResult{TokensPerSec: 450, Capacity: 15},
-		storeWithActiveLight(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec == nil {
-		t.Fatalf("expected an upgrade recommendation, got nil")
-	}
-	if rec.FromModelID != "light" || rec.ToModelID != "heavy" {
-		t.Errorf("from/to = %s→%s, want light→heavy", rec.FromModelID, rec.ToModelID)
-	}
-	if rec.Direction != management.RecommendationUpgrade {
-		t.Errorf("Direction = %q, want upgrade", rec.Direction)
-	}
-	if rec.PredictedTokps < 134 || rec.PredictedTokps > 136 {
-		t.Errorf("PredictedTokps = %v, want ≈ 135", rec.PredictedTokps)
-	}
-}
-
-func TestUpgradeFromBench_BelowFloorNil(t *testing.T) {
-	// Below the floor the lighter flow owns the suggestion.
-	rec := upgradeFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1},
-		storeWithActiveLight(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec != nil {
-		t.Errorf("below floor → want nil, got %+v", rec)
-	}
-}
-
-func TestUpgradeFromBench_InsufficientHeadroomNil(t *testing.T) {
-	// Above the floor (120 ≥ 60) but heavy predicts only 36 tok/s
-	// (120 × 1.5/5) < the 75 bar → no upgrade.
-	rec := upgradeFromBench(
-		BenchResult{TokensPerSec: 120, Capacity: 4},
-		storeWithActiveLight(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec != nil {
-		t.Errorf("insufficient headroom → want nil, got %+v", rec)
-	}
-}
-
-func TestUpgradeFromBench_FailedNil(t *testing.T) {
-	rec := upgradeFromBench(
-		BenchResult{Failed: true, Capacity: 1, Err: "timeout"},
-		storeWithActiveLight(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec != nil {
-		t.Errorf("failed benchmark → want nil, got %+v", rec)
-	}
-}
-
-func TestUpgradeFromBench_AlreadyTopTierNil(t *testing.T) {
-	// heavy is the highest fitting tier; nothing above it.
-	rec := upgradeFromBench(
-		BenchResult{TokensPerSec: 500, Capacity: 16},
-		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec != nil {
-		t.Errorf("already top tier → want nil, got %+v", rec)
-	}
-}
-
-func TestUpgradeFromBench_DismissedMarker(t *testing.T) {
-	store := storeWithActiveLight(t)
-	sha := activeVariantSHA(recTestManifests(), "light", "q4")
-	if sha == "" {
-		t.Fatalf("activeVariantSHA returned empty")
-	}
-	if err := store.Update(func(s *catalog.State) {
-		s.DismissedRecommendations = map[string]time.Time{
-			catalog.DismissalKey(sha, "q4"): time.Now(),
-		}
-	}); err != nil {
-		t.Fatalf("dismiss: %v", err)
-	}
-	rec := upgradeFromBench(
-		BenchResult{TokensPerSec: 450, Capacity: 15},
-		store, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
-	if rec == nil {
-		t.Fatalf("expected recommendation with Dismissed=true, got nil")
-	}
-	if !rec.Dismissed {
-		t.Errorf("Dismissed = false, want true (pairing was dismissed)")
-	}
 }
 
 // recTestLadder is recTestManifests plus a third, lightest rung, so a

@@ -21,20 +21,9 @@ func lighterRec() *management.BenchmarkRecommendation {
 		FromVariantID: "q4",
 		ToModelID:     "light",
 		ToVariantID:   "q4",
-		MeasuredTokps: 42,
-		FloorTokps:    60,
-	}
-}
-
-func upgradeRec() *management.BenchmarkRecommendation {
-	return &management.BenchmarkRecommendation{
-		Direction:      management.RecommendationUpgrade,
-		FromModelID:    "light",
-		FromVariantID:  "q4",
-		ToModelID:      "heavy",
-		ToVariantID:    "q4",
-		MeasuredTokps:  118,
-		PredictedTokps: 64,
+		MeasuredTokps: 15.8,
+		TurnSeconds:   228,
+		BudgetSeconds: 190,
 	}
 }
 
@@ -48,50 +37,25 @@ func upgradeRec() *management.BenchmarkRecommendation {
 func TestNoticesFromRecommendations_DismissedSaysNothing(t *testing.T) {
 	rec := lighterRec()
 	rec.Dismissed = true
-	if got := noticesFromRecommendations(rec, nil); len(got) != 0 {
+	if got := noticesFromRecommendation(rec); len(got) != 0 {
 		t.Fatalf("got %d notices for a dismissed suggestion, want none", len(got))
-	}
-
-	up := upgradeRec()
-	up.Dismissed = true
-	if got := noticesFromRecommendations(nil, up); len(got) != 0 {
-		t.Fatalf("got %d notices for a dismissed upgrade, want none", len(got))
 	}
 }
 
-// TestNoticesFromRecommendations_CarriesBothDirections
-//
-// PRODUCT CONTRACT (waired-agent#1205, which names the step-up
-// suggestion as having the same delivery hole as the step-down one).
-// Severity is the load-bearing difference: `waired doctor` shows the
-// warning and not the suggestion, because a better model being available
-// is not a fault in the setup.
-func TestNoticesFromRecommendations_CarriesBothDirections(t *testing.T) {
-	got := noticesFromRecommendations(lighterRec(), nil)
+// TestNoticesFromRecommendation_CarriesTheLighterModel: the step-down
+// suggestion is a warning naming its target, in seconds per request. The
+// step-up suggestion that used to share this mapping is retired
+// (waired-ai/waired-agent#1342).
+func TestNoticesFromRecommendation_CarriesTheLighterModel(t *testing.T) {
+	got := noticesFromRecommendation(lighterRec())
 	if len(got) != 1 || got[0].Kind != notice.KindLighterModel {
 		t.Fatalf("lighter: got %+v", got)
 	}
 	if got[0].Severity != notice.SeverityWarn || got[0].Target != "light" {
 		t.Errorf("lighter: %+v", got[0])
 	}
-
-	got = noticesFromRecommendations(nil, upgradeRec())
-	if len(got) != 1 || got[0].Kind != notice.KindBetterModel {
-		t.Fatalf("upgrade: got %+v", got)
-	}
-	if got[0].Severity != notice.SeverityInfo {
-		t.Errorf("a step-up suggestion is not a problem: %+v", got[0])
-	}
-}
-
-// TestNoticesFromRecommendations_LighterWins records today's behaviour.
-// The daemon makes the two mutually exclusive; should that ever slip,
-// the surfaces already prefer the step-down, and this keeps the notice
-// field agreeing with them.
-func TestNoticesFromRecommendations_LighterWins(t *testing.T) {
-	got := noticesFromRecommendations(lighterRec(), upgradeRec())
-	if len(got) != 1 || got[0].Kind != notice.KindLighterModel {
-		t.Fatalf("got %+v, want only the step-down", got)
+	if want := "This computer takes 228 s per request with heavy (target: 190 s or less)."; got[0].Text != want {
+		t.Errorf("text = %q, want %q", got[0].Text, want)
 	}
 }
 
@@ -101,7 +65,7 @@ func TestNoticesFromRecommendations_LighterWins(t *testing.T) {
 func TestNoticesFromRecommendations_NoTargetSaysNothing(t *testing.T) {
 	rec := lighterRec()
 	rec.ToModelID = ""
-	if got := noticesFromRecommendations(rec, nil); len(got) != 0 {
+	if got := noticesFromRecommendation(rec); len(got) != 0 {
 		t.Fatalf("got %+v, want none", got)
 	}
 }
@@ -320,7 +284,7 @@ func TestUpdateNotices_CarriesBothVersions(t *testing.T) {
 func TestUpdateNoticePublisher_KeepsToItsOwnSource(t *testing.T) {
 	reg := notice.NewRegistry(time.Minute, nil)
 	reg.Publish(noticeSourceRecommendation, []notice.Notice{
-		notice.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 13.8, 60),
+		notice.LighterModel("qwen3-30b-a3b", "qwen3-8b-instruct", 228, 0, 190),
 	})
 
 	uc := &updateController{current: "v0.9.1", now: time.Now}
