@@ -864,7 +864,7 @@ func fallbackReason(results []router.ProbeResult) string {
 	if reason := results[0].FailureReason(); reason != "" {
 		return reason
 	}
-	return "capacity_full"
+	return probeReasonCapacityFull
 }
 
 // setSelectionHeaders surfaces the Phase 8 inference / fallback
