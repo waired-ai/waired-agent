@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,25 +16,32 @@ import (
 )
 
 // bootBenchLoopFixture is a provider whose EngineReady can be driven, in
-// front of an engine that answers the benchmark protocol and counts what
-// it was asked.
+// front of a fake engine that answers the measurement protocol and counts
+// what it was asked.
 //
-// The seam is the pair the production wiring already has: the provider
-// decides whether to try, RunBootBenchmark does the measuring. Nothing
-// replaces RunBootBenchmark itself — a fake in its place would make the
-// engine-start race, which is the whole subject, unwritable.
+// The seam is the one production has: the loop decides whether to try, the
+// provider's single-flight job measures through RunBootBenchmark, and
+// speedDepsHook points the live deps at the fake engine. Nothing replaces
+// RunBootBenchmark itself — a fake in its place would make the engine-start
+// race, which is the whole subject, unwritable.
 type bootBenchLoopFixture struct {
 	p        *agentInferenceProvider
+	engine   *fakeOllamaEngine
 	requests *atomic.Int64
 	port     int
 	client   *http.Client
 	log      *bytes.Buffer
+
+	mu       sync.Mutex
+	verdicts []BenchResult
+	// adjust, when non-nil, is applied to the deps after the fixture's own.
+	adjust func(*BenchDeps)
 }
 
 func newBootBenchLoopFixture(t *testing.T) *bootBenchLoopFixture {
 	t.Helper()
 	var requests atomic.Int64
-	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{1_000_000_000}}
+	engine := &fakeOllamaEngine{}
 	inner := engine.handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -42,16 +50,58 @@ func newBootBenchLoopFixture(t *testing.T) *bootBenchLoopFixture {
 	t.Cleanup(srv.Close)
 	p := benchJobProvider(t, nil)
 	// benchMeasurement files a figure under the variant's content digest,
-	// which it can only compute for a variant the catalog carries. Without
-	// these the ledger assertions below would pass on an empty map.
+	// which it can only compute for a variant the catalog carries.
 	p.manifests = bootBenchLoopManifests()
-	return &bootBenchLoopFixture{
+	f := &bootBenchLoopFixture{
 		p:        p,
+		engine:   engine,
 		requests: &requests,
 		port:     portFromBenchURL(t, srv.URL),
 		client:   srv.Client(),
 		log:      &bytes.Buffer{},
 	}
+	p.speedDepsHook = func(d *BenchDeps) {
+		d.EngineKind = signer.InferenceTypeOllama
+		d.EngineVersion = "0.33.3"
+		d.EnginePort = f.port
+		d.EngineModel = "qwen3:8b"
+		d.HTTPClient = f.client
+		d.Logger = slog.New(slog.NewTextHandler(f.log, nil))
+		d.Now = fakeNow(time.Unix(1_700_000_000, 0), time.Second)
+		f.mu.Lock()
+		adjust := f.adjust
+		f.mu.Unlock()
+		if adjust != nil {
+			adjust(d)
+		}
+	}
+	p.onSpeedVerdict = func(b BenchResult) {
+		f.mu.Lock()
+		f.verdicts = append(f.verdicts, b)
+		f.mu.Unlock()
+	}
+	return f
+}
+
+func (f *bootBenchLoopFixture) verdictCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.verdicts)
+}
+
+func (f *bootBenchLoopFixture) lastVerdict() BenchResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.verdicts) == 0 {
+		return BenchResult{}
+	}
+	return f.verdicts[len(f.verdicts)-1]
+}
+
+func (f *bootBenchLoopFixture) setAdjust(fn func(*BenchDeps)) {
+	f.mu.Lock()
+	f.adjust = fn
+	f.mu.Unlock()
 }
 
 func bootBenchLoopManifests() []catalog.Manifest {
@@ -65,36 +115,6 @@ func bootBenchLoopManifests() []catalog.Manifest {
 	return []catalog.Manifest{
 		{ModelID: "qwen3-8b", Variants: []catalog.Variant{variant("qwen3-8b")}},
 		{ModelID: "qwen3-27b", Variants: []catalog.Variant{variant("qwen3-27b")}},
-	}
-}
-
-// depsFor mirrors main.go's closure: every field read at call time, and
-// the same gates wired. EngineClaim especially — without it the run would
-// not take the engine at all, and the stand-down test below would pass on
-// the round's cheap pre-read alone while production relied on a claim the
-// fixture never exercised.
-func (f *bootBenchLoopFixture) depsFor(t *testing.T) func() BenchDeps {
-	t.Helper()
-	return func() BenchDeps {
-		st, _ := f.p.store.Load()
-		modelID, variantID := "", ""
-		if st.Active != nil {
-			modelID, variantID = st.Active.ModelID, st.Active.VariantID
-		}
-		return BenchDeps{
-			EngineKind:    signer.InferenceTypeOllama,
-			EngineVersion: "0.33.3",
-			EnginePort:    f.port,
-			EngineModel:   "qwen3:8b",
-			ModelID:       modelID,
-			VariantID:     variantID,
-			EngineReady:   f.p.EngineReady,
-			EngineQuiet:   f.p.engineQuietForBench,
-			EngineClaim:   f.p.claimEngineForBench,
-			HTTPClient:    f.client,
-			Logger:        slog.New(slog.NewTextHandler(f.log, nil)),
-			Now:           fakeNow(time.Unix(1_700_000_000, 0), time.Second),
-		}
 	}
 }
 
@@ -113,98 +133,72 @@ func (f *bootBenchLoopFixture) selectModel(t *testing.T, modelID, variantID stri
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#1150): the boot benchmark waits for the
+// PRODUCT CONTRACT (waired-agent#1150): the measurement waits for the
 // engine instead of racing it, and measures once when it arrives.
-//
-// The one-shot it replaces asked EngineReady once, on the boot tail. On a
-// host whose engine takes about a minute to come up that answer is almost
-// always "not yet" — 5 completions in 82 boots, measured on one vLLM
-// host, where the same boot saw the prefill measurement beside it
-// complete 33 seconds after the benchmark had already stood down. Nothing
-// re-ran it for the life of the daemon, so the disk cache (whose only
-// writer this is) stayed empty and the host had no standing decode rate.
 func TestMaybeRunBootBenchmark_WaitsForTheEngineRatherThanRacingIt(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	depsFor := f.depsFor(t)
 	ctx := context.Background()
 
-	// No committed selection yet: this is the state the boot race loses
-	// to, and EngineReady says so.
 	if ready, _ := f.p.EngineReady(); ready {
 		t.Fatal("the fixture starts ready; there is no race to lose")
 	}
-	f.p.maybeRunBootBenchmark(ctx, depsFor, nil)
+	f.p.maybeRunBootBenchmark(ctx)
 	if n := f.requests.Load(); n != 0 {
 		t.Fatalf("the engine was asked %d time(s) before it was up", n)
 	}
 
-	// The engine comes up. The round that follows is the one the one-shot
-	// never got to make.
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
 	if ready, _ := f.p.EngineReady(); !ready {
-		t.Fatal("EngineReady is still false after selecting a ready model; " +
-			"the assertion below would pass for the wrong reason")
+		t.Fatal("EngineReady is still false after selecting a ready model")
 	}
-	var verdicts int
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) { verdicts++ })
-	if verdicts != 1 {
-		t.Fatalf("reached %d verdicts once the engine was up, want 1", verdicts)
+	f.p.maybeRunBootBenchmark(ctx)
+	if f.verdictCount() != 1 {
+		t.Fatalf("reached %d verdicts once the engine was up, want 1", f.verdictCount())
 	}
 	measured := f.requests.Load()
 	if measured == 0 {
 		t.Fatal("the engine was never asked anything")
 	}
+	if f.p.IsMeasuringSpeed() {
+		t.Error("the readiness gate is still armed after the selection's verdict")
+	}
 
-	// And exactly once. A loop that re-measured every tick would be the
-	// periodic synthetic benchmark waired-agent#202 argues against.
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) {
-		t.Error("a second verdict for a selection already measured")
-	})
-	if n := f.requests.Load(); n != measured {
-		t.Errorf("the engine was asked %d more time(s) for a selection already measured", n-measured)
+	// And exactly once — not the periodic synthetic benchmark
+	// waired-agent#202 argues against.
+	f.p.maybeRunBootBenchmark(ctx)
+	if n := f.requests.Load(); n != measured || f.verdictCount() != 1 {
+		t.Errorf("a selection already measured was measured again (%d more requests)", n-measured)
 	}
 }
 
 // PRODUCT CONTRACT (waired-agent#1150): a model change earns another
-// attempt. The rate is a fact about (model, variant, engine, release) and
-// nothing else, which is what makes at-most-once safe.
+// attempt.
 func TestMaybeRunBootBenchmark_AModelChangeEarnsAnotherAttempt(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	depsFor := f.depsFor(t)
 	ctx := context.Background()
 
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
-	f.p.maybeRunBootBenchmark(ctx, depsFor, nil)
+	f.p.maybeRunBootBenchmark(ctx)
 	first := f.requests.Load()
 	if first == 0 {
 		t.Fatal("nothing measured for the first selection")
 	}
 
 	f.selectModel(t, "qwen3-27b", "q4-gguf")
-	var second BenchResult
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(r BenchResult, _ BenchDeps) { second = r })
+	f.p.maybeRunBootBenchmark(ctx)
 	if f.requests.Load() == first {
-		t.Fatal("the new model was never measured; the old figure describes a model this host no longer serves")
+		t.Fatal("the new model was never measured")
 	}
-	if second.ModelID != "qwen3-27b" {
-		t.Errorf("verdict ModelID = %q, want the model that was just selected", second.ModelID)
+	if got := f.lastVerdict().ModelID; got != "qwen3-27b" {
+		t.Errorf("verdict ModelID = %q, want the model that was just selected", got)
 	}
 }
 
 // PRODUCT CONTRACT (waired-agent#703, #1150): a round stands down while
-// another measurement holds the engine, and stands down WITHOUT settling
-// — nothing was measured, so nothing is known.
-//
-// Two layers do it and the test pins both. BenchDeps.EngineClaim is the
-// real exclusion; the cheap read in front of it exists for the journal,
-// because RunBootBenchmark logs its own decline and a fifteen-second loop
-// would repeat that line for every minute the prefill measurement holds
-// the engine — which is the line that gets filtered out, taking the real
-// ones with it (waired-agent#633 records the same lesson for the same
-// log). So the silence is asserted, not just the stand-down.
+// another measurement holds the engine, WITHOUT settling and without a log
+// line per tick.
 func TestMaybeRunBootBenchmark_StandsDownForTheOtherMeasurement(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	depsFor := f.depsFor(t)
 	ctx := context.Background()
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
 
@@ -212,183 +206,126 @@ func TestMaybeRunBootBenchmark_StandsDownForTheOtherMeasurement(t *testing.T) {
 	if !ok {
 		t.Fatal("could not claim the fixture engine")
 	}
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) {
-		t.Error("a verdict was reached while another measurement held the engine")
-	})
-	if n := f.requests.Load(); n != 0 {
+	f.p.maybeRunBootBenchmark(ctx)
+	if n := f.requests.Load(); n != 0 || f.verdictCount() != 0 {
 		t.Fatalf("the engine was asked %d time(s) while another measurement held it", n)
 	}
 	if f.log.Len() != 0 {
-		t.Errorf("a tick that could not run said something; at one line per "+
-			"fifteen seconds this fills the journal for as long as the other "+
-			"measurement runs:\n%s", f.log.String())
+		t.Errorf("a tick that could not run said something:\n%s", f.log.String())
 	}
 
 	release()
-	f.p.maybeRunBootBenchmark(ctx, depsFor, nil)
+	f.p.maybeRunBootBenchmark(ctx)
 	if f.requests.Load() == 0 {
-		t.Error("nothing measured after the other measurement let go; " +
-			"a stand-down that settles is a host that never measures")
+		t.Error("nothing measured after the other measurement let go")
 	}
 }
 
 // PRODUCT CONTRACT (waired-agent#1150): declining is not a verdict.
-//
-// The two readings of readiness are taken at different moments — the
-// round's, and RunBootBenchmark's own — and it is the second that decides
-// whether anything is measured. A round that settled on the first would
-// reinstate the one-shot under a loop.
 func TestMaybeRunBootBenchmark_ADeclinedRunDoesNotSettle(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
 	ctx := context.Background()
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
 
-	engineUp := false
-	base := f.depsFor(t)
-	depsFor := func() BenchDeps {
-		d := base()
-		d.EngineReady = func() (bool, string) { return engineUp, "qwen3-8b" }
-		return d
-	}
-
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) {
-		t.Error("a run that never reached the engine reported a verdict")
+	var engineUp atomic.Bool
+	f.setAdjust(func(d *BenchDeps) {
+		d.EngineReady = func() (bool, string) { return engineUp.Load(), "qwen3-8b" }
 	})
-	if n := f.requests.Load(); n != 0 {
+	f.p.maybeRunBootBenchmark(ctx)
+	if n := f.requests.Load(); n != 0 || f.verdictCount() != 0 {
 		t.Fatalf("the engine was asked %d time(s) despite answering not-ready", n)
 	}
+	if !f.p.IsMeasuringSpeed() {
+		t.Error("the readiness gate was cleared by a run that measured nothing")
+	}
 
-	engineUp = true
-	var verdicts int
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) { verdicts++ })
-	if verdicts != 1 {
-		t.Fatalf("reached %d verdicts after the engine came up, want 1 — "+
-			"the decline had spent this selection's one attempt", verdicts)
+	engineUp.Store(true)
+	f.p.maybeRunBootBenchmark(ctx)
+	if f.verdictCount() != 1 {
+		t.Fatalf("reached %d verdicts after the engine came up, want 1", f.verdictCount())
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#203, #1150): a FAILED run is a verdict.
-//
-// An accelerator out of memory, a warm-up that timed out — those are
-// statements about this host, and retrying them every fifteen seconds
-// would saturate the engine of a machine that cannot answer while telling
-// nobody anything new. speedMeasuredFor counts a failed attempt the same
-// way. A model change or an engine upgrade is what earns another, which
-// the selection key already expresses.
+// PRODUCT CONTRACT (waired-agent#203, #1150): a FAILED run is a verdict,
+// and is not retried every tick.
 func TestMaybeRunBootBenchmark_AFailedRunIsNotRetried(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
 
-	// A port nothing is listening on: the warm-up fails, which is the
-	// failure shape #203 drew the line for.
 	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	deadPort := portFromBenchURL(t, dead.URL)
 	dead.Close()
-
-	base := f.depsFor(t)
-	depsFor := func() BenchDeps {
-		d := base()
+	f.setAdjust(func(d *BenchDeps) {
 		d.EnginePort = deadPort
 		d.HTTPClient = http.DefaultClient
-		return d
-	}
+	})
 
-	var results []BenchResult
-	f.p.maybeRunBootBenchmark(context.Background(), depsFor,
-		func(r BenchResult, _ BenchDeps) { results = append(results, r) })
-	if len(results) != 1 || results[0].Outcome != benchOutcomeFailed {
-		t.Fatalf("results = %+v, want one failed verdict", results)
+	f.p.maybeRunBootBenchmark(context.Background())
+	if f.verdictCount() != 1 || f.lastVerdict().Outcome != benchOutcomeFailed {
+		t.Fatalf("verdicts = %+v, want one failed verdict", f.verdicts)
 	}
-	f.p.maybeRunBootBenchmark(context.Background(), depsFor,
-		func(BenchResult, BenchDeps) { t.Error("a failed run was retried on the next tick") })
+	f.p.maybeRunBootBenchmark(context.Background())
+	if f.verdictCount() != 1 {
+		t.Error("a failed run was retried on the next tick")
+	}
 }
 
-// The loop asks again. Driven with a short poll and stopped by its
-// context, so what is pinned is the shape — work happens on ticks after
-// the first, which is precisely what the one-shot could not do.
+// The loop asks again after the engine comes up.
 func TestRunBootBenchmarkLoop_AsksAgainAfterTheEngineComesUp(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	depsFor := f.depsFor(t)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	verdicts := make(chan BenchResult, 4)
-	go f.p.runBootBenchmarkLoop(ctx, depsFor,
-		func(r BenchResult, _ BenchDeps) { verdicts <- r }, time.Millisecond)
+	go f.p.runBootBenchmarkLoop(ctx, time.Millisecond)
 
-	// The engine arrives late, exactly as it does on the hardware this
-	// issue was measured on.
 	time.Sleep(20 * time.Millisecond)
-	if len(verdicts) != 0 {
+	if f.verdictCount() != 0 {
 		t.Fatal("a verdict was reached before there was anything to measure")
 	}
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
 
-	select {
-	case r := <-verdicts:
-		if r.Outcome != benchOutcomeMeasured {
-			t.Errorf("Outcome = %q, want %q", r.Outcome, benchOutcomeMeasured)
-		}
-	case <-time.After(waitBackstop):
+	deadline := time.Now().Add(waitBackstop)
+	for f.verdictCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if f.verdictCount() == 0 {
 		t.Fatal("the loop never measured a host whose engine came up after boot")
+	}
+	if got := f.lastVerdict().Outcome; got != benchOutcomeMeasured {
+		t.Errorf("Outcome = %q, want %q", got, benchOutcomeMeasured)
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#1150): local inference turned on after
-// boot gets measured.
-//
-// The toggle used to be read ONCE, on the boot tail, and that single read
-// enclosed the benchmark, the depth sweep AND the #1127 speed
-// measurement. infCtl.onEnable starts the engine and nothing else, so a
-// host that opted in later ran none of the three for the life of the
-// daemon: it served peers with no published rate and had no decode figure
-// of its own. Read per tick — which EngineReady already does, through
-// isInferenceDisabled — it simply starts on the next one.
+// PRODUCT CONTRACT (waired-agent#1150): local inference turned on after boot
+// gets measured.
 func TestMaybeRunBootBenchmark_LocalInferenceTurnedOnAfterBootGetsMeasured(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	depsFor := f.depsFor(t)
 	ctx := context.Background()
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
 
-	off := true
-	f.p.isInferenceDisabled = func() bool { return off }
+	var off atomic.Bool
+	off.Store(true)
+	f.p.isInferenceDisabled = func() bool { return off.Load() }
 
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) {
-		t.Error("a host told not to serve locally loaded a model to time it")
-	})
+	f.p.maybeRunBootBenchmark(ctx)
 	if n := f.requests.Load(); n != 0 {
 		t.Fatalf("the engine was asked %d time(s) while local inference was off", n)
 	}
-
-	off = false
-	var verdicts int
-	f.p.maybeRunBootBenchmark(ctx, depsFor, func(BenchResult, BenchDeps) { verdicts++ })
-	if verdicts != 1 {
-		t.Fatalf("reached %d verdicts after local inference was turned on, want 1", verdicts)
+	off.Store(false)
+	f.p.maybeRunBootBenchmark(ctx)
+	if f.verdictCount() != 1 {
+		t.Fatalf("reached %d verdicts after local inference was turned on, want 1", f.verdictCount())
 	}
 }
 
-// PRODUCT CONTRACT (waired-agent#1150): a measurement this path takes is
-// filed where the rest of the product reads measurements.
-//
-// The result used to reach p.lastBench and nothing else. MeasuredVariants
-// had a single writer, runBenchmarkJob, so a figure the boot path
-// produced evaporated on the next restart and never reached the signed
-// ModelMeasurements peers rank on, the catalog's measured_tokps,
-// `waired models ls --detail`, or the tray tooltip. On a live vLLM host
-// none of those had ever shown a number.
-//
-// LastBenchmark is deliberately untouched: it carries the generation the
-// setup reconciler's re-run guard reads, and a gen-0 write inherits the
-// stored one — the hazard waired-agent#980 is open on.
+// PRODUCT CONTRACT (waired-agent#1150, #1341): a measurement the loop takes
+// is filed where the rest of the product reads measurements — the ledger,
+// in seconds per request, with the engine that measured it.
 func TestMaybeRunBootBenchmark_FilesTheMeasurementInTheLedger(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
 	f.selectModel(t, "qwen3-8b", "q4-gguf")
-
-	var got BenchResult
-	f.p.maybeRunBootBenchmark(context.Background(), f.depsFor(t),
-		func(r BenchResult, _ BenchDeps) { got = r })
-	if got.TokensPerSec <= 0 {
+	f.p.maybeRunBootBenchmark(context.Background())
+	got := f.lastVerdict()
+	if got.TurnSeconds <= 0 {
 		t.Fatalf("nothing was measured: %+v", got)
 	}
 
@@ -400,39 +337,65 @@ func TestMaybeRunBootBenchmark_FilesTheMeasurementInTheLedger(t *testing.T) {
 		t.Fatalf("MeasuredVariants = %v, want the one figure just measured", st.MeasuredVariants)
 	}
 	for _, m := range st.MeasuredVariants {
-		if m.ModelID != "qwen3-8b" || m.MeasuredTokps != got.TokensPerSec {
-			t.Errorf("filed %+v, want %s at %.2f tok/s", m, "qwen3-8b", got.TokensPerSec)
+		if m.ModelID != "qwen3-8b" || m.TurnSeconds != got.TurnSeconds || m.MeasuredTokps != got.DecodeTokps {
+			t.Errorf("filed %+v, want qwen3-8b at %.1f s per request", m, got.TurnSeconds)
 		}
 		if m.EngineKind != signer.InferenceTypeOllama || m.EngineVersion != "0.33.3" {
-			t.Errorf("filed engine %q/%q, want the engine that measured it",
-				m.EngineKind, m.EngineVersion)
+			t.Errorf("filed engine %q/%q, want the engine that measured it", m.EngineKind, m.EngineVersion)
 		}
 	}
-	if st.LastBenchmark != nil {
-		t.Errorf("LastBenchmark = %+v; the boot path must not write the record "+
-			"that carries the wizard's generation counter (waired-agent#980)", st.LastBenchmark)
+	// A loop run answers no generation of its own: the stored one is kept.
+	if st.LastBenchmark == nil || st.LastBenchmark.Gen != 0 || st.LastBenchmark.TurnSeconds != got.TurnSeconds {
+		t.Errorf("LastBenchmark = %+v, want the gen-0 record of this run", st.LastBenchmark)
 	}
 }
 
-// A cached figure is not re-filed. measuredRatesFrom keeps the most
-// recent entry per variant, so re-dating a figure taken at an earlier
-// boot would let it outrank a fresher measurement of the same variant.
-func TestSettleBootBench_ACachedFigureIsNotReFiled(t *testing.T) {
+// PRODUCT CONTRACT (plan §a): a measurement that gave the engine back to
+// this host's own traffic is not a verdict — the selection stays owed and
+// the readiness gate stays armed — and the next attempt waits for the
+// traffic to be gone first.
+func TestMaybeRunBootBenchmark_AYieldIsNotAVerdict(t *testing.T) {
 	f := newBootBenchLoopFixture(t)
-	deps := BenchDeps{
-		ModelID: "qwen3-8b", VariantID: "q4-gguf",
-		EngineKind: signer.InferenceTypeOllama, EngineVersion: "0.33.3",
-	}
-	f.p.settleBootBench(deps, BenchResult{
-		Outcome: benchOutcomeMeasured, TokensPerSec: 99, Capacity: 3,
-		ModelID: "qwen3-8b", VariantID: "q4-gguf", Cached: true,
+	f.engine.hold = make(chan struct{})
+	f.engine.sampleArrived = make(chan struct{})
+	t.Cleanup(func() { close(f.engine.hold) })
+	f.selectModel(t, "qwen3-8b", "q4-gguf")
+	var serving atomic.Int64
+	f.setAdjust(func(d *BenchDeps) {
+		d.ServingInFlight = func() int { return int(serving.Load()) }
+		d.StallCap = 5 * time.Second // a missed yield fails instead of hanging
 	})
-	st, err := f.p.store.Load()
-	if err != nil {
-		t.Fatalf("load state: %v", err)
+	go func() {
+		<-f.engine.sampleArrived
+		serving.Store(1)
+	}()
+
+	f.p.maybeRunBootBenchmark(context.Background())
+	if f.verdictCount() != 0 {
+		t.Fatalf("a yield reached a verdict: %+v", f.lastVerdict())
 	}
+	if !f.p.yieldedRecently() {
+		t.Error("the yield was not remembered; the next attempt would start into the same session")
+	}
+	if !f.p.IsMeasuringSpeed() {
+		t.Error("the readiness gate was cleared by a run that measured nothing")
+	}
+	st, _ := f.p.store.Load()
 	if len(st.MeasuredVariants) != 0 {
-		t.Errorf("a cached figure was filed with today's date: %v", st.MeasuredVariants)
+		t.Errorf("a yielded measurement was filed: %v", st.MeasuredVariants)
+	}
+}
+
+// The boot tail's synchronous attempt answers from a stored figure only.
+func TestSeedBootBenchmark_NeverMeasures(t *testing.T) {
+	f := newBootBenchLoopFixture(t)
+	f.selectModel(t, "qwen3-8b", "q4-gguf")
+	got := f.p.seedBootBenchmark(context.Background())
+	if n := f.requests.Load(); n != 0 {
+		t.Fatalf("the boot seed sent %d request(s); it must never hold the start on a measurement", n)
+	}
+	if benchReachedAVerdict(got) {
+		t.Errorf("seed with nothing stored = %+v, want no verdict", got)
 	}
 }
 
@@ -453,6 +416,9 @@ func TestBootBenchSelectionKey(t *testing.T) {
 		{"variant", BenchDeps{ModelID: "m", VariantID: "other", EngineKind: "ollama", EngineVersion: "0.33.3"}},
 		{"engine kind", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "vllm", EngineVersion: "0.33.3"}},
 		{"engine release", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.32.15"}},
+		{"window", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", AppliedWindow: 32768}},
+		{"kv cache type", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", KVCacheType: "q4_0"}},
+		{"parallel slots", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", NumParallel: 2}},
 	} {
 		if bootBenchSelectionKey(tc.d) == bootBenchSelectionKey(full) {
 			t.Errorf("a changed %s did not earn a new measurement", tc.name)

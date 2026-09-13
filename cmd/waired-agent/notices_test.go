@@ -97,12 +97,12 @@ func noticeTestProvider(t *testing.T, reg *notice.Registry) *agentInferenceProvi
 // TestPublishRecommendationNotices_PublishesWhatTheBenchmarkSays
 //
 // PRODUCT CONTRACT (waired-agent#1205). This is the end of the wire the
-// issue is about: a host that measured below its floor has to end up
+// issue is about: a host that measured over the line has to end up
 // saying so somewhere a person can read it.
 func TestPublishRecommendationNotices_PublishesWhatTheBenchmarkSays(t *testing.T) {
 	reg := notice.NewRegistry(time.Minute, nil)
 	p := noticeTestProvider(t, reg)
-	p.SetLastBench(BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"})
+	p.SetLastBench(BenchResult{TokensPerSec: 10, TurnSeconds: 400, Capacity: 1, ModelID: "heavy"})
 
 	p.publishRecommendationNotices(context.Background())
 
@@ -119,22 +119,22 @@ func TestPublishRecommendationNotices_PublishesWhatTheBenchmarkSays(t *testing.T
 //
 // PRODUCT CONTRACT (owner ruling, 2026-09-05: a notice disappears when
 // it stops being produced). Republishing derives afresh, so a host that
-// clears its floor stops saying it is below one — nothing has to notice
+// comes inside the line stops saying it is over it — nothing has to notice
 // and clear the old message.
 func TestPublishRecommendationNotices_ClearsWhenTheConditionGoesAway(t *testing.T) {
 	reg := notice.NewRegistry(time.Minute, nil)
 	p := noticeTestProvider(t, reg)
-	p.SetLastBench(BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"})
+	p.SetLastBench(BenchResult{TokensPerSec: 10, TurnSeconds: 400, Capacity: 1, ModelID: "heavy"})
 	p.publishRecommendationNotices(context.Background())
 	if len(reg.Active()) != 1 {
 		t.Fatalf("setup: expected the suggestion to be published first")
 	}
 
-	p.SetLastBench(BenchResult{TokensPerSec: 500, Capacity: 1, ModelID: "heavy"})
+	p.SetLastBench(BenchResult{TokensPerSec: 500, TurnSeconds: 40, Capacity: 1, ModelID: "heavy"})
 	p.publishRecommendationNotices(context.Background())
 
 	if got := reg.Active(); len(got) != 0 {
-		t.Fatalf("got %+v, want none once the host clears its floor", got)
+		t.Fatalf("got %+v, want none once the host is inside the line", got)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestPublishRecommendationNotices_ClearsWhenTheConditionGoesAway(t *testing.
 // leaves the registry nil, and none of them should have to care.
 func TestPublishRecommendationNotices_WithoutARegistryDoesNothing(t *testing.T) {
 	p := noticeTestProvider(t, nil)
-	p.SetLastBench(BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"})
+	p.SetLastBench(BenchResult{TokensPerSec: 10, TurnSeconds: 400, Capacity: 1, ModelID: "heavy"})
 	p.publishRecommendationNotices(context.Background())
 }
 

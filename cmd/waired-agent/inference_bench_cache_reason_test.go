@@ -90,7 +90,7 @@ func TestRunBootBenchmark_NoCacheConfiguredSaysNothingAboutCaching(t *testing.T)
 	}
 }
 
-// A usable key is silent too — the existing "cache miss; measuring" line
+// A usable key is silent too — the existing "cache miss" line
 // already covers that case, and a second one beside it would double every
 // boot's cache narration.
 func TestRunBootBenchmark_UsableKeyDoesNotSayCachingIsOff(t *testing.T) {
@@ -105,7 +105,7 @@ func TestRunBootBenchmark_UsableKeyDoesNotSayCachingIsOff(t *testing.T) {
 	if rec := findBenchLog(recs, "inference boot benchmark: caching is off"); rec != nil {
 		t.Errorf("a usable cache key narrated a disabled cache: %v", rec)
 	}
-	if rec := findBenchLog(recs, "inference boot benchmark: cache miss; measuring"); rec == nil {
+	if rec := findBenchLog(recs, "model speed measurement: cache miss"); rec == nil {
 		t.Errorf("the existing cache-miss line went missing; records: %v", recs)
 	}
 }

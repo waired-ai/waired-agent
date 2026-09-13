@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 func tempBenchCache(t *testing.T) *benchCache {
@@ -30,7 +32,8 @@ func TestBenchCache_RoundTrip(t *testing.T) {
 	now := time.Date(2026, 5, 16, 9, 0, 0, 0, time.UTC)
 	res := BenchResult{
 		TokensPerSec: 123.4, Capacity: 4, VariantID: "qwen3-8b-q4-gguf",
-		Method: benchMethodOllamaEval, SpreadPct: 6.3,
+		Method: signer.BenchmarkMethodOllamaEval, SpreadPct: 6.3,
+		PrefillTokps: 901.3, DecodeTokps: 45.7, DepthTokens: 32780, TurnSeconds: 70.5, Samples: 2,
 	}
 	meta := benchCacheHumanMeta{
 		VariantID:     "qwen3-8b-q4-gguf",
@@ -50,8 +53,13 @@ func TestBenchCache_RoundTrip(t *testing.T) {
 	if got.TokensPerSec != 123.4 || got.Capacity != 4 || got.VariantID != "qwen3-8b-q4-gguf" {
 		t.Fatalf("Load returned unexpected result: %+v", got)
 	}
-	if got.Method != benchMethodOllamaEval || got.SpreadPct != 6.3 {
+	if got.Method != signer.BenchmarkMethodOllamaEval || got.SpreadPct != 6.3 {
 		t.Fatalf("Method/SpreadPct did not round-trip: %+v", got)
+	}
+	// The v5 measurement itself (waired-ai/waired-agent#1341).
+	if got.PrefillTokps != 901.3 || got.DecodeTokps != 45.7 || got.DepthTokens != 32780 ||
+		got.TurnSeconds != 70.5 || got.Samples != 2 {
+		t.Fatalf("the measurement did not round-trip: %+v", got)
 	}
 	if !ts.Equal(now) {
 		t.Fatalf("Load returned measured_at %v, want %v", ts, now)
@@ -167,7 +175,7 @@ func TestBenchCache_V2WallClockEntriesInvalidated(t *testing.T) {
 	if _, _, hit, err := c.Load("v2-key"); err != nil || hit {
 		t.Fatalf("v2 entry served as hit (err=%v hit=%v); wall-clock numbers must be re-measured", err, hit)
 	}
-	if err := c.Store("v3-key", BenchResult{TokensPerSec: 78, Capacity: 2, Method: benchMethodOllamaEval}, benchCacheHumanMeta{}, time.Now()); err != nil {
+	if err := c.Store("v3-key", BenchResult{TokensPerSec: 78, Capacity: 2, Method: signer.BenchmarkMethodOllamaEval}, benchCacheHumanMeta{}, time.Now()); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	raw, err := os.ReadFile(c.path)
@@ -301,6 +309,11 @@ func TestBenchCacheKey_VariesWithInputs(t *testing.T) {
 		// The point of #1131: the same host, card, variant and model on
 		// a NEWER engine must not read the old engine's measurement.
 		{"EngineVersion", func(d *BenchDeps) { d.EngineVersion = "0.32.15" }},
+		// v5 (waired-ai/waired-agent#1341): the same weights served with
+		// another window, KV cache type or slot count are another speed.
+		{"AppliedWindow", func(d *BenchDeps) { d.AppliedWindow = 131072 }},
+		{"KVCacheType", func(d *BenchDeps) { d.KVCacheType = "q4_0" }},
+		{"NumParallel", func(d *BenchDeps) { d.NumParallel = 2 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -401,5 +414,20 @@ func TestBenchCacheDisabledReason_NamesEveryMissingInput(t *testing.T) {
 				t.Errorf("key=%q but reason=%q: the two disagree about whether caching is on", key, got)
 			}
 		})
+	}
+}
+
+// A v4 file — a shallow decode rate keyed without the serving configuration
+// — must read as a miss: it is a different quantity (bench cache v5,
+// waired-ai/waired-agent#1341).
+func TestBenchCache_V4DecodeRateEntriesAreAMiss(t *testing.T) {
+	c := tempBenchCache(t)
+	if err := os.WriteFile(c.path,
+		[]byte(`{"version":4,"entries":{"k":{"tokens_per_sec":21.6,"capacity":1,"variant_id":"x","gpu_model":"g","engine_kind":"ollama","engine_version":"0.33.3","measured_at":"2026-09-01T00:00:00Z"}}}`),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, hit, err := c.Load("k"); err != nil || hit {
+		t.Fatalf("a v4 entry was served (err=%v hit=%v)", err, hit)
 	}
 }

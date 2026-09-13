@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,20 +56,26 @@ func waitDone(t *testing.T, done <-chan struct{}) {
 }
 
 // TestBenchmarkJob_SingleFlightAndPersistence pins the waired#835 §12
-// job semantics: concurrent starts join one run, completion is
-// persisted to catalog.State.LastBenchmark, and BenchmarkStatus
-// reflects running → done.
+// job semantics: concurrent starts join one run, completion is persisted
+// to catalog.State.LastBenchmark, and BenchmarkStatus reflects running →
+// done.
+//
+// A request that joins the run for the model this host still serves raises
+// the generation the run answers to its own (waired-agent#980): the run IS
+// the measurement it asked for, and answering the lower generation made the
+// setup reconciler start a second full measurement of the same model the
+// moment the first finished. It is still ONE run.
 func TestBenchmarkJob_SingleFlightAndPersistence(t *testing.T) {
 	block := make(chan struct{})
-	runs := 0
+	var runs atomic.Int64
 	p := benchJobProvider(t, func(context.Context) BenchResult {
-		runs++
+		runs.Add(1)
 		<-block
-		return BenchResult{TokensPerSec: 42, Capacity: 1}
+		return BenchResult{TokensPerSec: 42, DecodeTokps: 42, TurnSeconds: 150, Capacity: 1}
 	})
 
-	done1 := p.startBenchmarkJob(3)
-	done2 := p.startBenchmarkJob(7) // joins; gen 7 is NOT a second run
+	done1 := p.startBenchmarkJob(3, management.BenchmarkModeEnsure)
+	done2 := p.startBenchmarkJob(7, management.BenchmarkModeEnsure) // joins
 	if done1 != done2 {
 		t.Fatal("concurrent startBenchmarkJob calls must join the same run")
 	}
@@ -78,28 +85,77 @@ func TestBenchmarkJob_SingleFlightAndPersistence(t *testing.T) {
 
 	close(block)
 	waitDone(t, done1)
-	if runs != 1 {
-		t.Fatalf("measurement ran %d times, want 1", runs)
+	if runs.Load() != 1 {
+		t.Fatalf("measurement ran %d times, want 1", runs.Load())
 	}
 
 	got := p.BenchmarkStatus()
-	if got.State != management.BenchmarkStateDone || got.Gen != 3 || got.MeasuredTokps != 42 {
-		t.Fatalf("status after completion = %+v, want done/gen=3/42", got)
+	if got.State != management.BenchmarkStateDone || got.Gen != 7 || got.MeasuredTokps != 42 {
+		t.Fatalf("status after completion = %+v, want done/gen=7 (the joiner's)/42", got)
 	}
 
 	// Persisted: a fresh provider over the same store (simulated
 	// restart) reads the same record back.
 	fresh := benchJobProvider(t, nil)
 	fresh.store = p.store
-	if got := fresh.BenchmarkStatus(); got.State != management.BenchmarkStateDone || got.Gen != 3 {
-		t.Fatalf("status after restart = %+v, want done/gen=3", got)
+	if got := fresh.BenchmarkStatus(); got.State != management.BenchmarkStateDone || got.Gen != 7 {
+		t.Fatalf("status after restart = %+v, want done/gen=7", got)
 	}
 
 	// The job slot is free again — a new run starts (not a join).
-	done3 := p.startBenchmarkJob(0)
-	waitDone(t, done3)
-	if runs != 2 {
-		t.Fatalf("second explicit run: measurement ran %d times, want 2", runs)
+	waitDone(t, p.startBenchmarkJob(0, management.BenchmarkModeRerun))
+	if runs.Load() != 2 {
+		t.Fatalf("second explicit run: measurement ran %d times, want 2", runs.Load())
+	}
+}
+
+// A request that arrives while the running job measures ANOTHER model — the
+// switch landed mid-run — does not adopt that run's figure as its answer:
+// the switch stops that run, and the request is answered by the next one.
+func TestBenchmarkJob_AJoinForAnotherModelKeepsTheRunsGeneration(t *testing.T) {
+	block := make(chan struct{})
+	p := benchJobProvider(t, func(context.Context) BenchResult {
+		<-block
+		return BenchResult{TokensPerSec: 42, DecodeTokps: 42, TurnSeconds: 150, Capacity: 1}
+	})
+	seedActiveReady(t, p, "model-a")
+	done := p.startBenchmarkJob(3, management.BenchmarkModeEnsure)
+	if err := p.store.Update(func(s *catalog.State) { s.Active.VariantID = "other-variant" }); err != nil {
+		t.Fatal(err)
+	}
+	p.startBenchmarkJob(7, management.BenchmarkModeEnsure)
+	close(block)
+	waitDone(t, done)
+	if got := p.BenchmarkStatus(); got.Gen != 3 {
+		t.Fatalf("gen = %d, want 3 — a join for another variant must not raise it", got.Gen)
+	}
+}
+
+// PRODUCT CONTRACT (decision 7): an answer from the stored measurement is
+// the answer to the generation that asked — LastBenchmark carries it — but
+// the ledger entry keeps the date it was measured on.
+func TestBenchmarkJob_ACachedAnswerRecordsTheGenerationNotANewDate(t *testing.T) {
+	p := benchJobProvider(t, func(context.Context) BenchResult {
+		return BenchResult{TokensPerSec: 45.7, DecodeTokps: 45.7, TurnSeconds: 70, Capacity: 1,
+			ModelID: "qwen3-8b", VariantID: "q4-gguf", Outcome: benchOutcomeMeasured, Cached: true}
+	})
+	p.manifests = bootBenchLoopManifests()
+	sha := activeVariantSHA(p.manifests, "qwen3-8b", "q4-gguf")
+	measuredAt := time.Now().UTC().Add(-48 * time.Hour)
+	if err := p.store.Update(func(s *catalog.State) {
+		s.MeasuredVariants = map[string]catalog.VariantMeasurement{
+			sha: {ModelID: "qwen3-8b", VariantID: "q4-gguf", TurnSeconds: 70, MeasuredAt: measuredAt},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, p.startBenchmarkJob(4, management.BenchmarkModeEnsure))
+	st, _ := p.store.Load()
+	if st.LastBenchmark == nil || st.LastBenchmark.Gen != 4 || !st.LastBenchmark.Cached || st.LastBenchmark.TurnSeconds != 70 {
+		t.Errorf("LastBenchmark = %+v, want gen 4, cached, 70 s", st.LastBenchmark)
+	}
+	if got := st.MeasuredVariants[sha].MeasuredAt; !got.Equal(measuredAt) {
+		t.Errorf("ledger MeasuredAt = %v, want the original %v — a cached answer is not re-filed", got, measuredAt)
 	}
 }
 
@@ -107,7 +163,7 @@ func TestBenchmarkJob_SingleFlightAndPersistence(t *testing.T) {
 // not regress a counter-driven generation the CP already saw.
 func TestBenchmarkJob_GenZeroKeepsStoredGen(t *testing.T) {
 	p := benchJobProvider(t, func(context.Context) BenchResult {
-		return BenchResult{TokensPerSec: 10, Capacity: 1}
+		return BenchResult{TokensPerSec: 10, DecodeTokps: 10, TurnSeconds: 300, Capacity: 1}
 	})
 	if err := p.store.Update(func(s *catalog.State) {
 		s.LastBenchmark = &catalog.BenchmarkRecord{Gen: 5, MeasuredTokps: 99, MeasuredAt: time.Now().UTC()}
@@ -115,7 +171,7 @@ func TestBenchmarkJob_GenZeroKeepsStoredGen(t *testing.T) {
 		t.Fatalf("seed store: %v", err)
 	}
 
-	waitDone(t, p.startBenchmarkJob(0))
+	waitDone(t, p.startBenchmarkJob(0, management.BenchmarkModeEnsure))
 	got := p.BenchmarkStatus()
 	if got.Gen != 5 {
 		t.Fatalf("gen after gen-0 run = %d, want 5 (kept)", got.Gen)
@@ -131,7 +187,7 @@ func TestBenchmarkJob_FailedRun(t *testing.T) {
 	p := benchJobProvider(t, func(context.Context) BenchResult {
 		return BenchResult{Failed: true, Err: "engine exploded", Capacity: 1}
 	})
-	waitDone(t, p.startBenchmarkJob(2))
+	waitDone(t, p.startBenchmarkJob(2, management.BenchmarkModeEnsure))
 	got := p.BenchmarkStatus()
 	if got.State != management.BenchmarkStateFailed || got.Error != "engine exploded" || got.Gen != 2 {
 		t.Fatalf("status = %+v, want failed/gen=2 with error detail", got)
@@ -175,7 +231,7 @@ func TestBenchmarkJob_EndsWhenTheDaemonStops(t *testing.T) {
 	agentCtx, shutdown := context.WithCancel(context.Background())
 	p.agentCtx = agentCtx
 
-	done := p.startBenchmarkJob(0)
+	done := p.startBenchmarkJob(0, management.BenchmarkModeEnsure)
 	shutdown()
 	waitDone(t, done)
 

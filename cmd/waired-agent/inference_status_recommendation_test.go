@@ -42,13 +42,13 @@ func statusRecProvider(t *testing.T, bench BenchResult) *agentInferenceProvider 
 // from them (internal/gui/tray/state.go, tray.go), and four docs-site
 // pages describe the feature. The row simply never appeared on any host.
 func TestStatus_CarriesTheBenchmarkRecommendation(t *testing.T) {
-	// 10 tok/s is well under the 60 interactive floor, and the ladder has
-	// a lighter family that fits.
-	p := statusRecProvider(t, BenchResult{TokensPerSec: 10, Capacity: 1})
+	// 400 s per request is well over the line, and the ladder has a
+	// lighter family that fits.
+	p := statusRecProvider(t, BenchResult{TokensPerSec: 10, TurnSeconds: 400, Capacity: 1})
 
 	got := p.Status(context.Background())
 	if got.BenchmarkRecommendation == nil {
-		t.Fatal("a host measured far below the interactive floor offered no lighter model; " +
+		t.Fatal("a host measured far over the line offered no lighter model; " +
 			"the tray row and its popup are unreachable")
 	}
 	if got.BenchmarkRecommendation.ToModelID != "light" {

@@ -40,6 +40,7 @@ func measuredAt(s string) time.Time {
 func TestPublishedMeasurements_CarriesTheProvenance(t *testing.T) {
 	p := &agentInferenceProvider{store: storeWithLedger(t, catalog.VariantMeasurement{
 		ModelID: "qwen3.5-9b", VariantID: "q4-gguf", MeasuredTokps: 11,
+		PrefillTokps: 180, DepthTokens: 32780, TurnSeconds: 324,
 		Method: "ollama_eval", EngineKind: "ollama", EngineVersion: "0.32.13",
 		MeasuredAt: measuredAt("2026-08-21T00:00:00Z"),
 	})}
@@ -52,8 +53,8 @@ func TestPublishedMeasurements_CarriesTheProvenance(t *testing.T) {
 	if m.ModelID != "qwen3.5-9b" || m.VariantID != "q4-gguf" {
 		t.Errorf("subject = %q/%q, want qwen3.5-9b/q4-gguf", m.ModelID, m.VariantID)
 	}
-	if m.DecodeTokps != 11 {
-		t.Errorf("DecodeTokps = %v, want 11", m.DecodeTokps)
+	if m.DecodeTokps != 11 || m.PrefillTokps != 180 || m.DepthTokens != 32780 || m.TurnSeconds != 324 {
+		t.Errorf("figure = %+v, want the seconds per request and the rates behind it", m)
 	}
 	if m.Method != "ollama_eval" {
 		t.Errorf("Method = %q, want ollama_eval", m.Method)
@@ -75,10 +76,10 @@ func TestPublishedMeasurements_CarriesTheProvenance(t *testing.T) {
 // notification per tick, on every host, forever.
 func TestPublishedMeasurements_OrderIsStable(t *testing.T) {
 	entries := []catalog.VariantMeasurement{
-		{ModelID: "mid", VariantID: "q4", MeasuredTokps: 26},
-		{ModelID: "big", VariantID: "q8", MeasuredTokps: 11},
-		{ModelID: "big", VariantID: "q4", MeasuredTokps: 12},
-		{ModelID: "small", VariantID: "q4", MeasuredTokps: 44},
+		{ModelID: "mid", VariantID: "q4", MeasuredTokps: 26, TurnSeconds: 200},
+		{ModelID: "big", VariantID: "q8", MeasuredTokps: 11, TurnSeconds: 200},
+		{ModelID: "big", VariantID: "q4", MeasuredTokps: 12, TurnSeconds: 200},
+		{ModelID: "small", VariantID: "q4", MeasuredTokps: 44, TurnSeconds: 200},
 	}
 	p := &agentInferenceProvider{store: storeWithLedger(t, entries...)}
 
@@ -106,10 +107,10 @@ func TestPublishedMeasurements_OrderIsStable(t *testing.T) {
 // never ran.
 func TestPublishedMeasurements_DropsWhatCannotBeKeyed(t *testing.T) {
 	p := &agentInferenceProvider{store: storeWithLedger(t,
-		catalog.VariantMeasurement{ModelID: "ok", VariantID: "q4", MeasuredTokps: 11},
-		catalog.VariantMeasurement{ModelID: "", VariantID: "q4", MeasuredTokps: 11},
+		catalog.VariantMeasurement{ModelID: "ok", VariantID: "q4", MeasuredTokps: 11, TurnSeconds: 200},
+		catalog.VariantMeasurement{ModelID: "", VariantID: "q4", MeasuredTokps: 11, TurnSeconds: 200},
 		catalog.VariantMeasurement{ModelID: "no-variant", MeasuredTokps: 11},
-		catalog.VariantMeasurement{ModelID: "zero", VariantID: "q4", MeasuredTokps: 0},
+		catalog.VariantMeasurement{ModelID: "zero", VariantID: "q4", MeasuredTokps: 11, TurnSeconds: 0},
 	)}
 	got := p.PublishedMeasurements()
 	if len(got) != 1 || got[0].ModelID != "ok" {

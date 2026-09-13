@@ -8,7 +8,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
-	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // recTestManifests returns two ollama families on a footprint ladder:
@@ -53,9 +53,9 @@ func storeWithActive(t *testing.T) *catalog.Store {
 // cpuHost is an ollama host with enough RAM for both fixture families.
 func cpuHost() hardware.Profile { return hardware.Profile{RAMTotalGB: 16} }
 
-func TestRecommendationFromBench_BelowFloorSuggestsLighter(t *testing.T) {
+func TestRecommendationFromBench_OverTheLineSuggestsLighter(t *testing.T) {
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1},
+		BenchResult{TokensPerSec: 15.8, DecodeTokps: 15.8, TurnSeconds: 228, Capacity: 1},
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec == nil {
 		t.Fatalf("expected a recommendation, got nil")
@@ -63,21 +63,21 @@ func TestRecommendationFromBench_BelowFloorSuggestsLighter(t *testing.T) {
 	if rec.FromModelID != "heavy" || rec.ToModelID != "light" {
 		t.Errorf("from/to = %s→%s, want heavy→light", rec.FromModelID, rec.ToModelID)
 	}
-	if rec.MeasuredTokps != 10 || rec.FloorTokps != router.CodingAgentSelectionFloorTokps {
-		t.Errorf("measured=%v floor=%v, want 10 / %v", rec.MeasuredTokps, rec.FloorTokps, router.CodingAgentSelectionFloorTokps)
+	if rec.TurnSeconds != 228 || rec.BudgetSeconds != hostfit.ModelTurnBudgetSeconds || rec.MeasuredTokps != 15.8 {
+		t.Errorf("rec = %+v, want 228 s against %v", rec, hostfit.ModelTurnBudgetSeconds)
 	}
 	if rec.Dismissed {
 		t.Errorf("Dismissed should be false on a fresh recommendation")
 	}
 }
 
-func TestRecommendationFromBench_AboveFloorNil(t *testing.T) {
-	// 61 sits just above the 60 default floor — pins the boundary.
+func TestRecommendationFromBench_AtTheLineNil(t *testing.T) {
+	// Exactly at the line is inside it — pins the boundary.
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 61, Capacity: 2},
+		BenchResult{TokensPerSec: 5, TurnSeconds: hostfit.ModelTurnBudgetSeconds, Capacity: 2},
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
-		t.Errorf("above floor → want nil, got %+v", rec)
+		t.Errorf("at the line → want nil, got %+v", rec)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestRecommendationFromBench_SkippedNil(t *testing.T) {
 func TestRecommendationFromBench_NoActiveNil(t *testing.T) {
 	emptyStore := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 5, Capacity: 1},
+		BenchResult{TurnSeconds: 400, Capacity: 1},
 		emptyStore, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("no active model → want nil, got %+v", rec)
@@ -119,21 +119,23 @@ func TestRecommendationFromBench_NoLighterNil(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 5, Capacity: 1},
+		BenchResult{TurnSeconds: 400, Capacity: 1},
 		store, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("already lightest → want nil, got %+v", rec)
 	}
 }
 
-func TestRecommendationFromBench_ConfigurableFloor(t *testing.T) {
-	// floor=8 → a 10 tok/s result is now ABOVE the floor → no suggestion.
+// PRODUCT CONTRACT (decision 3 of docs/decisions/20260913/2245): the
+// retired interactive_floor_tokps judges nothing — a slow decode rate inside
+// the line is not a reason to step down, whatever the setting says.
+func TestRecommendationFromBench_TheRetiredFloorSettingJudgesNothing(t *testing.T) {
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1},
+		BenchResult{TokensPerSec: 10, DecodeTokps: 10, TurnSeconds: 150, Capacity: 1},
 		storeWithActive(t), cpuHost(), recTestManifests(),
-		agentconfig.InferenceConfig{InteractiveFloorTokps: 8}, "")
+		agentconfig.InferenceConfig{InteractiveFloorTokps: 60}, "")
 	if rec != nil {
-		t.Errorf("configurable floor 8 with 10 tok/s → want nil, got %+v", rec)
+		t.Errorf("10 tok/s inside the line with the floor set to 60 → want nil, got %+v", rec)
 	}
 }
 
@@ -152,7 +154,7 @@ func TestRecommendationFromBench_DismissedMarker(t *testing.T) {
 		t.Fatalf("dismiss: %v", err)
 	}
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1},
+		BenchResult{TurnSeconds: 228, Capacity: 1},
 		store, cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec == nil {
 		t.Fatalf("expected recommendation with Dismissed=true, got nil")
@@ -160,21 +162,6 @@ func TestRecommendationFromBench_DismissedMarker(t *testing.T) {
 	if !rec.Dismissed {
 		t.Errorf("Dismissed = false, want true (pairing was dismissed)")
 	}
-}
-
-// storeWithActiveLight returns a Store whose state has light/q4 active
-// (the baseline for upgrade-direction tests).
-func storeWithActiveLight(t *testing.T) *catalog.Store {
-	t.Helper()
-	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
-	if err := store.Update(func(s *catalog.State) {
-		s.Active = &catalog.ActiveSelection{
-			Runtime: catalog.RuntimeOllama, ModelID: "light", VariantID: "q4",
-		}
-	}); err != nil {
-		t.Fatalf("seed store: %v", err)
-	}
-	return store
 }
 
 // recTestLadder is recTestManifests plus a third, lightest rung, so a
@@ -202,13 +189,13 @@ func storeWithMeasured(
 			Runtime: catalog.RuntimeOllama, ModelID: activeModel, VariantID: "q4",
 		}
 		s.MeasuredVariants = map[string]catalog.VariantMeasurement{}
-		for modelID, tokps := range measured {
+		for modelID, seconds := range measured {
 			sha := activeVariantSHA(recTestLadder(), modelID, "q4")
 			if sha == "" {
 				t.Fatalf("no fixture variant for %q", modelID)
 			}
 			s.MeasuredVariants[sha] = catalog.VariantMeasurement{
-				ModelID: modelID, VariantID: "q4", MeasuredTokps: tokps,
+				ModelID: modelID, VariantID: "q4", TurnSeconds: seconds,
 			}
 		}
 	}); err != nil {
@@ -218,7 +205,7 @@ func storeWithMeasured(
 }
 
 // PRODUCT CONTRACT (waired-agent#784): the step-down does not offer a
-// rung this host has already tried and measured below the floor.
+// rung this host has already tried and measured over the line.
 //
 // The active model was never the gap — LighterCandidate has skipped that
 // one since waired-agent#754. The gap is every OTHER rung the host has
@@ -229,7 +216,7 @@ func storeWithMeasured(
 func TestRecommendationFromBench_DoesNotOfferAnAlreadyMeasuredRung(t *testing.T) {
 	// Nothing measured yet: the ordinary first step.
 	first := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"},
+		BenchResult{TurnSeconds: 400, Capacity: 1, ModelID: "heavy"},
 		storeWithMeasured(t, "heavy", nil), cpuHost(), recTestLadder(),
 		agentconfig.InferenceConfig{}, "")
 	if first == nil {
@@ -240,17 +227,17 @@ func TestRecommendationFromBench_DoesNotOfferAnAlreadyMeasuredRung(t *testing.T)
 	}
 
 	// Same host, same active model, but "light" has since been run here
-	// and measured below the floor. The next rung down is the only
+	// and measured over the line. The next rung down is the only
 	// honest offer left.
 	again := recommendationFromBench(
-		BenchResult{TokensPerSec: 10, Capacity: 1, ModelID: "heavy"},
-		storeWithMeasured(t, "heavy", map[string]float64{"light": 26}),
+		BenchResult{TurnSeconds: 400, Capacity: 1, ModelID: "heavy"},
+		storeWithMeasured(t, "heavy", map[string]float64{"light": 260}),
 		cpuHost(), recTestLadder(), agentconfig.InferenceConfig{}, "")
 	if again == nil {
 		t.Fatal("no step-down offered once light was known to be slow here")
 	}
 	if again.ToModelID != "tiny" {
-		t.Errorf("step = %q, want tiny — light was already measured at 26 tok/s here",
+		t.Errorf("step = %q, want tiny — light was already measured at 260 s per request here",
 			again.ToModelID)
 	}
 }
@@ -260,8 +247,10 @@ func TestRecommendationFromBench_DoesNotOfferAnAlreadyMeasuredRung(t *testing.T)
 // recommending a model this host has already timed as too slow.
 func TestBenchMeasurement_RecordsWhatWasMeasured(t *testing.T) {
 	sha, got := benchMeasurement(
-		BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4", Method: "ollama_native"},
-		recTestManifests(), "ollama", "0.32.13",
+		BenchResult{TokensPerSec: 15.8, DecodeTokps: 15.8, PrefillTokps: 252.9, DepthTokens: 32780,
+			TurnSeconds: 228, Samples: 1, ModelID: "heavy", VariantID: "q4", Method: "ollama_eval"},
+		recTestManifests(), BenchDeps{EngineKind: "ollama", EngineVersion: "0.32.13",
+			GPUModel: "RTX", VRAMTotalMB: 24000, DriverVersion: "595", AppliedWindow: 200704, KVCacheType: "q4_0", NumParallel: 1},
 	)
 	if want := activeVariantSHA(recTestManifests(), "heavy", "q4"); sha == "" || sha != want {
 		t.Fatalf("key = %q, want the measured variant's SHA %q", sha, want)
@@ -269,11 +258,15 @@ func TestBenchMeasurement_RecordsWhatWasMeasured(t *testing.T) {
 	if got.ModelID != "heavy" || got.VariantID != "q4" {
 		t.Errorf("subject = %q/%q, want heavy/q4", got.ModelID, got.VariantID)
 	}
-	if got.MeasuredTokps != 26 {
-		t.Errorf("MeasuredTokps = %v, want 26", got.MeasuredTokps)
+	if got.MeasuredTokps != 15.8 || got.TurnSeconds != 228 || got.PrefillTokps != 252.9 || got.DepthTokens != 32780 {
+		t.Errorf("measurement = %+v, want the seconds and the rates behind them", got)
 	}
-	if got.Method != "ollama_native" {
-		t.Errorf("Method = %q, want ollama_native", got.Method)
+	if got.GPUModel != "RTX" || got.VRAMTotalMB != 24000 || got.DriverVersion != "595" ||
+		got.AppliedWindow != 200704 || got.KVCacheType != "q4_0" || got.NumParallel != 1 {
+		t.Errorf("configuration = %+v, want what the stored figure may answer for", got)
+	}
+	if got.Method != "ollama_eval" {
+		t.Errorf("Method = %q, want ollama_eval", got.Method)
 	}
 	if got.EngineKind != "ollama" || got.EngineVersion != "0.32.13" {
 		t.Errorf("engine = %q/%q, want ollama/0.32.13", got.EngineKind, got.EngineVersion)
@@ -294,20 +287,22 @@ func TestBenchMeasurement_RefusesToGuessTheSubject(t *testing.T) {
 		bench BenchResult
 	}{
 		{"a failed run is not a measurement",
-			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4", Failed: true}},
-		{"a zero rate is not a measurement",
-			BenchResult{TokensPerSec: 0, ModelID: "heavy", VariantID: "q4"}},
+			BenchResult{TurnSeconds: 228, ModelID: "heavy", VariantID: "q4", Failed: true}},
+		{"no seconds is not a measurement",
+			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q4"}},
+		{"a lower bound is not a stored speed",
+			BenchResult{TurnFloorSeconds: 240, ModelID: "heavy", VariantID: "q4"}},
 		{"an unlabelled model cannot be keyed",
-			BenchResult{TokensPerSec: 26, VariantID: "q4"}},
+			BenchResult{TurnSeconds: 228, VariantID: "q4"}},
 		{"an unlabelled variant cannot be keyed",
-			BenchResult{TokensPerSec: 26, ModelID: "heavy"}},
+			BenchResult{TurnSeconds: 228, ModelID: "heavy"}},
 		{"a variant the catalog does not have cannot be keyed",
-			BenchResult{TokensPerSec: 26, ModelID: "heavy", VariantID: "q8"}},
+			BenchResult{TurnSeconds: 228, ModelID: "heavy", VariantID: "q8"}},
 		{"a model the catalog does not have cannot be keyed",
-			BenchResult{TokensPerSec: 26, ModelID: "nosuch", VariantID: "q4"}},
+			BenchResult{TurnSeconds: 228, ModelID: "nosuch", VariantID: "q4"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			sha, got := benchMeasurement(tt.bench, recTestManifests(), "ollama", "0.32.13")
+			sha, got := benchMeasurement(tt.bench, recTestManifests(), BenchDeps{EngineKind: "ollama", EngineVersion: "0.32.13"})
 			if sha != "" {
 				t.Errorf("key = %q, want empty (record nothing)", sha)
 			}
@@ -318,52 +313,48 @@ func TestBenchMeasurement_RefusesToGuessTheSubject(t *testing.T) {
 	}
 }
 
-// TestInteractiveFloorVerdict_RestsOnTheShallowRateAlone.
-//
-// PRODUCT CONTRACT — owner ruling 2026-09-04, recorded in
-// docs/decisions/20260904/0000-retire-the-long-context-sweep.md
-// (waired-agent#1169). The #624 long-context sweep was the only other
-// input to this verdict; it is gone, and the figure a person is shown in
-// setup is now the whole of the comparison.
-//
-// This inverts TestRecommendationFromBench_DepthDecodeBinds and
-// TestInteractiveFloorVerdict_OutOfMemoryIsNotSlowness, both removed in
-// the same change. A host that decodes above the floor at zero depth and
-// crawls at 128k is no longer noticed — accepted, and recorded there.
-func TestInteractiveFloorVerdict_RestsOnTheShallowRateAlone(t *testing.T) {
-	cfg := agentconfig.InferenceConfig{}
-	floor := router.CodingAgentSelectionFloorTokps
-
-	cases := []struct {
+// TestSpeedVerdict_JudgesSecondsPerRequest replaces
+// TestInteractiveFloorVerdict_RestsOnTheShallowRateAlone, which decision
+// 20260904/0000 pinned and decision 3 of docs/decisions/20260913/2245 (its
+// Consequences name this test) supersedes: the verdict is one request's
+// seconds against the line, on the finished figure or on a lower bound
+// already past it. A rate judges nothing.
+func TestSpeedVerdict_JudgesSecondsPerRequest(t *testing.T) {
+	line := hostfit.ModelTurnBudgetSeconds
+	for _, c := range []struct {
 		name  string
-		tokps float64
-		below bool
+		bench BenchResult
+		over  bool
 	}{
-		// The measured sv-evox2 figure: it used to be dragged below the
-		// floor by a 42 tok/s decode at 128k, and no longer is.
-		{"clears the floor", 81.5, false},
-		{"at the floor", floor, false},
-		{"below the floor", floor - 1, true},
-	}
-	for _, c := range cases {
+		{"228 s is over the line", BenchResult{TurnSeconds: 228, TokensPerSec: 15.8, Capacity: 1}, true},
+		{"70 s is inside it", BenchResult{TurnSeconds: 70, TokensPerSec: 45.7, Capacity: 4}, false},
+		{"a 195 s bound is already over", BenchResult{TurnFloorSeconds: 195, Capacity: 1}, true},
+		{"a 120 s bound says nothing yet", BenchResult{TurnFloorSeconds: 120, Capacity: 1}, false},
+		{"a slow rate with no seconds is no claim", BenchResult{TokensPerSec: 5, Capacity: 1}, false},
+	} {
 		t.Run(c.name, func(t *testing.T) {
-			v := interactiveFloorVerdict(BenchResult{TokensPerSec: c.tokps, Capacity: 4}, cfg)
-			if v.Below != c.below {
-				t.Errorf("Below = %v, want %v (measured %v, floor %v)", v.Below, c.below, c.tokps, floor)
+			v := speedVerdictOf(c.bench)
+			if v.Over != c.over || v.Budget != line {
+				t.Errorf("verdict = %+v, want Over=%v against %v", v, c.over, line)
 			}
-			if v.Measured != c.tokps {
-				t.Errorf("Measured = %v, want the boot benchmark's own rate %v", v.Measured, c.tokps)
+			rec := recommendationFromBench(c.bench, storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
+			if (rec != nil) != c.over {
+				t.Errorf("recommendation = %+v, want one only when over the line", rec)
 			}
-			if v.Floor != floor {
-				t.Errorf("Floor = %v, want %v", v.Floor, floor)
+			if rec != nil && rec.TurnSeconds != c.bench.TurnSeconds && rec.TurnFloorSeconds != c.bench.TurnFloorSeconds {
+				t.Errorf("recommendation carries %+v, want the figure it rests on", rec)
 			}
 		})
 	}
-
-	// And the proposal follows the same single input.
-	if rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 81.5, Capacity: 4},
-		storeWithActive(t), cpuHost(), recTestManifests(), cfg, ""); rec != nil {
-		t.Errorf("a host above the floor must not be offered a lighter model: %+v", rec)
+	for _, c := range []struct {
+		name  string
+		bench BenchResult
+	}{
+		{"failed", BenchResult{TurnSeconds: 400, Capacity: 1, Failed: true}},
+		{"skipped", BenchResult{TurnSeconds: 400, Capacity: 0}},
+	} {
+		if rec := recommendationFromBench(c.bench, storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
+			t.Errorf("%s run → want nil, got %+v", c.name, rec)
+		}
 	}
 }

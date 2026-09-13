@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // seedActiveReady makes EngineReady() answer true on a provider built by
@@ -187,13 +188,13 @@ func TestBenchmarkJob_NotReadyIsNotACompletionRecord(t *testing.T) {
 	measuredAt := time.Now().UTC().Add(-time.Hour)
 	if err := p.store.Update(func(s *catalog.State) {
 		s.LastBenchmark = &catalog.BenchmarkRecord{
-			Gen: 5, MeasuredTokps: 99, Method: benchMethodOllamaEval, MeasuredAt: measuredAt,
+			Gen: 5, MeasuredTokps: 99, Method: signer.BenchmarkMethodOllamaEval, MeasuredAt: measuredAt,
 		}
 	}); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
 
-	waitDone(t, p.startBenchmarkJob(7))
+	waitDone(t, p.startBenchmarkJob(7, management.BenchmarkModeEnsure))
 
 	got := p.BenchmarkStatus()
 	if got.State != management.BenchmarkStateDone {
@@ -227,7 +228,7 @@ func TestBenchmarkJob_NotReadyIsNotACompletionRecord(t *testing.T) {
 // mesh this host has no working engine.
 func TestBenchmarkJob_NotReadyStillDeRatesTheNode(t *testing.T) {
 	p := benchJobProvider(t, func(context.Context) BenchResult { return notReadyBench() })
-	waitDone(t, p.startBenchmarkJob(0))
+	waitDone(t, p.startBenchmarkJob(0, management.BenchmarkModeEnsure))
 	if got := p.AdvertisedCapacity(); got != 1 {
 		t.Errorf("AdvertisedCapacity = %d, want 1 (0 would advertise UNLIMITED)", got)
 	}
