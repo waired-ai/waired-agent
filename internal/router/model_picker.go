@@ -98,12 +98,12 @@ func translateRankError(err error) error {
 // it from drifting away from the control plane again.
 func (in PickInput) shared() modelrank.PickInput {
 	return modelrank.PickInput{
-		Catalog:          in.Catalog,
-		Host:             in.Hardware.HostFit(),
-		GPUs:             in.Hardware.GPUSummaries(),
-		Engine:           in.Engine,
-		EngineVersion:    in.EngineVersion,
-		PreferredModelID: in.PreferredModelID,
+		Catalog:           in.Catalog,
+		Host:              in.Hardware.HostFit(),
+		GPUs:              in.Hardware.GPUSummaries(),
+		Engine:            in.Engine,
+		EngineVersion:     in.EngineVersion,
+		PreferredModelID:  in.PreferredModelID,
 		Measured:          in.Measured,
 		TurnBudgetSeconds: in.TurnBudgetSeconds,
 		// Left false deliberately: this side serves. See EngineVersion.

@@ -275,6 +275,10 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 				{Depth: 8192, Tokps: 690.5, Samples: 2, SpreadPct: 4.2, Bound: true},
 			},
 		},
+		Speed: &inference.SpeedReading{
+			VariantID: "q4-gguf", DepthTokens: 32768, PrefillTokps: 252.9, DecodeTokps: 15.8,
+			TurnSeconds: 228.3, TurnFloorSeconds: 0, MeasuredAt: "2026-09-14T01:02:03.456Z",
+		},
 	}
 	wire, err := json.Marshal(server)
 	if err != nil {
@@ -297,6 +301,13 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 	// never added here, so the field this test exists to protect went
 	// unprotected for the one field that had actually moved. Completed
 	// with the #1127 fields rather than left as a second hole.
+	// The seconds reading (waired-ai/waired-agent#1341): what a requester
+	// ranks on, so every field has to survive the trip.
+	if s := client.Speed; s == nil || s.VariantID != "q4-gguf" || s.DepthTokens != 32768 ||
+		s.PrefillTokps != 252.9 || s.DecodeTokps != 15.8 || s.TurnSeconds != 228.3 ||
+		s.MeasuredAt != "2026-09-14T01:02:03.456Z" {
+		t.Errorf("speed reading did not survive the trip: %+v", client.Speed)
+	}
 	if client.ModelResident == nil || *client.ModelResident != resident {
 		t.Errorf("ModelResident round-trip: got %v, want %v", client.ModelResident, resident)
 	}

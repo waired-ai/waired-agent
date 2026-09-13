@@ -10,10 +10,10 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
-	"github.com/waired-ai/waired-agent/internal/router"
-	"github.com/waired-ai/waired-agent/proto/signer"
-	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/internal/notice"
+	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // SetLastBench records the most recent boot/explicit benchmark result so
@@ -389,11 +389,11 @@ func recommendationFromBench(
 	}
 
 	rec := &management.BenchmarkRecommendation{
-		Direction:     management.RecommendationLighter,
-		FromModelID:   st.Active.ModelID,
-		FromVariantID: st.Active.VariantID,
-		ToModelID:     cand.Manifest.ModelID,
-		ToVariantID:   cand.Variant.VariantID,
+		Direction:        management.RecommendationLighter,
+		FromModelID:      st.Active.ModelID,
+		FromVariantID:    st.Active.VariantID,
+		ToModelID:        cand.Manifest.ModelID,
+		ToVariantID:      cand.Variant.VariantID,
 		MeasuredTokps:    bench.DecodeTokps,
 		TurnSeconds:      v.TurnSeconds,
 		TurnFloorSeconds: v.TurnFloorSeconds,

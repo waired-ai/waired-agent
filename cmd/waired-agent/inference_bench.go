@@ -58,7 +58,7 @@ type BenchResult struct {
 	Samples          int
 
 	Failed bool
-	Err       string
+	Err    string
 	// Outcome says WHY there is or is not a number, so an absent engine
 	// stops reading as a slow host (#203). Failed stays the "do not treat
 	// this as a measurement" flag every consumer already gates on --
