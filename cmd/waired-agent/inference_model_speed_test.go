@@ -60,7 +60,11 @@ func TestMeasureModelSpeed_ASecondSampleOnlyNearTheLine(t *testing.T) {
 }
 
 // A model that stops before the minimum sample length gets one more try
-// with another prompt; a prefill shallower than asked is refused.
+// with another prompt. An engine that truncates the prompt to a window this
+// host did not report is measured once more inside what it prefilled — an
+// engine serving at its default context answered, and is not a failure
+// (the CI routing sentinel's tiny model at ~2,048 tokens) — and one that
+// leaves too little to measure is refused.
 func TestMeasureModelSpeed_ShortDecodesAndTruncatedPrompts(t *testing.T) {
 	stopsOnce := &fakeOllamaEngine{evalCap: func(n int) int {
 		if n == 0 {
@@ -85,10 +89,25 @@ func TestMeasureModelSpeed_ShortDecodesAndTruncatedPrompts(t *testing.T) {
 		t.Error("a model that never reached the minimum decode was accepted")
 	}
 
-	truncated := &fakeOllamaEngine{maxPromptTokens: 16000}
-	if _, err := measureModelSpeed(context.Background(), withDefaults(speedEngine(t, truncated))); err == nil ||
+	for _, window := range []int{16000, 2050} {
+		truncated := &fakeOllamaEngine{maxPromptTokens: window}
+		got, err := measureModelSpeed(context.Background(), withDefaults(speedEngine(t, truncated)))
+		if err != nil {
+			t.Fatalf("an engine serving a %d-token window: %v", window, err)
+		}
+		want := window - modelSpeedResizeMargin - hostfit.SpeedMeasurementCompletionTokens
+		if got.DepthTokens < want*7/10 || got.DepthTokens > window {
+			t.Errorf("window %d: DepthTokens = %d, want about %d", window, got.DepthTokens, want)
+		}
+		if got.TurnSeconds <= 0 {
+			t.Errorf("window %d: no figure", window)
+		}
+	}
+
+	tooSmall := &fakeOllamaEngine{maxPromptTokens: 900}
+	if _, err := measureModelSpeed(context.Background(), withDefaults(speedEngine(t, tooSmall))); err == nil ||
 		!strings.Contains(err.Error(), "truncated") {
-		t.Errorf("a truncated prefill was accepted: %v", err)
+		t.Errorf("a window too small to measure in was accepted: %v", err)
 	}
 }
 
@@ -120,9 +139,9 @@ func TestMeasureModelSpeed_DepthFollowsTheServedWindow(t *testing.T) {
 		t.Errorf("TurnSeconds = %v, want it normalised to the canonical depth (%v)", got.TurnSeconds, want)
 	}
 
-	deps.AppliedWindow = 8192
+	deps.AppliedWindow = 2048
 	if _, err := measureModelSpeed(context.Background(), deps); err == nil {
-		t.Error("an 8,192 window was measured")
+		t.Error("a 2,048 window was measured")
 	}
 }
 

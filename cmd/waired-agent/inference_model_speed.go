@@ -40,10 +40,16 @@ const (
 	// tail are not counted by the line estimate.
 	modelSpeedDepthMargin = 2048
 
-	// modelSpeedMinDepthTokens is the shallowest measurement worth
-	// publishing. A window that cannot hold this is not one a coding agent
-	// is served from, and a figure from it would describe something else.
-	modelSpeedMinDepthTokens = 8192
+	// modelSpeedMinDepthTokens is the shallowest measurement worth taking at
+	// all. Below it the request is dominated by fixed overhead rather than
+	// by prefill and decode. A host measured shallower than the canonical
+	// depth publishes the depth it reached beside the figure
+	// (DepthTokens), so the difference stays visible.
+	modelSpeedMinDepthTokens = 1024
+
+	// modelSpeedResizeMargin is what a prompt resized to the engine's own
+	// window leaves clear of it, beside the decode.
+	modelSpeedResizeMargin = 256
 
 	// modelSpeedCalibrationLines sizes the request that measures what one
 	// filler line costs in tokens on this model — the exchange rate only the
@@ -183,7 +189,8 @@ func measureModelSpeed(ctx context.Context, deps BenchDeps) (modelSpeed, error) 
 
 	line := deps.modelSpeedLine()
 	var samples []modelSpeedSample
-	for attempt := 0; len(samples) < 2 && attempt < 3; attempt++ {
+	resized := false
+	for attempt := 0; len(samples) < 2 && attempt < 4; attempt++ {
 		trial := len(samples) + 1
 		s, stalledFor, err := runModelSpeedSample(ctx, deps, sampler, lines, fmt.Sprintf("%s-%d", nonce, attempt), depth, trial)
 		if stalledFor > 0 {
@@ -196,6 +203,23 @@ func measureModelSpeed(ctx context.Context, deps BenchDeps) (modelSpeed, error) 
 			return modelSpeed{}, err
 		}
 		if !modelSpeedDepthAccepted(depth, s.promptTokens) {
+			// The engine truncated the prompt to a window this host did not
+			// report — an engine serving without an applied tuning, such as
+			// a CI runner's tiny model at the engine's default context. What
+			// it prefilled IS its window: measure once more inside it rather
+			// than call an engine that answered a failure. Only once, and only
+			// shallower: a prompt the engine still refuses is an error.
+			if !resized && s.promptTokens > 0 && s.promptTokens < depth {
+				resized = true
+				next := s.promptTokens - modelSpeedResizeMargin - hostfit.SpeedMeasurementCompletionTokens
+				if next >= modelSpeedMinDepthTokens {
+					deps.Logger.Info("model speed measurement: the engine's window is smaller than the prompt; measuring inside it",
+						"asked_tokens", depth, "prefilled_tokens", s.promptTokens, "depth_tokens", next)
+					depth = next
+					lines = int(math.Ceil(float64(depth) / tokensPerLine))
+					continue
+				}
+			}
 			return modelSpeed{}, fmt.Errorf("the engine prefilled %d tokens for a %d-token prompt (window %d); refusing to judge a truncated prompt",
 				s.promptTokens, depth, deps.AppliedWindow)
 		}
