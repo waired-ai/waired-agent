@@ -22,6 +22,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -86,6 +87,35 @@ func TestBundledSourcesResolve(t *testing.T) {
 					if !ok {
 						t.Errorf("source.tag %q does not resolve in the ollama registry", v.Source.Tag)
 						return
+					}
+					// The build behind the name, not only the name. A pinned
+					// tag whose manifest moved is refused by every agent's
+					// pull (waired-agent#1305); this is where the catalog
+					// hears about it first.
+					if v.Source.Digest != "" {
+						got, err := ollama.TagDigest(ctx, v.Source.Tag)
+						if err != nil {
+							t.Logf("could not read the digest of %s: %v", v.Source.Tag, err)
+						} else if got != v.Source.Digest {
+							t.Errorf("source.tag %q now serves manifest %s; the catalog pins %s. "+
+								"Every agent refuses this pull until the entry is re-measured "+
+								"and the digest, size and records are updated (#1305)",
+								v.Source.Tag, got, v.Source.Digest)
+						}
+					}
+					// The size every fit, recommendation and download bar
+					// reads. estimated_weight_gb is the tag's whole pull,
+					// projector included; flash-next's sat at 55 GB against
+					// a 79 GB tag for a week (#1305).
+					if v.EstimatedWeightGB > 0 {
+						size, err := ollama.TagSize(ctx, v.Source.Tag)
+						if err != nil {
+							t.Logf("could not read the size of %s: %v", v.Source.Tag, err)
+						} else if got := float64(size) / 1e9; math.Abs(got-v.EstimatedWeightGB) > 0.05*v.EstimatedWeightGB {
+							t.Errorf("source.tag %q weighs %.2f GB in the registry; estimated_weight_gb "+
+								"says %.2f (more than 5%% apart). Every fit and download figure reads "+
+								"the catalog's number (#1305)", v.Source.Tag, got, v.EstimatedWeightGB)
+						}
 					}
 					// Existing is not enough. A tag that brings neither a
 					// built-in renderer nor a template layer is served

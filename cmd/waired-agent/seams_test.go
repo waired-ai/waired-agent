@@ -24,5 +24,9 @@ func TestMain(m *testing.M) {
 	tagSizeFn = func(context.Context, string) (int64, error) {
 		return 0, errors.New("tagSizeFn: sealed in TestMain; swap it in the test that wants a size")
 	}
+	// The digest read is the same kind of request, for a pinned tag.
+	tagDigestFn = func(context.Context, string) (string, error) {
+		return "", errors.New("tagDigestFn: sealed in TestMain; swap it in the test that wants a digest")
+	}
 	os.Exit(m.Run())
 }

@@ -4677,6 +4677,15 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		// not outlive a cancel.
 		if tag != sizedTag {
 			sizedTag = tag
+			// A pinned tag that now names other weights is refused before
+			// a byte moves (waired-agent#1305), and not retried: the
+			// registry will keep answering the same.
+			if v, ok := variantByID(manifest, variantID); ok {
+				if changed := p.sourceChangedFailure(dlCtx, modelID, v); changed != "" {
+					err, failure = errSourceChanged, changed
+					break
+				}
+			}
 			p.seedPullTotal(dlCtx, modelID, tag)
 		}
 		err = p.puller.Pull(dlCtx, tag, want, func(pr download.Progress) {

@@ -25,6 +25,8 @@ package ollamaregistry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -213,6 +215,53 @@ func (c *Client) TagSize(ctx context.Context, ref string) (int64, error) {
 		return 0, fmt.Errorf("ollamaregistry: %s: the manifest names no sized layer", ref)
 	}
 	return total, nil
+}
+
+// TagDigest is the digest a catalog pins a tag to: "sha256:" and the hex
+// SHA-256 of the manifest bytes the registry serves for ref.
+//
+// It exists because a tag is a name, not a build. A community namespace
+// can push new weights under an unchanged tag, and frob/qwen3.8-flash-next
+// did — 55 GB became 79 GB and every size, fit and ETA figure the catalog
+// carried went stale with no signal (waired-agent#1305). The manifest
+// names every layer by its own digest, so its bytes change whenever any
+// layer does, and hashing them is the whole comparison.
+//
+// The bytes are hashed as served, not re-encoded: both registries answer
+// the same bytes on every fetch (read twice per tag, 2026-09-14), and a
+// re-encoding would hash something no registry published.
+func (c *Client) TagDigest(ctx context.Context, ref string) (string, error) {
+	base, namespace, model, tag, err := c.splitRef(ref)
+	if err != nil {
+		return "", err
+	}
+	url := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", base, namespace, model, tag)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.docker.distribution.manifest.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+	}, ", "))
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ollamaregistry: GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return "", fmt.Errorf("ollamaregistry: GET %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("ollamaregistry: GET %s: read: %w", url, err)
+	}
+	if len(body) == 0 {
+		return "", fmt.Errorf("ollamaregistry: GET %s: empty manifest", url)
+	}
+	sum := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // templateMediaType is the manifest layer an ollama tag uses to carry its
