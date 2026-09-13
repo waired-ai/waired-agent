@@ -638,9 +638,9 @@ func markedPick(t *testing.T, families []CatalogFamily) string {
 	return marked[0]
 }
 
-// PRODUCT CONTRACT (waired-agent#784): the badge moves off a model this
-// host has MEASURED below its own floor, and the next rung down takes
-// it.
+// PRODUCT CONTRACT (waired-agent#784; in seconds per request since
+// waired-ai/waired-agent#1341): the badge moves off a model this host has
+// MEASURED over the line, and the next rung down takes it.
 //
 // This is the rc9 defect end to end. On the reported Windows host the
 // picker default was the 9B, the host benchmarked it at 11-12 tok/s, the
@@ -655,13 +655,13 @@ func TestInferenceCatalog_MeasuredSlowMovesTheBadge(t *testing.T) {
 	}
 
 	inf.measuredRates = map[string]router.MeasuredRate{
-		fixtureVariantSHA(t, "qwen3-8b-instruct"): {Tokps: 11},
+		fixtureVariantSHA(t, "qwen3-8b-instruct"): {Tokps: 11, TurnSeconds: 400},
 	}
-	inf.measuredFloor = 60
+	inf.measuredFloor = 190
 
 	_, after := doGet(t, newCatalogTestServer(t, inf, t.TempDir()), "/waired/v1/inference/catalog")
 	if got := markedPick(t, after.Families); got != "qwen3-4b-instruct" {
-		t.Errorf("after the 8B measured 11 tok/s, badge = %q, want qwen3-4b-instruct", got)
+		t.Errorf("after the 8B measured 400 s per request, badge = %q, want qwen3-4b-instruct", got)
 	}
 
 	// The row that lost the badge has to say why. A badge that moves
@@ -673,8 +673,8 @@ func TestInferenceCatalog_MeasuredSlowMovesTheBadge(t *testing.T) {
 			continue
 		}
 		said = true
-		if f.MeasuredTokps != 11 {
-			t.Errorf("8B row reports %v tok/s, want 11", f.MeasuredTokps)
+		if f.MeasuredTokps != 11 || f.MeasuredTurnSeconds != 400 {
+			t.Errorf("8B row reports %v tok/s / %v s, want 11 / 400", f.MeasuredTokps, f.MeasuredTurnSeconds)
 		}
 		if f.RecommendedPick {
 			t.Error("the measured-slow model is still marked as this host's pick")
