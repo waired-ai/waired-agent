@@ -75,29 +75,70 @@ type NetworkMapPeer struct {
 	NetworkID string `json:"network_id,omitempty"`
 }
 
-// PeerGrant is the CP-injected annotation on a cross-network Public
-// Share peer entry (public share spec §7). It tells the agent why a
-// foreign-network peer appears in its map and how to display it —
-// the authoritative grant state lives CP-side; this is a projection.
+// Grant kinds (PeerGrant.Kind). Both sides of the wire compare the
+// literal, so the control plane and the agent reference these rather
+// than re-spelling the strings.
+const (
+	// GrantKindPublic is a temporary Public Share guest pass (public
+	// share spec §7): pseudonymous, acquired and renewed by the consumer.
+	GrantKindPublic = "public"
+	// GrantKindTeam is a persistent Team Share grant (team share spec
+	// §4.1): derived by the control plane from team membership and the
+	// node's share switches, shown under the owner's real name, never
+	// acquired or renewed by an agent.
+	GrantKindTeam = "team"
+)
+
+// Grant roles (PeerGrant.Role): the foreign peer's role as seen from the
+// map's Self device.
+const (
+	// GrantRoleProvider — the peer serves inference to Self.
+	GrantRoleProvider = "provider"
+	// GrantRoleConsumer — the peer uses Self's engine.
+	GrantRoleConsumer = "consumer"
+	// GrantRoleBoth — the peer does both: grants run in each direction
+	// between the two devices. The wire carries one entry per peer, so
+	// the two directions have to share one role. Sent on team grants only
+	// (GrantKindTeam), where two teammates sharing their machines with
+	// each other is the ordinary case; a Public Share entry keeps one of
+	// the two single roles, since agents that declare only
+	// CapabilityPublicShareV1 do not know this value.
+	GrantRoleBoth = "both"
+)
+
+// PeerGrant is the CP-injected annotation on a cross-network peer entry
+// — a Public Share peer (public share spec §7) or a Team Share peer
+// (team share spec §9). It tells the agent why a foreign-network peer
+// appears in its map and how to display it — the authoritative grant
+// state lives CP-side; this is a projection.
 //
 // All fields omitempty: the zero value must vanish from canonical
-// JSON so maps without public-share peers keep their pre-v0.2.0
+// JSON so maps without cross-network peers keep their pre-v0.2.0
 // signed bytes.
 type PeerGrant struct {
 	// ID is the CP-issued grant identifier. Agents echo it in usage
 	// reports (PublicUsageEntry.GrantID).
 	ID string `json:"id,omitempty"`
-	// Kind is the sharing flavour. v1 uses "public" only; "team" is
-	// reserved for future same-schema team sharing.
+	// Kind is the sharing flavour: GrantKindPublic or GrantKindTeam.
+	// The control plane only sends a kind to a poller that declared
+	// its capability (CapabilityPublicShareV1 / CapabilityTeamShareV1).
 	Kind string `json:"kind,omitempty"`
 	// Role is the peer's role as seen from the map's Self device:
-	// "provider" when the peer serves inference to Self, "consumer"
-	// when the peer is a guest using Self's engine.
+	// GrantRoleProvider when the peer serves inference to Self,
+	// GrantRoleConsumer when the peer is a guest using Self's engine, and
+	// on team grants GrantRoleBoth when it does both.
 	Role string `json:"role,omitempty"`
-	// Pseudonym is the stable nickname for the peer's owner account
-	// (e.g. "guest-a7f3"), the only owner identity agents may show —
-	// real account identifiers never cross the trust boundary.
+	// Pseudonym is the stable nickname for a Public Share peer's owner
+	// account (e.g. "guest-a7f3"), the only owner identity agents may
+	// show for a public grant — real account identifiers never cross
+	// that trust boundary. Empty on team grants.
 	Pseudonym string `json:"pseudonym,omitempty"`
+	// DisplayName is the real display name of a Team Share peer's owner
+	// (team share spec §9; owner ruling 2026-09-13, waired#1370): team
+	// members see each other by name. Empty on public grants, so
+	// Pseudonym keeps a single meaning. A reader shows DisplayName when
+	// it is set and Pseudonym otherwise, without having to look at Kind.
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // EndpointCandidate is one possible address to reach a peer on the data

@@ -38,6 +38,12 @@ var capabilityNotDeclared = map[string]string{
 	"CapabilityOnboardingV2": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV3": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV4": "conditional: appended when OnboardingCapable",
+	// Published in proto ahead of its reader (waired#1371). The agent
+	// declares it once it can serve and route team peers — the team
+	// gate, the routing tier and the real-name display — which is
+	// waired#1374; declaring it earlier would let the control plane send
+	// team peers to an agent that treats them as public ones.
+	"CapabilityTeamShareV1": "not yet: declared by the Team Share agent change, waired#1374",
 }
 
 // unconditionalCapabilities returns the names in the `caps := []string{…}`

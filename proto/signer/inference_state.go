@@ -122,6 +122,18 @@ type InferenceState struct {
 	PublicShare    bool `json:"public_share,omitempty"`
 	PublicCapacity int  `json:"public_capacity,omitempty"`
 
+	// TeamShare is the CP-injected Team Share state for the device's OWN
+	// Self entry only (team share spec §6.2, §9): true while the owner's
+	// "share with team" switch is on and the device is effectively shared
+	// with its team. The serving agent's team gate refuses team consumers
+	// while it is false, and a true→false transition cancels the team
+	// requests already running. The admin's pool switch does not reach
+	// it — taking a node out of the pool is graceful and only removes the
+	// team peers from the map. Never set on peer entries. omitempty keeps
+	// the signed map byte-identical for the (default OFF) common case;
+	// only emitted to pollers that declared CapabilityTeamShareV1.
+	TeamShare bool `json:"team_share,omitempty"`
+
 	// DesiredEngine / DesiredModelID / DesiredBenchmarkGen are the
 	// CP-injected declarative onboarding targets (waired#835 §6) the
 	// NAVI setup flow drives: which engine the agent should install and

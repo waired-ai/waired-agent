@@ -134,6 +134,8 @@ var receiveOnly = []exemption{
 		"CP-injected model-residency setting; the agent reads it to set how long the engine holds a model (#861)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredShare",
 		"CP-injected mesh-share setting; the agent reads it, and never writes it — the distribution has one writer (waired#1297)"},
+	{reflect.TypeFor[signer.InferenceState](), "TeamShare",
+		"CP-injected Team Share switch for the Self entry; the agent reads it to gate team consumers (waired#1371, reader waired#1374)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
