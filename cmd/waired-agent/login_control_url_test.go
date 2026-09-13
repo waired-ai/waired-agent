@@ -96,3 +96,56 @@ func TestDaemonControlURLResolver_ReadsAgentEnvAtEachCall(t *testing.T) {
 		t.Errorf("explicit --control lost to agent.env: %q", url)
 	}
 }
+
+// TestExplicitControlURL: an environment URL that is only agent.env's copy,
+// loaded by systemd's EnvironmentFile, leaves the explicit tier empty; a
+// --control flag or a different environment URL stays explicit
+// (waired-agent#1377).
+func TestExplicitControlURL(t *testing.T) {
+	const dev, prod = "https://app.dev.waired.net", "https://app.waired.ai"
+	for _, tc := range []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		env        string
+		fileAtBoot string
+		want       string
+	}{
+		{"env is agent.env's copy", dev, false, dev, dev, ""},
+		{"same URL after normalization", "app.dev.waired.net/", false, "app.dev.waired.net/", dev + "/", ""},
+		{"env differs from agent.env", prod, false, prod, dev, prod},
+		{"no agent.env at boot", dev, false, dev, "", dev},
+		{"no env", "", false, "", dev, ""},
+		{"--control passed, even when it matches agent.env", dev, true, "", dev, dev},
+		{"--control passed over a matching env", prod, true, dev, dev, prod},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := explicitControlURL(tc.flagValue, tc.flagSet, tc.env, tc.fileAtBoot); got != tc.want {
+				t.Errorf("explicitControlURL(%q, %v, %q, %q) = %q, want %q",
+					tc.flagValue, tc.flagSet, tc.env, tc.fileAtBoot, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDaemonControlURLResolver_EnvFromAgentEnvFollowsTheFileEdit: the
+// service started with agent.env naming dev, so systemd put dev in the
+// environment. Editing the file without a restart moves the next sign-in,
+// and removing the line falls back to the built-in default
+// (waired-agent#1377).
+func TestDaemonControlURLResolver_EnvFromAgentEnvFollowsTheFileEdit(t *testing.T) {
+	const dev, prod = "https://app.dev.waired.net", "https://app.waired.ai"
+	file := dev
+	resolve := newDaemonControlURLResolver(explicitControlURL(dev, false, dev, file), func() string { return file }, testLogger())
+	if url, src := resolve(); url != dev || src != "agent.env" {
+		t.Errorf("at boot: (%q, %q), want dev from agent.env", url, src)
+	}
+	file = prod
+	if url, src := resolve(); url != prod || src != "agent.env" {
+		t.Errorf("after editing agent.env to prod: (%q, %q), want prod from agent.env", url, src)
+	}
+	file = ""
+	if url, src := resolve(); url != controlurl.Default || src != "built-in default" {
+		t.Errorf("after removing the line: (%q, %q), want the built-in default", url, src)
+	}
+}

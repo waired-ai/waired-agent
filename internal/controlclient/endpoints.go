@@ -78,8 +78,8 @@ func (c *Client) AdvertiseEndpoints(ctx context.Context, deviceID string, candid
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		buf, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("controlclient: advertise endpoints status %d: %s", resp.StatusCode, string(buf))
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("controlclient: advertise endpoints %s", statusText(resp.StatusCode, buf))
 	}
 	return nil
 }

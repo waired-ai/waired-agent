@@ -50,6 +50,6 @@ func (c *Client) Revoke(ctx context.Context) error {
 		// Token no longer resolves — already revoked. Same end state.
 		return nil
 	default:
-		return fmt.Errorf("revoke: status %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("revoke: %s", statusText(resp.StatusCode, body))
 	}
 }

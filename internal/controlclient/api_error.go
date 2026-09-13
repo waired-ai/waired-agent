@@ -1,7 +1,9 @@
 package controlclient
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -33,4 +35,25 @@ func decodeAPIError(body []byte) (apiError, bool) {
 		Message: strings.Join(strings.Fields(env.Error.Message), " "),
 		Hint:    strings.Join(strings.Fields(env.Error.Hint), " "),
 	}, true
+}
+
+// statusText renders a non-200 control-plane response as "status %d: "
+// followed by what the control plane said. When the body is the error
+// envelope that is its message, type and hint — "status 403: this device
+// is already enrolled to a different account (account_mismatch); <hint>" —
+// rather than the raw JSON (waired#1395). Any other body is printed as it
+// came, trimmed. The message text is kept verbatim: classifyAuthKeyError
+// recognises an old control plane by it.
+func statusText(status int, body []byte) string {
+	if ae, ok := decodeAPIError(body); ok && ae.Message != "" {
+		msg := fmt.Sprintf("status %d: %s", status, ae.Message)
+		if ae.Type != "" {
+			msg += " (" + ae.Type + ")"
+		}
+		if ae.Hint != "" {
+			msg += "; " + ae.Hint
+		}
+		return msg
+	}
+	return fmt.Sprintf("status %d: %s", status, bytes.TrimSpace(body))
 }

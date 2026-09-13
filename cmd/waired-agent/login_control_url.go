@@ -57,6 +57,37 @@ func resolveDaemonControlURLWithSource(explicit, platformDefault string, logger 
 	return "", ""
 }
 
+// explicitControlURL is the daemon's explicit tier: what --control or
+// $WAIRED_CONTROL_URL names, minus a value that only came from agent.env.
+//
+// On a deb install the systemd unit loads agent.env with EnvironmentFile,
+// so a URL in the file reaches the daemon as $WAIRED_CONTROL_URL too. Taken
+// as explicit, that copy is fixed at service start and outranks the file
+// the resolver reads again at every sign-in: an agent.env edited without a
+// restart lost to its own old value (waired-agent#1377). So when --control
+// was not passed and the environment's URL is the one agent.env held at
+// boot, the value is treated as agent.env's and the explicit tier is left
+// empty. A --control flag, or an environment URL that differs from the
+// file, stays explicit.
+//
+// This is not limited to Linux. launchd and the Windows SCM give the
+// service no env file, so the two can only match there when someone set
+// both to the same URL by hand, and following the file is then harmless.
+func explicitControlURL(flagValue string, flagSet bool, env, agentEnvAtBoot string) string {
+	if flagSet {
+		return flagValue
+	}
+	if env == "" || agentEnvAtBoot == "" {
+		return env
+	}
+	e, errE := controlurl.Normalize(env)
+	f, errF := controlurl.Normalize(agentEnvAtBoot)
+	if errE == nil && errF == nil && e == f {
+		return ""
+	}
+	return env
+}
+
 // newDaemonControlURLResolver returns the resolver a sign-in calls when
 // its request names no control plane. explicit is the daemon's own
 // --control / $WAIRED_CONTROL_URL, fixed at boot; platformDefault is read
