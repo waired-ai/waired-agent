@@ -1047,7 +1047,16 @@ func (r *setupReconciler) startBenchmarkIfDue(d setupDesired) {
 		return
 	}
 	bs := r.provider.BenchmarkStatus()
-	if bs.State != management.BenchmarkStateRunning && bs.Gen < d.benchmarkGen {
+	// Not equal rather than behind. The control plane's counter only moves
+	// forward — except when a revoked device is re-enrolled, which clears
+	// its onboarding state and starts the counter again from 1
+	// (clearOnboardingStateOnRevokedRenew in the private monorepo). This
+	// host keeps its stored generation across that, so "behind" left every
+	// request of the new enrolment answered by a run of the old one, and a
+	// model chosen after re-enrolment was never measured. A stored
+	// generation ahead of the request can only be that restart: this agent
+	// records no generation the control plane did not ask for.
+	if bs.State != management.BenchmarkStateRunning && bs.Gen != d.benchmarkGen {
 		r.provider.startSetupBenchmark(d.benchmarkGen)
 	}
 }
@@ -1943,7 +1952,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		step := signer.SetupStep{ID: setupStepBenchmark}
 		bs := r.provider.BenchmarkStatus()
 		switch {
-		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateDone:
+		case bs.Gen == d.benchmarkGen && bs.State == management.BenchmarkStateDone:
 			step.Status = signer.SetupStatusDone
 			p.Benchmark = &signer.SetupBenchmark{
 				Gen:              bs.Gen,
@@ -1960,7 +1969,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 				OverBudget:       bs.OverBudget,
 				Cached:           bs.Cached,
 			}
-		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateFailed:
+		case bs.Gen == d.benchmarkGen && bs.State == management.BenchmarkStateFailed:
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = benchmarkSetupErrorCode(bs.Outcome)
 			step.ErrorDetail = clampSetupDetail(bs.Error)

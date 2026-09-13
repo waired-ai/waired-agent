@@ -37,6 +37,14 @@ import (
 
 // receiveOnly: written elsewhere, decoded here.
 var receiveOnly = []exemption{
+	// The rate floor of the measured pass, retired by
+	// waired-ai/waired-agent#1341: nothing in this repository or the
+	// control plane passes it any more (both judge in TurnBudgetSeconds),
+	// and proto is additive-only, so the field stays for a caller of the
+	// published package that still sets it — which is the only writer it
+	// has left.
+	{reflect.TypeFor[modelrank.PickInput](), "FloorTokps",
+		"retired by waired-ai/waired-agent#1341; only an outside caller of the published modelrank package still sets it"},
 	// Bundled catalog manifests (proto/catalog/bundled/*.json) are
 	// authored upstream and decoded by the agent. Nothing in this repo
 	// ever writes a manifest, so every manifest field is receive-only;
@@ -196,8 +204,6 @@ var producedInProto = []exemption{
 		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[hostfit.Presentation](), "NotRecommendedReason",
 		"the shared fit projection, built by hostfit.Project"},
-	{reflect.TypeFor[hostfit.Presentation](), "Speed",
-		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[hostfit.Presentation](), "EstimatedTokps",
 		"the shared fit projection, built by hostfit.Project"},
 
@@ -222,8 +228,6 @@ var producedInProto = []exemption{
 	{reflect.TypeFor[modelrank.Pick](), "ContextFloorSatisfied",
 		"the ladder's verdict, built by modelrank.RankModels"},
 	{reflect.TypeFor[modelrank.Pick](), "DecodeEstimate",
-		"the ladder's verdict, built by modelrank.RankModels"},
-	{reflect.TypeFor[modelrank.Pick](), "MeasuredTurnSeconds",
 		"the ladder's verdict, built by modelrank.RankModels"},
 	{reflect.TypeFor[hostfit.Estimate](), "MeetsSpeedFloor",
 		"the roofline decode prediction's own verdict; the ladder's candidate loop seeds it and EstimateOllamaDecode fills it"},
@@ -347,19 +351,13 @@ var producerPending = []exemption{
 	// this field's producer and shown nothing here at all. Empty again,
 	// and that is the point.
 
-	// waired-ai/waired-agent#1341. The seconds verdict's wire landed alone
-	// ahead of the served-model measurement that fills it
-	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2).
-	// The other fields added with these already have same-named writers
-	// elsewhere (HostSpeed.TurnSeconds and friends), so by the name-matching
-	// rule above only these are visible here; the #1341 PR writes all of
-	// them and deletes these entries.
-	{reflect.TypeFor[signer.SetupBenchmark](), "ElapsedSeconds",
-		"waired-ai/waired-agent#1341: the served-model measurement publishes how long its request has run"},
-	{reflect.TypeFor[signer.SetupBenchmark](), "OverBudget",
-		"waired-ai/waired-agent#1341: the served-model measurement publishes that its request is over the line"},
-	{reflect.TypeFor[modelrank.PickInput](), "TurnBudgetSeconds",
-		"waired-ai/waired-agent#1341: the lighter-model and catalog pickers pass hostfit.ModelTurnBudgetSeconds"},
+	// waired-ai/waired-agent#1341's seconds fields took the debt on the same
+	// terms, landing alone in #1352, and the #1341 PR paid it: the setup row
+	// publishes ElapsedSeconds and OverBudget, and the pickers pass
+	// TurnBudgetSeconds. Two entries in producedInProto went with it for the
+	// name-matching reason above — Presentation.Speed and
+	// Pick.MeasuredTurnSeconds now share their names with fields that
+	// management and /healthz write.
 
 	// waired-agent#1346 publishes the layer-count wire ahead of the
 	// placement prediction that fills it (#1337, which owns the proto

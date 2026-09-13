@@ -947,6 +947,26 @@ func TestSetupApplySkipsPresentModelAndAnsweredBenchmark(t *testing.T) {
 	}
 }
 
+// TestSetupApplyMeasuresAfterTheCounterRestarts: a revoked device that is
+// re-enrolled has its onboarding state cleared on the control plane, and
+// the benchmark counter starts again from 1 — while this host still holds
+// the generation of its previous enrolment. A stored generation AHEAD of
+// the request is that restart, and it must not answer the new request.
+// Before this the guard asked "behind", so every request of the new
+// enrolment read as already answered and the model chosen after
+// re-enrolment was never measured.
+func TestSetupApplyMeasuresAfterTheCounterRestarts(t *testing.T) {
+	f := &fakeSetupProvider{
+		modelState: catalog.ModelStateReady, activeModel: "qwen3-8b-instruct",
+		bench: management.BenchmarkStatusResponse{State: management.BenchmarkStateDone, Gen: 5},
+	}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.Apply(context.Background(), desiredFrame("", "qwen3-8b-instruct", 1))
+	if len(f.benchStarts) != 1 || f.benchStarts[0] != 1 {
+		t.Fatalf("benchStarts = %v, want one start at the restarted gen 1", f.benchStarts)
+	}
+}
+
 // TestSetupDesiredModelBecomesTheServedModel is the #230 regression
 // test, and a product contract: the model the wizard writes is the model
 // the device ends up SERVING, not merely one it downloads.
