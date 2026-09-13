@@ -247,4 +247,17 @@ const (
 	// team. That is what makes the fields safe to publish before any
 	// producer fills them in.
 	CapabilityTeamShareV1 = "team-share-v1"
+
+	// CapabilityVariantChoiceV1 marks an agent that honours
+	// InferenceState.DesiredVariantID and DesiredKVCacheType on its own
+	// Self entry: it serves the chosen build of DesiredModelID with the
+	// chosen KV-cache type (waired-ai/waired-agent#1346, #1348).
+	//
+	// Gated for the structural reason every signed field is — an agent
+	// that does not know the fields drops them on canonical re-marshal and
+	// fails verification — and for a semantic one: an agent that parsed
+	// them but still served the default build would report a completed
+	// switch the user did not get. The control plane therefore injects
+	// them only for pollers that declare this.
+	CapabilityVariantChoiceV1 = "variant-choice-v1"
 )

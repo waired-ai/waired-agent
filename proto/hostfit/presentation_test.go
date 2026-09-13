@@ -6,6 +6,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/proto/catalog"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // The three variants every table below draws from. Annotated the way the
@@ -372,6 +373,17 @@ func TestPresentationCanonicalJSON(t *testing.T) {
 	}{
 		{"zero", hostfit.Presentation{}, `{"runnable":false}`},
 		{
+			// waired-ai/waired-agent#1346: the build, its quantization, the
+			// KV-cache type the row was priced with, and the layer counts.
+			"variant and placement",
+			hostfit.Presentation{
+				Runnable: true, VariantID: "q3-gguf", Quantization: "UD-Q3_K_XL",
+				KVCacheType: "q8_0", GPULayers: 63, TotalLayers: 66,
+			},
+			`{"runnable":true,"variant_id":"q3-gguf","quantization":"UD-Q3_K_XL",` +
+				`"kv_cache_type":"q8_0","gpu_layers":63,"total_layers":66}`,
+		},
+		{
 			"full",
 			hostfit.Presentation{
 				Runnable: true, Reason: "insufficient_vram", NeedMB: 23482, HaveMB: 16303,
@@ -489,5 +501,46 @@ func TestVLLMRecommendModel(t *testing.T) {
 	m := catalog.Manifest{ModelID: "m", ContextLength: 262144}
 	if got := hostfit.VLLMRecommendModel(m, presVLLM, small); !got.Fits {
 		t.Errorf("a short VRAM budget produced a recommendation verdict %q; capacity refuses, this does not", got.Reason)
+	}
+}
+
+// TestProjectModelFromNamesTheBuildAndCache pins the identity half of the
+// waired-ai/waired-agent#1346 wire: every projected row says which build
+// it judged and which KV-cache type it priced, so a console offering both
+// as choices can tell its rows apart. The ollama row reads the type the
+// serve tuning exports unless the caller asked for another; the vLLM row
+// reads the engine's own rule (fp8 on Ada and later).
+func TestProjectModelFromNamesTheBuildAndCache(t *testing.T) {
+	m := catalog.Manifest{ModelID: "m", ContextLength: 262144}
+	v := catalog.Variant{
+		VariantID: "q3-gguf", Quantization: "UD-Q3_K_XL",
+		EstimatedWeightGB: 13.15, KVBytesPerTokenFP16: 65536, QualityTier: 66,
+	}
+	h := hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24467}
+
+	got := hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: v, Engine: catalog.RuntimeOllama, Host: h})
+	if got.VariantID != "q3-gguf" || got.Quantization != "UD-Q3_K_XL" {
+		t.Errorf("ollama row names %q / %q, want q3-gguf / UD-Q3_K_XL", got.VariantID, got.Quantization)
+	}
+	if got.KVCacheType != hostfit.OllamaDefaultKVCacheType(h) {
+		t.Errorf("ollama row priced %q, want the default %q", got.KVCacheType, hostfit.OllamaDefaultKVCacheType(h))
+	}
+
+	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{
+		Manifest: m, Variant: v, Engine: catalog.RuntimeOllama, Host: h, KVCacheType: catalog.KVCacheQ4_0,
+	})
+	if got.KVCacheType != catalog.KVCacheQ4_0 {
+		t.Errorf("ollama row asked for q4_0 priced %q", got.KVCacheType)
+	}
+
+	vl := catalog.Variant{VariantID: "fp8", Quantization: "FP8", MinVRAMMB: 20000, QualityTier: 70}
+	ada := []signer.HardwareGPUSummary{{Vendor: "nvidia", VRAMTotalMB: 24564, ComputeCap: "8.9"}}
+	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: catalog.RuntimeVLLM, Host: h, BudgetMB: 24564, GPUs: ada})
+	if got.VariantID != "fp8" || got.KVCacheType != catalog.KVCacheFP8 {
+		t.Errorf("vLLM row on Ada = %q / %q, want fp8 / fp8", got.VariantID, got.KVCacheType)
+	}
+	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: "mlx", Host: h})
+	if got.VariantID != "" || got.KVCacheType != "" {
+		t.Errorf("an unknown engine's row carries %q / %q, want the zero identity it always had", got.VariantID, got.KVCacheType)
 	}
 }

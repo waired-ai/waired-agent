@@ -256,6 +256,32 @@ type Presentation struct {
 	// an order of magnitude rather than a number to print.
 	Speed          string  `json:"speed,omitempty"`
 	EstimatedTokps float64 `json:"estimated_tokps,omitempty"`
+
+	// VariantID and Quantization name the build this verdict was decided
+	// for (catalog.Variant), so a surface offering a model's variants can
+	// tell its rows apart (decision 4 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md,
+	// waired-ai/waired-agent#1346).
+	VariantID    string `json:"variant_id,omitempty"`
+	Quantization string `json:"quantization,omitempty"`
+
+	// KVCacheType is the KV-cache type the ollama figures above were priced
+	// with (catalog.KVCache*). A console offering the type as a choice
+	// projects one row per type (ModelProjection.KVCacheType). Empty on
+	// the vLLM path.
+	KVCacheType string `json:"kv_cache_type,omitempty"`
+
+	// GPULayers / TotalLayers predict llama.cpp's "offloaded N/M layers"
+	// for the coding window: how many layers stay in GPU-addressable
+	// memory, of how many (OllamaPredictPlacement). A surface shows this
+	// instead of a spill percentage (waired-ai/waired-agent#1347; the
+	// prediction lands with #1337).
+	// TotalLayers is set whenever the prediction was made, so TotalLayers
+	// with GPULayers absent reads as "no layer on the GPU". Both absent on
+	// a host with no GPU-addressable memory, for a variant without a GGUF
+	// layout, and on the vLLM path.
+	GPULayers   int `json:"gpu_layers,omitempty"`
+	TotalLayers int `json:"total_layers,omitempty"`
 }
 
 // Project builds the Presentation for one variant on one host under one
@@ -369,6 +395,11 @@ type ModelProjection struct {
 	// name, VRAM and compute capability per device, for the
 	// tensor-parallel and fp8-KV rules. Empty is permissive.
 	GPUs []signer.HardwareGPUSummary
+
+	// KVCacheType prices the ollama row with this KV-cache type
+	// (catalog.KVCache*). Empty is the type the serve tuning exports by
+	// default (OllamaDefaultKVCacheType).
+	KVCacheType string `json:"-"`
 }
 
 // ProjectModelFrom is ProjectModel with the per-device GPU detail in hand.
@@ -376,11 +407,18 @@ type ModelProjection struct {
 func ProjectModelFrom(in ModelProjection) Presentation {
 	m, v, engine, h := in.Manifest, in.Variant, in.Engine, in.Host
 	budgetMB := in.BudgetMB
-	out := Presentation{QualityTier: v.QualityTier, ModelSize: ModelSize(m)}
+	out := Presentation{
+		QualityTier: v.QualityTier, ModelSize: ModelSize(m),
+		VariantID: v.VariantID, Quantization: v.Quantization,
+	}
 	var got Verdict
 	switch engine {
 	case catalog.RuntimeOllama:
 		got = OllamaCapacityFit(m, v, h)
+		out.KVCacheType = in.KVCacheType
+		if out.KVCacheType == "" {
+			out.KVCacheType = OllamaDefaultKVCacheType(h)
+		}
 		// Always the CODING window, even where capacity was priced at a
 		// smaller one the host would actually serve: this is the figure a
 		// user reads as "what would this need here", and answering it with
@@ -396,8 +434,12 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 	case catalog.RuntimeVLLM:
 		got = VLLMFit(v, budgetMB)
 		out.RequiredResidentMB = v.MinVRAMMB
+		out.KVCacheType = catalog.KVCacheFP16
+		if VLLMUsesFP8KV(in.GPUs) {
+			out.KVCacheType = catalog.KVCacheFP8
+		}
 	default:
-		return out
+		return Presentation{QualityTier: v.QualityTier, ModelSize: ModelSize(m)}
 	}
 	out.Runnable = got.Fits
 	out.Reason = got.Reason
