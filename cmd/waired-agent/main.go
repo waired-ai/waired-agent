@@ -2024,9 +2024,17 @@ func run(ctx context.Context, args []string) error {
 			return bypassCPHTTPClient(c, cpURL, logger)
 		}
 	}
+	controlFlagSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "control" {
+			controlFlagSet = true
+		}
+	})
+	explicitControl := explicitControlURL(*controlURL, controlFlagSet,
+		os.Getenv("WAIRED_CONTROL_URL"), controlurl.PlatformDefault())
 	loginCtl := newLoginController(sb, loginControllerConfig{
 		StateDir:          *stateDir,
-		ResolveControlURL: newDaemonControlURLResolver(*controlURL, controlurl.PlatformDefault, logger),
+		ResolveControlURL: newDaemonControlURLResolver(explicitControl, controlurl.PlatformDefault, logger),
 		Endpoint:          "udp4:" + *loginListen,
 		RootCtx:           ctx,
 		Activate:          activate,
