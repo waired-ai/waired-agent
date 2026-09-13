@@ -255,19 +255,20 @@ func (p *agentInferenceProvider) RemoveStoredVariants(ctx context.Context, entri
 // staged or retained — whose weights are tag.
 func tagHolders(st catalog.State, tag, modelID, variantID string) []string {
 	var out []string
+	self := func(id string, m catalog.ModelState) bool { return id == modelID && m.VariantID == variantID }
 	for id, m := range st.Models {
-		if m.OllamaTag == tag && !(id == modelID && m.VariantID == variantID) {
+		if m.OllamaTag == tag && !self(id, m) {
 			out = append(out, id)
 		}
 	}
 	for id, m := range st.StagedVariants {
-		if m.OllamaTag == tag && !(id == modelID && m.VariantID == variantID) {
+		if m.OllamaTag == tag && !self(id, m) {
 			out = append(out, id+"/"+m.VariantID)
 		}
 	}
 	for id, rows := range st.RetainedVariants {
 		for _, m := range rows {
-			if m.OllamaTag == tag && !(id == modelID && m.VariantID == variantID) {
+			if m.OllamaTag == tag && !self(id, m) {
 				out = append(out, id+"/"+m.VariantID)
 			}
 		}

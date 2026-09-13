@@ -4604,22 +4604,6 @@ func (p *agentInferenceProvider) upgradeBlindVariant(
 	return variant, true
 }
 
-// bestVariantForHost is the build of manifest this host should hold, and
-// whether the question could be answered at all. See PullModel for why
-// the pull asks it rather than reading manifest order.
-func (p *agentInferenceProvider) bestVariantForHost(
-	ctx context.Context, manifest catalog.Manifest, engine, engineVersion string,
-) (catalog.Variant, bool) {
-	if p.profiler == nil {
-		return catalog.Variant{}, false
-	}
-	best := router.FamilyBestFit(manifest, engine, engineVersion, p.Hardware(ctx))
-	if !best.Fits {
-		return catalog.Variant{}, false
-	}
-	return best.Variant, true
-}
-
 // variantByID returns the named variant of manifest. A caller that holds
 // a variant ID rather than the variant itself — the pull job carries the
 // ID so a blind resolution can replace it mid-flight (#361) — needs the

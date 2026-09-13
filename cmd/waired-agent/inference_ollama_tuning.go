@@ -187,26 +187,6 @@ func kvFactorFor(kvType string) float64 {
 	return hostfit.OllamaKVCacheFactor(kvType)
 }
 
-// ollamaTuningBudgetGB returns the decimal-GB memory budget available for
-// weights + KV on this host: the ollama VRAM budget minus the same
-// engine overhead the fit gate reserves (weight-scaled on discrete GPUs,
-// flat on UMA), or, on CPU-only hosts (spilling to RAM is the design
-// there), total RAM minus OS headroom. Returns 0 when the budget is
-// unknown.
-//
-// OllamaVRAMBudgetMB rather than EffectiveVRAMMB, and it has to be the
-// same one selection used: a model admitted because its weights pool
-// across two cards would otherwise be given a context window sized for
-// one, which is the selection↔serving drift #621's post-load verify
-// probe then has to discover the hard way (#264).
-//
-// The arithmetic is hostfit's, so the budget this file sizes a KV cache
-// against and the budget the recommendation is decided on are the same
-// number by construction rather than by two matching comments.
-func ollamaTuningBudgetGB(hw hardware.Profile, weightGB float64) float64 {
-	return hostfit.OllamaSizingBudgetGB(hw.HostFit(), weightGB)
-}
-
 // computeOllamaTuning sizes the serve tuning for the given model/variant
 // on this host. kvType is the OLLAMA_KV_CACHE_TYPE to assume ("q8_0" on
 // the first pass; the verify pass retries with "f16" after a fallback).
