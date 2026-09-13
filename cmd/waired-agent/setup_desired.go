@@ -101,8 +101,13 @@ const setupDesiredFreshWindow = 60 * time.Minute
 // value means "no instruction" — the common case for every host that
 // never ran a NAVI setup.
 type setupDesired struct {
-	engine       string
-	modelID      string
+	engine  string
+	modelID string
+	// variantID / kvType are the build and KV-cache type the user chose
+	// with modelID (waired-agent#1348). "" is no instruction. They ride
+	// the Self entry only for an agent that declares variant-choice-v1.
+	variantID    string
+	kvType       string
 	benchmarkGen int
 	// modelGen is the retry generation for the model download (#136).
 	// Same contract as benchmarkGen — declarative, idempotent, and a
@@ -123,6 +128,19 @@ type setupDesired struct {
 	// into "no instruction" is how the wizard would report success for a
 	// device it never configured — the waired#904 class.
 	integrations string
+}
+
+// buildKey is the admission key for the model step: the model alone when
+// no build or KV-cache type is named, which keeps every record written
+// before those existed meaning the same thing, and the triple otherwise,
+// so choosing another build or cache type of the same model is a new
+// instruction rather than a repeat of one already admitted
+// (waired-agent#1348).
+func (d setupDesired) buildKey() string {
+	if d.variantID == "" && d.kvType == "" {
+		return d.modelID
+	}
+	return d.modelID + "|" + d.variantID + "|" + d.kvType
 }
 
 // integrationsNone is the flattened form of "asked, and nothing was
@@ -347,7 +365,20 @@ type setupProvider interface {
 	//
 	// It replaced a bare PullModel call, which downloaded the wizard's
 	// choice and then served something else entirely (#230).
-	setupApplyModel(ctx context.Context, modelID string) (downloading bool, err error)
+	//
+	// variantID / kvType are the build and KV-cache type chosen with it
+	// ("" = no instruction, waired-agent#1348).
+	setupApplyModel(ctx context.Context, modelID, variantID, kvType string) (downloading bool, err error)
+	// setupBuildChosen reports whether the effective preference names
+	// exactly this build and KV-cache type for modelID, and a named build
+	// is the one on the model's row. The convergence half the model id
+	// alone cannot answer once a model has several builds.
+	setupBuildChosen(modelID, variantID, kvType string) bool
+	// setupBuildServing reports whether the engine is serving the build
+	// and cache type chosen for modelID — no switch pending or in flight,
+	// and the active build is the chosen one — so a measurement never
+	// times the build it is about to replace.
+	setupBuildServing(modelID string) bool
 	// setupCancelPull stops an in-flight download of a model the control
 	// plane has stopped asking for, and reports whether there was one.
 	//
@@ -638,6 +669,8 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		// convergence compare, setupApplyModel, and the SetupState echo the
 		// CLI watcher reads back. See setupCanonicalModelID.
 		modelID:      r.provider.setupCanonicalModelID(st.DesiredModelID),
+		variantID:    st.DesiredVariantID,
+		kvType:       st.DesiredKVCacheType,
 		benchmarkGen: st.DesiredBenchmarkGen,
 		modelGen:     st.DesiredModelGen,
 		integrations: flattenIntegrations(st.DesiredIntegrations),
@@ -704,9 +737,9 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	if retried {
 		r.modelGenActed = d.modelGen
 		if d.modelID != "" {
-			delete(r.modelApplied, d.modelID)
-			delete(r.modelRejected, d.modelID)
-			delete(r.leftoverNoted, d.modelID)
+			delete(r.modelApplied, d.buildKey())
+			delete(r.modelRejected, d.buildKey())
+			delete(r.leftoverNoted, d.buildKey())
 		}
 	}
 	// A RETURN to a model this process already spent its admission on is a
@@ -718,9 +751,9 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// this daemon declined, and modelAdmitted is empty for a leftover (no
 	// admission was ever spent), so clearing it here would re-log on every
 	// frame — the per-frame noise #626's note exists to avoid.
-	if d.modelID != "" && d.modelID != r.modelAdmitted {
-		if _, refused := r.modelRejected[d.modelID]; !refused {
-			delete(r.modelApplied, d.modelID)
+	if d.modelID != "" && d.buildKey() != r.modelAdmitted {
+		if _, refused := r.modelRejected[d.buildKey()]; !refused {
+			delete(r.modelApplied, d.buildKey())
 		}
 	}
 	// #379: r.active is true by now, so "a wizard is driving" is the
@@ -798,7 +831,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	if d.engine != "" {
 		installed, _ := r.provider.setupEngineState(ctx, d.engine)
 		enginePresent = installed
-		if r.noteEngineInstalled(installed, d.modelID) {
+		if r.noteEngineInstalled(installed, d.buildKey()) {
 			// noteEngineInstalled has already dropped the admission record
 			// itself, under the same lock as the latch, so the step below
 			// re-reads it rather than carrying a local copy.
@@ -869,7 +902,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// modelQuestionUnanswered standing, so the install-flow picker (#586)
 	// still runs and the browser can still write a choice — which arrives
 	// as a watched change and applies through this same branch.
-	r.stepDesiredModel(ctx, d.modelID, enginePresent, driving || retried)
+	r.stepDesiredModel(ctx, d, enginePresent, driving || retried)
 
 	if changed {
 		r.kickPush()
@@ -882,12 +915,13 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 //
 // `asked` folds the two things that make an instruction actionable here:
 // a wizard driving (the #308 freshness test) or an explicit retry (#136).
-func (r *setupReconciler) stepDesiredModel(ctx context.Context, modelID string, enginePresent, asked bool) {
+func (r *setupReconciler) stepDesiredModel(ctx context.Context, d setupDesired, enginePresent, asked bool) {
+	modelID, key := d.modelID, d.buildKey()
 	if modelID == "" || !enginePresent {
 		return
 	}
 	r.mu.Lock()
-	applied := r.modelApplied[modelID]
+	applied := r.modelApplied[key]
 	r.mu.Unlock()
 	if applied {
 		return
@@ -896,7 +930,7 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, modelID string, 
 		// Once per model value, not once per frame: the control plane
 		// re-sends its instruction on every map frame, and a line per
 		// frame would bury the one that matters.
-		if !r.noteLeftoverDesired(modelID) && r.logger != nil {
+		if !r.noteLeftoverDesired(key) && r.logger != nil {
 			r.logger.Info("setup: leaving the desired model alone; nobody here chose it this install",
 				"model", modelID,
 				"hint", "pick one with `waired models pull <model>` or from the browser dashboard")
@@ -904,20 +938,26 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, modelID string, 
 		return
 	}
 	state, _, _ := r.provider.setupModelState(modelID)
-	if state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == modelID {
+	// Converged means the preference names this model AND this build and
+	// cache type, and the named build is the one on the model's row —
+	// never the cache type the engine ended up with, which the verify pass
+	// may have degraded to f16 and which a re-apply would only bounce the
+	// engine back into (waired-agent#1348).
+	if state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == modelID &&
+		r.provider.setupBuildChosen(modelID, d.variantID, d.kvType) {
 		return // converged
 	}
 	r.mu.Lock()
-	r.modelApplied[modelID] = true
-	r.modelAdmitted = modelID
+	r.modelApplied[key] = true
+	r.modelAdmitted = key
 	r.mu.Unlock()
-	if _, err := r.provider.setupApplyModel(ctx, modelID); err != nil {
+	if _, err := r.provider.setupApplyModel(ctx, modelID, d.variantID, d.kvType); err != nil {
 		r.mu.Lock()
 		// Classified HERE, where the error value still exists.
 		// Storing only the text and re-deriving a code from it in
 		// snapshot() is what collapsed every refusal into
 		// model_not_found (waired-agent#134).
-		r.modelRejected[modelID] = setupModelRejection{
+		r.modelRejected[key] = setupModelRejection{
 			code:   classifyModelRejection(err),
 			detail: err.Error(),
 		}
@@ -989,7 +1029,7 @@ func (r *setupReconciler) reconcileDesiredModel(ctx context.Context) {
 	if d.engine != "" {
 		installed, _ := r.provider.setupEngineState(ctx, d.engine)
 		enginePresent = installed
-		if r.noteEngineInstalled(installed, d.modelID) {
+		if r.noteEngineInstalled(installed, d.buildKey()) {
 			r.onEngineAppeared(d.engine, d.modelID)
 			r.kickPush()
 		}
@@ -997,7 +1037,7 @@ func (r *setupReconciler) reconcileDesiredModel(ctx context.Context) {
 	// No retry term: a generation bump arrives on a frame, and Apply acts
 	// on it there. This pass only ever finishes work already admitted in
 	// principle.
-	r.stepDesiredModel(ctx, d.modelID, enginePresent, driving)
+	r.stepDesiredModel(ctx, d, enginePresent, driving)
 }
 
 // reconcileBenchmark gives a standing benchmark request a second look on
@@ -1043,7 +1083,7 @@ func (r *setupReconciler) startBenchmarkIfDue(d setupDesired) {
 	if d.benchmarkGen <= 0 {
 		return
 	}
-	if !r.benchmarkTargetReady(d.modelID) {
+	if !r.benchmarkTargetReady(d.modelID) || (d.modelID != "" && !r.provider.setupBuildServing(d.modelID)) {
 		return
 	}
 	bs := r.provider.BenchmarkStatus()
@@ -1406,7 +1446,7 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 	// The refusal, read under the same lock and from the same map the
 	// pushed snapshot reads (#404). Keyed on the CURRENT desired model, so
 	// an operator who picks another one is not shown the last one's answer.
-	rejected := r.modelRejected[d.modelID]
+	rejected := r.modelRejected[d.buildKey()]
 	if d.integrations != "" {
 		targets := integrationTargets(d.integrations)
 		if targets == nil {
@@ -1648,7 +1688,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	d := r.desired
 	active := r.active
 	modelGenActed := r.modelGenActed
-	rejected := r.modelRejected[d.modelID]
+	rejected := r.modelRejected[d.buildKey()]
 	leaseLive := r.leaseLiveLocked()
 	everSeen := r.executorEverSeen
 	elevated := r.executorElevated
@@ -1722,14 +1762,14 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		// rows below could move ahead of the admission that produced them
 		// (#413). Whichever probe gets there first owns the edge; the
 		// latch makes sure only one does.
-		if r.noteEngineInstalled(installed, d.modelID) {
+		if r.noteEngineInstalled(installed, d.buildKey()) {
 			r.onEngineAppeared(d.engine, d.modelID)
 			// rejected was read at the top of this function, from the
 			// very record the edge just cleared. Re-read it so THIS
 			// projection is already right rather than right on the next
 			// tick — the stale row is the whole complaint.
 			r.mu.Lock()
-			rejected = r.modelRejected[d.modelID]
+			rejected = r.modelRejected[d.buildKey()]
 			r.mu.Unlock()
 		}
 		var engineStopped bool
@@ -2778,6 +2818,15 @@ func (p *agentInferenceProvider) setupModelState(modelID string) (string, modelP
 	if !ok {
 		return catalog.ModelStateNotPresent, modelPullProgress{}, ""
 	}
+	// While another build of a serving model is chosen and being fetched,
+	// its download is the one the setup row describes: the served row is
+	// Ready, and reporting it would call the download done before a byte
+	// of the chosen build arrived (waired-agent#1348).
+	if want := p.chosenVariantFor(modelID); want != "" && want != ms.VariantID {
+		if sv, staged := st.StagedVariants[modelID]; staged && sv.VariantID == want {
+			ms = sv
+		}
+	}
 	completed, total, rateBps, _ := p.dlProgress.aggregate(modelID)
 	return ms.State, modelPullProgress{Completed: completed, Total: total, RateBps: rateBps}, ms.Error
 }
@@ -2934,7 +2983,7 @@ func (p *agentInferenceProvider) setupCancelPull(ctx context.Context, modelID st
 	return res.Status == pullCancelCancelled
 }
 
-func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID string) (bool, error) {
+func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID, variantID, kvType string) (bool, error) {
 	if p.preferencePath != "" {
 		// Source desired: this is the control plane's instruction arriving,
 		// not an answer given here. The distinction is the whole of
@@ -2943,8 +2992,10 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID st
 		// waired-agent#647 (an instruction must not be able to confirm
 		// itself back to the control plane as a local choice).
 		if err := agentconfig.SavePreference(p.preferencePath, agentconfig.Preference{
-			ModelID: modelID,
-			Source:  agentconfig.PreferenceSourceDesired,
+			ModelID:     modelID,
+			VariantID:   variantID,
+			KVCacheType: kvType,
+			Source:      agentconfig.PreferenceSourceDesired,
 		}); err != nil {
 			// Not fatal: the in-process switch below still makes this the
 			// served model for the life of this process. Only the
@@ -2981,7 +3032,7 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID st
 		// (waired-agent#579).
 		p.ensureHostSpeedMeasured(applyCtx, p.hostSpeedInstallWindow())
 	}
-	downloading, err := p.SwapPreferredModel(applyCtx, modelID)
+	downloading, err := p.SwapPreferredBuild(applyCtx, modelID, variantID, kvType)
 	if err == nil {
 		return downloading, nil
 	}
@@ -2990,8 +3041,32 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID st
 	}
 	p.logger.Info("setup: model switch needs a restart; downloading now and activating on the next boot",
 		"model", modelID)
-	if _, perr := p.PullModel(applyCtx, modelID); perr != nil {
+	if _, perr := p.pullModelBuild(applyCtx, modelID, variantID); perr != nil {
 		return false, perr
 	}
 	return true, nil
+}
+
+func (p *agentInferenceProvider) setupBuildChosen(modelID, variantID, kvType string) bool {
+	c := p.effectiveBuildChoice()
+	if canonicalSetupModelID(c.ModelID, p.manifests) != modelID || c.VariantID != variantID || c.KVCacheType != kvType {
+		return false
+	}
+	if variantID == "" {
+		return true
+	}
+	st, err := p.store.Load()
+	return err == nil && st.Models[modelID].VariantID == variantID
+}
+
+func (p *agentInferenceProvider) setupBuildServing(modelID string) bool {
+	if p.swapPending.Load() || p.engineReconcileInFlight.Load() {
+		return false
+	}
+	want := p.chosenVariantFor(modelID)
+	if want == "" {
+		return true
+	}
+	st, err := p.store.Load()
+	return err == nil && st.Active != nil && st.Active.ModelID == modelID && st.Active.VariantID == want
 }

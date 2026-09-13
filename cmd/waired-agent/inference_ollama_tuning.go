@@ -30,7 +30,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -64,11 +63,15 @@ const ollamaContextFloor = 32768
 // rather than a hope.
 const ollamaMaxAutoParallel = 2
 
-// ollamaKVAuto is the kvType value meaning "decide": planOllamaKV then picks
-// q8_0 + flash attention only where quantizing the KV actually buys context.
-// Any explicit type is a PIN — that is how the verify pass's f16 degrade and
-// the ollamaKVOverrideEnv test lane both express intent, and it is why every
-// existing caller that passes "q8_0"/"f16" keeps its exact behaviour.
+// ollamaKVAuto is the kvType value meaning "decide": planOllamaKV then takes
+// the default the owner decided — q4_0 wherever the host and the build allow
+// it, the smallest type above it where they do not, f16 on a CPU-only host
+// (hostfit.ResolveKVCacheType; decision 2 of
+// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
+// Any explicit type is a PIN — that is how the verify pass's f16 degrade, the
+// ollamaKVOverrideEnv test lane and a user's chosen type all express intent,
+// and it is why every existing caller that passes "q8_0"/"f16" keeps its
+// exact behaviour.
 const ollamaKVAuto = "auto"
 
 // ollamaKVOverrideEnv pins the KV/flash-attention pair the tuning would
@@ -89,41 +92,44 @@ type ollamaKVPlan struct {
 	FlashAttention bool
 }
 
-// planOllamaKV decides whether requesting a quantized KV cache buys anything
-// on this host. Pure: the env pin is resolved by the caller (ollamaKVRequest).
+// planOllamaKV turns the kvType request into the KV/flash-attention pair.
+// Pure: the env pin and the user's choice are resolved by the caller
+// (ollamaKVRequestFor).
 //
-// GPU / UMA hosts keep q8_0 + flash attention unconditionally. Two reasons:
-// the discrete overhead model (proto/hostfit OllamaVRAMOverhead*) is
-// calibrated against an FA load, so dropping FA there would silently
-// invalidate the spill reservation; and the post-load verify pass is the
-// safety net on exactly those hosts.
-//
-// CPU-only hosts get f16 whenever the f16 budget already covers the window
-// AND the slots we would serve. On those hosts quantizing saves memory nobody
-// needs — on a 16 GB runner serving a 0.5B model it saves ~400 MB out of a
-// 12 GB budget, about 3% — while forcing llama.cpp's least-exercised
-// CPU + flash-attention + quantized-KV path, which is where waired-agent#29's
-// llama-server segfault lives.
+// "auto" is the default ladder: hostfit.ResolveKVCacheType with no request,
+// which is q4_0 on a host with GPU-addressable memory when the build lists it
+// (kv_cache_types), q8_0 when it does not, and f16 on a CPU-only host. The
+// CPU-only answer is f16 unconditionally: quantizing the cache there saves
+// memory nobody needs while forcing llama.cpp's least-exercised CPU + flash
+// attention + quantized-KV path, which is where waired-agent#29's
+// llama-server segfault lives. It used to fall back to q8_0 on a CPU host
+// too tight for f16; the owner decision fixes CPU-only at f16.
 func planOllamaKV(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, requested string) ollamaKVPlan {
 	if requested != ollamaKVAuto {
 		// A pin. f16 needs no flash attention; a quantized pin does.
-		return ollamaKVPlan{Type: requested, FlashAttention: requested != "f16"}
+		return ollamaKVPlan{Type: requested, FlashAttention: requested != catalog.KVCacheF16}
 	}
-	if hw.EffectiveVRAMMB() > 0 {
-		return ollamaKVPlan{Type: "q8_0", FlashAttention: true}
+	t := hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, hw.HostFit(), nil, "")
+	return ollamaKVPlan{Type: t, FlashAttention: t != catalog.KVCacheF16}
+}
+
+// ollamaKVRequestFor is the kvType production passes to the sizing for
+// serving v of m: the env pin when a test lane set one, the KV-cache type
+// the user chose with this model when there is one (resolved against the
+// build and host, so a type the build cannot serve falls to the default
+// rung), and "auto" otherwise. Impure by design, so computeOllamaTuning*
+// stays pure.
+func ollamaKVRequestFor(cfg agentconfig.InferenceConfig, m catalog.Manifest, v catalog.Variant, hw hardware.Profile) string {
+	if pin := ollamaKVRequest(); pin != ollamaKVAuto {
+		return pin
 	}
-	want := m.ContextLength
-	if want <= 0 || want < ollamaContextFloor {
-		want = ollamaContextFloor
+	if cfg.PreferredKVCacheType == "" || cfg.PreferredModelID == "" {
+		return ollamaKVAuto
 	}
-	budgetGB := ollamaTuningBudgetGB(hw, v.EstimatedWeightGB)
-	f16Max := scoring.MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, scoring.KVFactorF16, budgetGB)
-	if f16Max >= ollamaMaxAutoParallel*want {
-		return ollamaKVPlan{Type: "f16"}
+	if _, ok := catalog.LookupByAlias(cfg.PreferredModelID, []catalog.Manifest{m}); !ok {
+		return ollamaKVAuto
 	}
-	// A genuinely tight CPU host — and, when f16Max is 0, one we cannot size
-	// at all. Never change behaviour on a host whose budget is unknown.
-	return ollamaKVPlan{Type: "q8_0", FlashAttention: true}
+	return hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, hw.HostFit(), nil, cfg.PreferredKVCacheType)
 }
 
 // ollamaKVRequest is the kvType production passes to the sizing: auto unless a

@@ -2121,6 +2121,13 @@ func formatCatalogEntry(f management.CatalogFamily, engine string, host manageme
 	suffix := catalogSpecSuffix(engine, f) + catalogPickNote(f) + catalogSpillNote(host, f)
 	switch {
 	case f.Active:
+		// The served build is named when a user chose one other than the
+		// model's own, so the running row says what is running
+		// (waired-agent#1348). The quantization string is the catalog's,
+		// verbatim.
+		if f.ServedQuantization != "" {
+			name += " " + f.ServedQuantization
+		}
 		e.Label = "● " + name + suffix
 	case f.Preferred:
 		// Preference recorded but not yet reflected in the running

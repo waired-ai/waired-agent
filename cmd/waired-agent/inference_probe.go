@@ -190,6 +190,12 @@ type inferenceProbeDeps struct {
 	// engine tag in Models).
 	ActiveModel    func() string
 	SubsystemState func() string
+	// ActiveBuild and StoredVariants, when non-nil, report the build of
+	// ActiveModel being served with its KV-cache type, and the builds a
+	// switch left on disk (waired-agent#1348). Ungated like ActiveModel,
+	// and for the same reason. Empty keeps the fields off the wire.
+	ActiveBuild    func() (variantID, kvCacheType string)
+	StoredVariants func() []signer.StoredVariant
 	// ServeTuning, when non-nil, returns whether this host could hold
 	// the serve configuration its own sizing asked for, and the engine's
 	// own sentence about it (waired-agent#1057).
@@ -610,6 +616,12 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		}
 		if deps.SubsystemState != nil {
 			s.SubsystemState = deps.SubsystemState()
+		}
+		if deps.ActiveBuild != nil {
+			s.ActiveVariantID, s.ActiveKVCacheType = deps.ActiveBuild()
+		}
+		if deps.StoredVariants != nil {
+			s.StoredVariants = deps.StoredVariants()
 		}
 		// waired-agent#1057: whether this host could hold the serve
 		// configuration its own sizing asked for. Until now the control

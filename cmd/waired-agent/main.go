@@ -1455,6 +1455,11 @@ func run(ctx context.Context, args []string) error {
 				deps.SubsystemState = func() string {
 					return prov.SubsystemState(ctx)
 				}
+				// waired-agent#1348: the served build and the builds a
+				// switch left behind, for the device page's current row
+				// and its offer to remove them.
+				deps.ActiveBuild = prov.ActiveBuild
+				deps.StoredVariants = prov.StoredVariants
 				// waired-agent#1057: whether this host held the serve
 				// configuration it sized for. Wired for every provider
 				// like the three above — appliedTuningFor answers for
@@ -1813,6 +1818,11 @@ func run(ctx context.Context, args []string) error {
 				infSrv.SetPublicCapacity(st.PublicCapacity)
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					inferenceSub.provider.ApplyConcurrency(ctx, st.DesiredParallel)
+					// Stored builds the user asked to remove
+					// (waired-agent#1348). A standing list, re-sent on
+					// every frame; the removal is single-flight and a
+					// no-op once they are gone.
+					inferenceSub.provider.ApplyRemoveStoredVariants(ctx, st.DesiredRemoveVariants)
 				}
 				// Toggle echo (§5.1: the CP is authoritative) — adopt
 				// CP-side public share changes on the next frame.

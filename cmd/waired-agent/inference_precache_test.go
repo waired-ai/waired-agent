@@ -183,11 +183,15 @@ func TestAvailableUpdateFromPick_TheOnDiskVariantIsPreCached(t *testing.T) {
 	}
 }
 
-// The behaviour that early return was suppressing: a host serving the
-// lower variant of the right model fetches the better one. This is the
-// recovery path for every host that pulled blind before #361 — nothing
-// else re-pulls a model that is already Ready.
-func TestMaybePreCache_FetchesABetterVariantOfTheModelAlreadyServed(t *testing.T) {
+// PRODUCT CONTRACT (waired-agent#1348): the pre-cache does not fetch
+// another build of the model this host is serving. Which build a model is
+// served as is a choice — the user's or the default rule's — and a build
+// fetched beside the served one is only ever served by a switch that
+// names it. Before, this path overwrote the served row with the new
+// build's tag while the engine kept running the old one, which leaves
+// the engine with no advertised model (#656); and a user's chosen
+// lighter build would have been replaced by the picker's heavier one.
+func TestMaybePreCache_LeavesTheServedModelsBuildAlone(t *testing.T) {
 	r := &scriptedRunner{results: []error{nil}}
 	p := precacheProvider(t, r)
 	p.manifests = precacheVariantManifests()
@@ -201,15 +205,19 @@ func TestMaybePreCache_FetchesABetterVariantOfTheModelAlreadyServed(t *testing.T
 	}); err != nil {
 		t.Fatalf("seed store: %v", err)
 	}
+	// Anti-vacuity: the pick does name another build of the served model.
+	if upd := computeAvailableUpdate(context.Background(), p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(context.Background())); upd == nil || upd.ModelID != "heavy" || upd.VariantID == "q4" {
+		t.Fatalf("the fixture no longer offers another build of the served model: %+v", upd)
+	}
 
 	p.maybePreCache(context.Background())
 	p.waitForPulls()
 
-	if got := r.calls(); got != 1 {
-		t.Fatalf("pulls dispatched for the better variant = %d, want 1", got)
+	if got := r.calls(); got != 0 {
+		t.Errorf("pulls dispatched for another build of the served model = %d, want 0", got)
 	}
-	if got := modelStateOf(t, p, "heavy").VariantID; got != "mtp-q4" {
-		t.Errorf("recorded variant after the pre-cache = %q, want mtp-q4", got)
+	if got := modelStateOf(t, p, "heavy").VariantID; got != "q4" {
+		t.Errorf("served row's build after the pre-cache = %q, want q4 (unchanged)", got)
 	}
 }
 

@@ -621,7 +621,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
 		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
-			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedServe{})
+			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequestFor(cfg, tm, tv, hwProfile), ollamaObservedServe{})
 			ollamaTuned = true
 			if ms, found := tuneState.Models[tm.ModelID]; found && ms.OllamaTag != "" {
 				ollamaTuneTag = ms.OllamaTag
@@ -662,7 +662,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			return nil, infruntime.ModelTuning{}, false
 		}
 		tune := applyModelDecisionReasons(cfg, tm,
-			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest(), ollamaObservedServe{}), logger)
+			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequestFor(cfg, tm, tv, hwProfile), ollamaObservedServe{}), logger)
 		logger.Info("ollama serve tuning computed at spawn",
 			"model", tune.ModelID, "variant", tune.VariantID,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
@@ -1945,6 +1945,12 @@ type agentInferenceProvider struct {
 	// every in-process reader of the preference routes through
 	// effectivePreferredModelID() / effectiveCfg() instead.
 	preferredOverride atomic.Pointer[string]
+	// preferredBuild is the build and KV-cache type published with the
+	// last in-process switch (waired-agent#1348), read through
+	// effectiveBuildChoice. Set together with preferredOverride.
+	preferredBuild atomic.Pointer[buildChoice]
+	// removeInFlight is ApplyRemoveStoredVariants' single-flight latch.
+	removeInFlight atomic.Bool
 	// restartOnWedge, when non-nil, is the supervised-restart fallback the
 	// reconcile invokes if the engine fails to come back after a switch
 	// bounce (a wedged engine). Wired from main.go to the same scheduler the
@@ -2018,6 +2024,8 @@ func (p *agentInferenceProvider) effectivePreferredModelID() string {
 func (p *agentInferenceProvider) effectiveCfg() agentconfig.InferenceConfig {
 	c := p.cfg
 	c.PreferredModelID = p.effectivePreferredModelID()
+	b := p.effectiveBuildChoice()
+	c.PreferredVariantID, c.PreferredKVCacheType = b.VariantID, b.KVCacheType
 	return c
 }
 
@@ -2504,11 +2512,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// /inference/status reflect the target immediately.
 		if swap {
 			if tm, ok := p.preferredManifest(); ok {
-				vid := ""
-				if ms, found := st.Models[tm.ModelID]; found {
-					vid = ms.VariantID
-				}
-				p.activatePreferredIfNeeded(tm.ModelID, vid)
+				p.activatePreferredBuild(tm.ModelID)
 				st, _ = p.store.Load() // re-read Active after the flip
 			}
 		}
@@ -2523,7 +2527,8 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// preserves the applied KV so a prior degrade is kept (#621). An
 		// explicit type is a pin, so preserving it still works now that the
 		// default is decided per host (waired-agent#29).
-		kvType := ollamaKVRequest()
+		hw := p.profiler.Profile(ctx)
+		kvType := ollamaKVRequestFor(p.effectiveCfg(), tm, tv, hw)
 		if !swap && cur.KVCacheType != "" {
 			kvType = cur.KVCacheType
 		}
@@ -2533,7 +2538,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// (waired-ai/waired-agent#846). grantedFor drops it when the target
 		// or the window moved, so an operator switch starts from the
 		// arithmetic again.
-		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, 0, want,
+		tune := computeOllamaTuningOpts(tm, tv, hw, kvType, 0, want,
 			ollamaObservedServe{
 				ModelID:       cur.ModelID,
 				VariantID:     cur.VariantID,
@@ -3821,6 +3826,12 @@ var (
 )
 
 func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
+	return p.pullModelBuild(ctx, modelOrAlias, "")
+}
+
+// pullModelBuild is PullModel with a build named (waired-agent#1348). ""
+// is "no instruction"; see resolvePullVariant for both halves.
+func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlias, requestedVariant string) (management.PullJob, error) {
 	if !p.cfg.AllowPull {
 		return management.PullJob{}, fmt.Errorf("pulls are disabled by config (allow_pull=false): %w", errPullsDisabled)
 	}
@@ -3908,14 +3919,21 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	// fails open onto the manifest-order choice for the same reason the
 	// engine-presence gate above does: a seam nobody supplied must not
 	// take a pull down.
-	if best, known := p.bestVariantForHost(ctx, manifest, engine, engineVersion); known &&
-		best.VariantID != variant.VariantID {
+	//
+	// A build somebody named, and a model already on disk, answer first,
+	// and the owner's default build now stands in front of FamilyBestFit
+	// wherever this host is recommended it (waired-agent#1348; see
+	// resolvePullVariant).
+	st0, _ := p.store.Load()
+	chosen, explicit := p.resolvePullVariant(ctx, manifest, engine, engineVersion, requestedVariant, variant, st0)
+	if chosen.VariantID != variant.VariantID {
 		p.logger.Info("pull chose the build this host can hold",
 			"model", manifest.ModelID,
 			"instead_of", variant.VariantID,
-			"chosen", best.VariantID,
+			"chosen", chosen.VariantID,
+			"named", explicit,
 			"engine", engine)
-		variant = best
+		variant = chosen
 	}
 	if variant.VariantID != manifest.Variants[0].VariantID {
 		p.logger.Info("pull did not take the manifest's first variant",
@@ -3954,8 +3972,19 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		// Whether the choice above was made without knowing what the
 		// engine can load. runPullJob revisits it after the engine is
 		// serving, where the answer is always known (#361).
-		resolvedBlind: engineVersion == "",
+		resolvedBlind: engineVersion == "" && !explicit,
 		stop:          newPullStop(dlCancel),
+	}
+	// A download of ANOTHER build of this model is not the one asked for,
+	// and joining it would report this build as coming while that one
+	// arrives (waired-agent#1348). Stop it first; CancelPull waits for it
+	// to unwind, so the slot is free below.
+	if explicit {
+		if running := p.inFlightPull(manifest.ModelID); running != nil && running.variantID != variant.VariantID {
+			p.logger.Info("a download of another build of this model is superseded by the named one",
+				"model", manifest.ModelID, "in_flight", running.variantID, "named", variant.VariantID)
+			_, _ = p.CancelPull(ctx, manifest.ModelID)
+		}
 	}
 	if running, joined := p.beginPull(job); joined {
 		// This job never runs, so nothing will ever cancel its context.
@@ -3984,7 +4013,23 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		// guard — a flag captured here would go stale the moment another
 		// job moved the model (#305c).
 		if err := p.store.Update(func(s *catalog.State) {
-			if s.Models[manifest.ModelID].State == catalog.ModelStateReady {
+			if cur := s.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady {
+				// Another build of a model that is serving is fetched
+				// beside it, never into the row the engine reads
+				// (waired-agent#1348; see catalog.State.StagedVariants).
+				// A row whose build the catalog no longer names is repaired
+				// in place, as before: nothing can be serving it on purpose.
+				if _, known := variantByID(manifest, cur.VariantID); known &&
+					cur.VariantID != variant.VariantID && !buildOnDisk(*s, manifest.ModelID, variant.VariantID) {
+					if s.StagedVariants == nil {
+						s.StagedVariants = make(map[string]catalog.ModelState)
+					}
+					s.StagedVariants[manifest.ModelID] = catalog.ModelState{
+						VariantID: variant.VariantID,
+						OllamaTag: variant.Source.Tag,
+						State:     catalog.ModelStateQueued,
+					}
+				}
 				return
 			}
 			s.Models[manifest.ModelID] = catalog.ModelState{
@@ -4248,6 +4293,17 @@ func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 	}
 	landed := false
 	if err := p.store.Update(func(s *catalog.State) {
+		// A cancelled download of another build of a serving model drops
+		// its staged row and leaves the served one alone
+		// (waired-agent#1348).
+		if sv, ok := s.StagedVariants[job.modelID]; ok && sv.VariantID == job.variantID {
+			if sv.State == catalog.ModelStateReady {
+				landed = true
+				return
+			}
+			delete(s.StagedVariants, job.modelID)
+			return
+		}
 		m, ok := s.Models[job.modelID]
 		if !ok {
 			return
@@ -4320,8 +4376,20 @@ func (p *agentInferenceProvider) backgroundCtx() context.Context {
 // serving from on-disk blobs, and nothing a later pull does may take that
 // down. The error text is still recorded either way, since it is the only
 // observability a failed refresh leaves behind.
-func (p *agentInferenceProvider) recordPullState(modelID, next, errMsg string) {
+func (p *agentInferenceProvider) recordPullState(modelID, variantID, next, errMsg string) {
 	_ = p.store.Update(func(s *catalog.State) {
+		// A build fetched beside the served one records its progress on
+		// its own staged row (waired-agent#1348).
+		if sv, ok := s.StagedVariants[modelID]; ok && sv.VariantID == variantID {
+			if sv.State != catalog.ModelStateReady {
+				sv.State = next
+			}
+			if errMsg != "" {
+				sv.Error = errMsg
+			}
+			s.StagedVariants[modelID] = sv
+			return
+		}
 		m := s.Models[modelID]
 		if m.State != catalog.ModelStateReady {
 			m.State = next
@@ -4593,7 +4661,7 @@ func variantByID(manifest catalog.Manifest, variantID string) (catalog.Variant, 
 func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pullJob, manifest catalog.Manifest) {
 	modelID, jobID := job.modelID, job.jobID
 	variantID, tag := job.variantID, job.tag
-	p.recordPullState(modelID, catalog.ModelStateDownloading, "")
+	p.recordPullState(modelID, variantID, catalog.ModelStateDownloading, "")
 
 	// Forget live progress once the pull terminates (success or failure)
 	// so a finished/failed model never lingers as a stale "downloading".
@@ -4691,7 +4759,7 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		err = p.puller.Pull(dlCtx, tag, want, func(pr download.Progress) {
 			p.dlProgress.observe(modelID, pr)
 			if pr.State == download.StateVerifying {
-				p.recordPullState(modelID, catalog.ModelStateVerifying, "")
+				p.recordPullState(modelID, variantID, catalog.ModelStateVerifying, "")
 			}
 			diag.observe(pr)
 		})
@@ -4761,11 +4829,46 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	}
 	if err != nil {
 		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", failure)
-		p.recordPullState(modelID, catalog.ModelStateFailed, failure)
+		p.recordPullState(modelID, variantID, catalog.ModelStateFailed, failure)
 		return
 	}
 	_ = p.store.Update(func(s *catalog.State) {
 		m := s.Models[modelID]
+		// Another build of a model whose row is serving lands on its
+		// staged row, and the switch moves it into the row
+		// (waired-agent#1348). Writing it into the row here would name a
+		// tag the engine is not running (#656).
+		if sv, ok := s.StagedVariants[modelID]; ok && sv.VariantID == variantID &&
+			m.State == catalog.ModelStateReady && m.VariantID != variantID {
+			sv.OllamaTag = tag
+			sv.State = catalog.ModelStateReady
+			sv.Error = ""
+			sv.PulledAt = time.Now().UTC()
+			s.StagedVariants[modelID] = sv
+			return
+		}
+		// The same rule when no staged row was written — a build that was
+		// retained and fetched again, or a dispatcher that raced the
+		// pre-flight write: a serving row whose build the catalog knows is
+		// never rewritten by a pull.
+		if _, known := variantByID(manifest, m.VariantID); known &&
+			m.State == catalog.ModelStateReady && m.VariantID != variantID {
+			now := time.Now().UTC()
+			for i, r := range s.RetainedVariants[modelID] {
+				if r.VariantID == variantID {
+					r.OllamaTag, r.State, r.Error, r.PulledAt = tag, catalog.ModelStateReady, "", now
+					s.RetainedVariants[modelID][i] = r
+					return
+				}
+			}
+			if s.StagedVariants == nil {
+				s.StagedVariants = make(map[string]catalog.ModelState)
+			}
+			s.StagedVariants[modelID] = catalog.ModelState{
+				VariantID: variantID, OllamaTag: tag, State: catalog.ModelStateReady, PulledAt: now,
+			}
+			return
+		}
 		// Record the variant this job actually fetched. The pre-flight
 		// write skips a model that was already ready, so without this a
 		// refresh pull that resolved a NEW variant downloaded the new
@@ -5184,20 +5287,43 @@ func (p *agentInferenceProvider) preferredManifest() (catalog.Manifest, bool) {
 // preferred-model switch. No-op when modelID is not the preferred
 // model, the model is not Ready, or Active already points at it.
 func (p *agentInferenceProvider) activatePreferredIfNeeded(modelID, variantID string) {
+	p.activatePreferred(modelID, variantID, false)
+}
+
+// activatePreferredBuild is activatePreferredIfNeeded for the switch
+// itself: it also moves a model that is ALREADY active onto the build the
+// user chose, when that build is on disk (waired-agent#1348). Only the
+// engine reconcile calls it, after running turns have drained and right
+// before the bounce, because the row and Active move together and the
+// engine has to follow them at once (#656).
+func (p *agentInferenceProvider) activatePreferredBuild(modelID string) {
+	p.activatePreferred(modelID, "", true)
+}
+
+func (p *agentInferenceProvider) activatePreferred(modelID, variantID string, flip bool) {
 	manifest, ok := p.preferredManifest()
 	if !ok || manifest.ModelID != modelID {
 		return
 	}
+	want := p.chosenVariantFor(modelID)
 	committed := false
 	if err := p.store.Update(func(s *catalog.State) {
 		if s.Active != nil && s.Active.ModelID == modelID {
+			if !flip || want == "" || s.Active.VariantID == want {
+				return
+			}
+		}
+		if want != "" && !commitBuild(s, modelID, want) {
+			// The chosen build is not on disk yet. Activating the build
+			// that is would serve something nobody chose; the switch
+			// completes when the chosen one lands.
 			return
 		}
 		ms, ok := s.Models[modelID]
 		if !ok || ms.State != catalog.ModelStateReady {
 			return
 		}
-		if variantID == "" {
+		if variantID == "" || want != "" {
 			variantID = ms.VariantID
 		}
 		s.Active = &catalog.ActiveSelection{
@@ -5243,6 +5369,23 @@ func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) bo
 	if cur := state.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady &&
 		p.engineServesTag(ctx, cur.OllamaTag) {
 		p.activatePreferredIfNeeded(manifest.ModelID, cur.VariantID)
+		// A build chosen before the restart that is not the row's yet
+		// (waired-agent#1348): on disk, the switch moves the engine onto
+		// it; not on disk, it is fetched beside the served one and the
+		// switch completes when it lands — the same two arms as
+		// SwapPreferredBuild.
+		if want := p.chosenVariantFor(manifest.ModelID); want != "" && want != cur.VariantID && p.cfg.AllowPull {
+			if buildOnDisk(state, manifest.ModelID, want) {
+				p.requestEngineSwap("chosen build at boot")
+			} else {
+				id := manifest.ModelID
+				p.pendingSwapModel.Store(&id)
+				if _, err := p.pullModelBuild(ctx, manifest.ModelID, want); err != nil {
+					p.pendingSwapModel.CompareAndSwap(&id, nil)
+					p.logger.Warn("chosen build re-pull dispatch failed", "model", manifest.ModelID, "variant", want, "err", err)
+				}
+			}
+		}
 		return true
 	}
 	// #338, the same refusal as bundledPrePullTarget's at the other
@@ -5257,7 +5400,7 @@ func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) bo
 			"model", manifest.ModelID)
 		return false
 	}
-	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
+	if _, err := p.pullModelBuild(ctx, manifest.ModelID, p.chosenVariantFor(manifest.ModelID)); err != nil {
 		p.logger.Warn("preferred model re-pull dispatch failed", "model", manifest.ModelID, "err", err)
 		return false
 	}
@@ -5291,6 +5434,17 @@ var errSwapNeedsRestart = errors.New("waired-agent: model switch needs restart (
 // canonicalise the same way or the wizard waits for a string that never
 // appears (see setupCanonicalModelID).
 func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOrAlias string) (downloading bool, err error) {
+	return p.SwapPreferredBuild(ctx, modelOrAlias, "", "")
+}
+
+// SwapPreferredBuild is SwapPreferredModel with the build and KV-cache type
+// the user chose for the model (waired-agent#1348). Empty strings are "no
+// instruction". A build of a model that is already serving is downloaded
+// beside it (StagedVariants) while the served build keeps answering, and
+// the engine is moved onto it once it is on disk — the same in-process
+// swap a model change takes. A KV-cache type change alone is a swap too:
+// the reconcile only re-decides the type on a switch.
+func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOrAlias, variantID, kvType string) (downloading bool, err error) {
 	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
 	if !ok {
 		return false, fmt.Errorf("swap preferred model: unknown model %q", modelOrAlias)
@@ -5332,6 +5486,7 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 	// target, Active-flip guard, coding-alias default, available-update pick)
 	// sees the new model rather than the frozen boot snapshot.
 	id := manifest.ModelID
+	p.preferredBuild.Store(&buildChoice{ModelID: id, VariantID: variantID, KVCacheType: kvType})
 	p.preferredOverride.Store(&id)
 	// A model choice ends every #586 "no model yet" state: the standing
 	// no-model-selected record, the abandoned-question record (the file
@@ -5350,8 +5505,10 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 	defer p.publishRecommendationNotices(ctx)
 
 	st, _ := p.store.Load()
-	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady {
-		// On disk: flip Active + bring the engine onto it now.
+	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady &&
+		(variantID == "" || variantID == ms.VariantID || buildOnDisk(st, manifest.ModelID, variantID)) {
+		// On disk: flip Active (and the build, when another one was
+		// chosen and is already here) + bring the engine onto it now.
 		p.requestEngineSwap("preferred model switch")
 		return false, nil
 	}
@@ -5372,7 +5529,7 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 	// has to stay in the chain, because classifyModelRejection reads it to
 	// pick the §7 code the wizard renders.
 	p.pendingSwapModel.Store(&id)
-	if _, perr := p.PullModel(ctx, manifest.ModelID); perr != nil {
+	if _, perr := p.pullModelBuild(ctx, manifest.ModelID, variantID); perr != nil {
 		p.pendingSwapModel.CompareAndSwap(&id, nil)
 		p.logger.Warn("swap preferred model: pull dispatch failed", "model", manifest.ModelID, "err", perr)
 		return false, fmt.Errorf("start the download for %s: %w: %w",
@@ -5439,6 +5596,28 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 			p.logger.Info("model weights deleted", "model", modelID, "tag", tag)
 		}
 	}
+	// The model's other builds go with it: a staged download that landed
+	// and every retained build (waired-agent#1348). Leaving them would be
+	// #641 again — gigabytes on disk that no record names once the model
+	// row is gone.
+	others := state.RetainedVariants[modelID]
+	if sv, ok := state.StagedVariants[modelID]; ok {
+		others = append(others, sv)
+	}
+	for _, o := range others {
+		if o.OllamaTag == "" || o.OllamaTag == m.OllamaTag || p.puller == nil {
+			continue
+		}
+		if shared := tagHolders(state, o.OllamaTag, modelID, o.VariantID); len(shared) > 0 {
+			continue
+		}
+		if err := p.puller.Remove(ctx, o.OllamaTag); err != nil {
+			p.logger.Warn("deleting another build of the deleted model failed; its weights stay on disk",
+				"model", modelID, "variant", o.VariantID, "tag", o.OllamaTag, "err", err)
+		}
+	}
+	delete(state.StagedVariants, modelID)
+	delete(state.RetainedVariants, modelID)
 	delete(state.Models, modelID)
 	for k, e := range state.Endpoints {
 		if e.ModelID == modelID {
@@ -5488,6 +5667,7 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 func (p *agentInferenceProvider) forgetDeletedModel(modelID string) {
 	if cur := p.preferredOverride.Load(); cur != nil && *cur == modelID {
 		empty := ""
+		p.preferredBuild.Store(&buildChoice{})
 		p.preferredOverride.Store(&empty)
 	}
 	if p.preferencePath == "" {
@@ -5502,7 +5682,7 @@ func (p *agentInferenceProvider) forgetDeletedModel(modelID string) {
 	if !ok || pref.ModelID != modelID {
 		return
 	}
-	pref.ModelID = ""
+	pref.ModelID, pref.VariantID, pref.KVCacheType = "", "", ""
 	if err := agentconfig.SavePreference(p.preferencePath, pref); err != nil {
 		p.logger.Warn("clearing the deleted model from preferred-model.json failed; it may be re-downloaded on the next restart",
 			"model", modelID, "path", p.preferencePath, "err", err)
@@ -6087,6 +6267,19 @@ func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
 	}
 	if upd.PreCached {
 		return
+	}
+	// Another build of the model this host already serves is not fetched
+	// ahead (waired-agent#1348). Which build a model is served as is a
+	// choice now — the user's, or the default rule's — and a download
+	// that lands beside the served build is only served by a switch that
+	// names it. Pre-caching one here either overwrote the served row with
+	// weights the engine was not running (#656) or, with staged builds,
+	// would fill the disk with a build nothing will switch to. The pick
+	// still reports it through AvailableUpdate.
+	if st, err := p.store.Load(); err == nil {
+		if ms, ok := st.Models[upd.ModelID]; ok && ms.State == catalog.ModelStateReady && ms.VariantID != upd.VariantID {
+			return
+		}
 	}
 	// Only pre-cache ollama-source variants in this milestone — vLLM
 	// pre-cache requires HF download wiring through the HFPuller +

@@ -51,6 +51,12 @@ const (
 	VendorSupportExperimental = protocatalog.VendorSupportExperimental
 	VendorSupportCommunity    = protocatalog.VendorSupportCommunity
 	VendorSupportUnsupported  = protocatalog.VendorSupportUnsupported
+
+	KVCacheF16  = protocatalog.KVCacheF16
+	KVCacheQ8_0 = protocatalog.KVCacheQ8_0
+	KVCacheQ4_0 = protocatalog.KVCacheQ4_0
+	KVCacheFP16 = protocatalog.KVCacheFP16
+	KVCacheFP8  = protocatalog.KVCacheFP8
 )
 
 // BundledManifests decodes the models this build OFFERS from the
