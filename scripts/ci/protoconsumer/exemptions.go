@@ -150,6 +150,8 @@ var receiveOnly = []exemption{
 		"CP-injected user choice of build for DesiredModelID; the agent reads it once it declares variant-choice-v1 (#1346, #1348)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredKVCacheType",
 		"CP-injected user choice of KV-cache type; the agent reads it once it declares variant-choice-v1 (#1346, #1348)"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredRemoveVariants",
+		"CP-injected list of stored builds the user asked to delete; the agent reads it once it declares variant-choice-v1 (#1348)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -395,6 +397,16 @@ var producerPending = []exemption{
 	// Pick.MeasuredTurnSeconds now share their names with fields that
 	// management and /healthz write.
 
+	// waired-ai/waired-agent#1348. The served build's KV-cache type and the
+	// stored leftovers are reported by the agent once it honours the
+	// variant choice; the wire lands first so the control plane
+	// (waired-ai/waired#1387) can be written against it.
+	{reflect.TypeFor[signer.InferenceState](), "ActiveVariantID",
+		"agent reports the build it serves (#1348)"},
+	{reflect.TypeFor[signer.InferenceState](), "ActiveKVCacheType",
+		"agent reports the KV-cache type it serves with (#1348)"},
+	{reflect.TypeFor[signer.InferenceState](), "StoredVariants",
+		"agent reports builds a switch left on disk (#1348)"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

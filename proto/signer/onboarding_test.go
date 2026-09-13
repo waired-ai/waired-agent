@@ -58,10 +58,16 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		DesiredIntegrations: &signer.DesiredIntegrations{
 			Enabled: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
 		},
-		DesiredModelGen:    2,
-		DesiredInference:   signer.DesiredInferenceOff,
-		DesiredVariantID:   "q3-gguf",
-		DesiredKVCacheType: "q4_0",
+		DesiredModelGen:       2,
+		DesiredInference:      signer.DesiredInferenceOff,
+		DesiredVariantID:      "q3-gguf",
+		DesiredKVCacheType:    "q4_0",
+		DesiredRemoveVariants: []string{"qwen3:8b/q4-gguf"},
+		ActiveVariantID:       "q3-gguf",
+		ActiveKVCacheType:     "q4_0",
+		StoredVariants: []signer.StoredVariant{
+			{ModelID: "qwen3:8b", VariantID: "q4-gguf", SizeBytes: 5_200_000_000},
+		},
 	}
 	signed, err := k.SignNetworkMap(nm)
 	if err != nil {
@@ -99,6 +105,17 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		}},
 		{"DesiredVariantID", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredVariantID = "mtp-q4-gguf" }},
 		{"DesiredKVCacheType", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredKVCacheType = "f16" }},
+		// Replaces the slice for the reason DesiredIntegrations does: an
+		// in-place edit would rewrite the map the later subtests verify.
+		// Tampering here would delete a build the user did not name.
+		{"DesiredRemoveVariants", func(m *signer.NetworkMap) {
+			m.Self.InferenceState.DesiredRemoveVariants = []string{"qwen3:8b/q3-gguf"}
+		}},
+		{"ActiveVariantID", func(m *signer.NetworkMap) { m.Self.InferenceState.ActiveVariantID = "q4-gguf" }},
+		{"ActiveKVCacheType", func(m *signer.NetworkMap) { m.Self.InferenceState.ActiveKVCacheType = "q8_0" }},
+		{"StoredVariants", func(m *signer.NetworkMap) {
+			m.Self.InferenceState.StoredVariants = []signer.StoredVariant{{ModelID: "qwen3:8b", VariantID: "q3-gguf"}}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

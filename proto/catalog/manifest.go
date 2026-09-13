@@ -342,6 +342,35 @@ type VariantSource struct {
 	Tag      string `json:"tag,omitempty"`
 	RepoID   string `json:"repo_id,omitempty"`
 	Revision string `json:"revision,omitempty"`
+
+	// Digest pins an ollama Tag to the registry manifest it had when the
+	// catalog entry was measured ("sha256:<64 hex>"). A community tag can
+	// be re-pushed under the same name: frob/qwen3.8-flash-next's grew
+	// from 55 GB to 79 GB with no change to the tag
+	// (waired-ai/waired-agent#1305), and every size, fit and ETA figure the
+	// catalog carried went stale with it. A puller compares it against the
+	// registry before pulling and refuses a different manifest.
+	//
+	// Deliberately outside VariantSHA: that payload is frozen, and folding
+	// the pin into it would invalidate every recorded measurement keyed by
+	// the variant (request shapes, boot-bench caches) without the weights
+	// having moved. Empty = not pinned.
+	Digest string `json:"digest,omitempty"`
+}
+
+// validDigest reports whether d is a registry manifest digest in the
+// only form the pin accepts: "sha256:" and 64 lowercase hex digits.
+func validDigest(d string) bool {
+	h, ok := strings.CutPrefix(d, "sha256:")
+	if !ok || len(h) != 64 {
+		return false
+	}
+	for _, c := range h {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // SourceHF is the Type value for Hugging Face Hub repositories.
@@ -564,6 +593,14 @@ func (m *Manifest) Validate() error {
 		}
 		if err := validateSizingLayout(m.ModelID, v); err != nil {
 			return err
+		}
+		if d := v.Source.Digest; d != "" {
+			if v.Source.Type != SourceOllama {
+				return fmt.Errorf("manifest %s variant %s: source.digest pins an ollama tag; source.type is %q", m.ModelID, v.VariantID, v.Source.Type)
+			}
+			if !validDigest(d) {
+				return fmt.Errorf("manifest %s variant %s: source.digest %q is not sha256:<64 lowercase hex>", m.ModelID, v.VariantID, d)
+			}
 		}
 	}
 	for engine, id := range m.DefaultVariant {

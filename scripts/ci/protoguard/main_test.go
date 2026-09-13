@@ -188,6 +188,29 @@ func Verify(msg []byte) error { return nil }
 	}
 }
 
+// A parameter rename is not an API change: `func(_ Host)` and
+// `func(h Host)` are the same signature to every caller. Grouped and
+// ungrouped names are the same list, too. A changed type still fails.
+func TestParameterRename_Passes(t *testing.T) {
+	renamed := strings.Replace(oldSrc, "func Verify(msg []byte) error", "func Verify(_ []byte) (err error)", 1)
+	if v := mustRun(t, writeProto(t, oldSrc), writeProto(t, renamed)); len(v) != 0 {
+		t.Fatalf("a parameter rename should pass, got %v", v)
+	}
+	grouped := `package signer
+func Pair(a, b int) int { return a }
+`
+	ungrouped := `package signer
+func Pair(x int, y int) int { return x }
+`
+	if v := mustRun(t, writeProto(t, grouped), writeProto(t, ungrouped)); len(v) != 0 {
+		t.Fatalf("regrouping named parameters should pass, got %v", v)
+	}
+	retyped := `package signer
+func Pair(x int, y int64) int { return x }
+`
+	assertViolation(t, mustRun(t, writeProto(t, grouped), writeProto(t, retyped)), "Pair: signature changed")
+}
+
 func TestAddedFieldJSONDashIsSafe(t *testing.T) {
 	newSrc := `package signer
 const CapabilityFooV1 = "foo-v1"

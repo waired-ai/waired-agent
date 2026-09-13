@@ -309,6 +309,24 @@ type InferenceState struct {
 	DesiredVariantID   string `json:"desired_variant_id,omitempty"`
 	DesiredKVCacheType string `json:"desired_kv_cache_type,omitempty"`
 
+	// DesiredRemoveVariants are the stored builds the user asked this device
+	// to delete, each "<model_id>/<variant_id>" naming an entry of the
+	// device's own StoredVariants (decision 4 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md:
+	// switching to another build of the same model offers to remove the
+	// previous one, waired-ai/waired-agent#1348).
+	//
+	// A standing request, not an event: the agent deletes a listed build
+	// that is stored and not being served, and the control plane drops an
+	// entry once the device no longer reports it in StoredVariants. A build
+	// that becomes the served one again is therefore never deleted by an
+	// old entry — it is no longer a stored leftover, so the entry is pruned
+	// first.
+	//
+	// Self-entry only and gated on CapabilityVariantChoiceV1, like the two
+	// fields above.
+	DesiredRemoveVariants []string `json:"desired_remove_variants,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
@@ -426,6 +444,31 @@ type InferenceState struct {
 	// agent on a network has to be upgraded together until a gate exists. A
 	// gate can be added later; CapabilityContextWindowV1 is the shape.
 	ActiveModel string `json:"active_model,omitempty"`
+
+	// ActiveVariantID and ActiveKVCacheType are the build of ActiveModel
+	// the engine is serving and the KV-cache type it was started with
+	// (catalog.KVCache*). They let a console mark the served build and a
+	// control plane that follows a local model choice keep the build with
+	// the model (decision 5 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md,
+	// waired-ai/waired-agent#1348). "" = not reported.
+	//
+	// Unlike ActiveModel these ride the network map only to pollers that
+	// declare CapabilityVariantChoiceV1: an agent that predates them would
+	// drop them on canonical re-marshal and reject the map, and the fleet
+	// that ActiveModel's ungated rollout assumed has since shipped. The
+	// control plane strips them from peer entries for other pollers.
+	ActiveVariantID   string `json:"active_variant_id,omitempty"`
+	ActiveKVCacheType string `json:"active_kv_cache_type,omitempty"`
+
+	// StoredVariants are builds kept on this device's disk that are not
+	// the current build of their model: what a switch to another build of
+	// the same model left behind. Each is removable through
+	// DesiredRemoveVariants. The served build is never listed.
+	//
+	// Device-page information about this one device, never routing input:
+	// the control plane keeps it off peer entries entirely.
+	StoredVariants []StoredVariant `json:"stored_variants,omitempty"`
 
 	// SubsystemState is why this device is or is not serving right now, on
 	// the axis the local management API already publishes under the same
@@ -1201,4 +1244,14 @@ func IsValidSubsystemState(s string) bool {
 		return true
 	}
 	return false
+}
+
+// StoredVariant is one build on a device's disk that is not the current
+// build of its model (InferenceState.StoredVariants).
+type StoredVariant struct {
+	ModelID   string `json:"model_id"`
+	VariantID string `json:"variant_id"`
+	// SizeBytes is the bytes the build's blobs occupy, as the engine
+	// reports them; 0 when unknown.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
 }
