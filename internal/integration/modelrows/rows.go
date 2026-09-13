@@ -114,12 +114,14 @@ func Rows(f Facts) []Row {
 //
 // Only serving peers get a row. A row for a computer that cannot answer is a
 // menu entry whose selection fails, and a picker cannot render one as
-// disabled.
+// disabled. The others are still in Peers, marked NotServing, because their
+// names decide which ids need a hash — and PeerForDirective, which resolves
+// an id against every peer, has to reach the same ids.
 //
 // Names come from inferencemesh.PeerDisplayName, so a public machine is named
 // by its grant pseudonym and never by its real device name (spec §8.5), and
-// one whose pseudonym is missing is dropped by PeerDirectiveModels rather
-// than named some other way.
+// one whose pseudonym is missing is left out rather than named some other
+// way.
 //
 // publicShareOn is a separate argument because it is not in the snapshot:
 // both callers read it from management, and neither can derive it here.
@@ -142,25 +144,64 @@ func FactsFromSnapshot(snap *inferencemesh.Snapshot, limit int, publicShareOn bo
 	if limit <= 0 {
 		return f
 	}
-	for _, p := range snap.Peers {
-		if !inferencemesh.PeerServing(p) {
-			continue
+	f.Peers, _ = peerFacts(snap.Peers)
+	for _, p := range f.Peers {
+		if !p.NotServing {
+			f.PeerWindow1M = f.PeerWindow1M || p.Window1M
 		}
+	}
+	return f
+}
+
+// peerFacts is the one projection from mesh peers to PeerFacts, shared by the
+// rows and by PeerForDirective so the two cannot come to disagree about an
+// id. from[i] is the index in peers that fact i came from.
+func peerFacts(peers []inferencemesh.PeerView) (facts []claudecode.PeerFact, from []int) {
+	for i, p := range peers {
 		name, ok := inferencemesh.PeerDisplayName(p)
 		if !ok {
 			continue
 		}
 		win := declaredWindow(p)
-		wide := win >= hostfit.ServingWindow1M
-		f.PeerWindow1M = f.PeerWindow1M || wide
-		f.Peers = append(f.Peers, claudecode.PeerFact{
+		facts = append(facts, claudecode.PeerFact{
 			DisplayID:     name,
+			Key:           peerKey(p),
+			NotServing:    !inferencemesh.PeerServing(p),
 			Model:         inferencemesh.PeerModel(p),
-			Window1M:      wide,
+			Window1M:      win >= hostfit.ServingWindow1M,
 			ContextWindow: win,
 		})
+		from = append(from, i)
 	}
-	return f
+	return facts, from
+}
+
+// peerKey is what a hashed id is derived from. The device id for one of your
+// own computers and for a teammate's. For a public machine it is the grant id:
+// a hash of the device id would be a handle on a stranger's machine that
+// outlives the grant, which is what the pseudonym exists to avoid (spec §8.5).
+func peerKey(p inferencemesh.PeerView) string {
+	if p.Grant != nil && !inferencemesh.IsTeamGrant(p.Grant) {
+		return p.Grant.ID
+	}
+	return p.DeviceID
+}
+
+// PeerForDirective is the peer a per-peer directive id names, found by
+// generating every peer's id from these peers and matching the id in full.
+//
+// It looks at every peer, serving or not. An id that names a computer which
+// has stopped answering still names that computer, so the turn is pinned to
+// it and fails with the reason it cannot serve, rather than as if the
+// computer had left.
+func PeerForDirective(peers []inferencemesh.PeerView, id string) (inferencemesh.PeerView, bool) {
+	facts, from := peerFacts(peers)
+	for i, got := range claudecode.PeerDirectiveIDs(facts) {
+		if got != "" && got == id {
+			return peers[from[i]], true
+		}
+	}
+	return inferencemesh.PeerView{}, false
 }
 
 // declaredWindow is the input window a node publishes, 0 when it publishes

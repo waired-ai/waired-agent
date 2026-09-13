@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -37,8 +38,21 @@ func TestFactsFromSnapshot(t *testing.T) {
 			},
 		}
 		f := FactsFromSnapshot(snap, 5, false)
-		if len(f.Peers) != 1 || f.Peers[0].DisplayID != "linux-gpu" {
-			t.Errorf("peers = %+v, want only the serving one", f.Peers)
+		// The peers that cannot answer are still in the facts, marked, since
+		// their names decide which ids need a hash. They get no row.
+		var peerRows []string
+		for _, r := range Rows(f) {
+			if claudecode.IsPeerDirectiveID(r.ID) {
+				peerRows = append(peerRows, r.ID)
+			}
+		}
+		if len(peerRows) != 1 || peerRows[0] != "waired/peer-linux-gpu" {
+			t.Errorf("peer rows = %v, want only the serving one", peerRows)
+		}
+		for _, p := range f.Peers {
+			if p.NotServing != (p.DisplayID != "linux-gpu") {
+				t.Errorf("peer %q NotServing = %v", p.DisplayID, p.NotServing)
+			}
 		}
 		if f.Peers[0].Model != "qwen3.5-4b" {
 			t.Errorf("model = %q, want the catalog id rather than the engine tag", f.Peers[0].Model)
@@ -144,6 +158,97 @@ func TestFactsFromSnapshot(t *testing.T) {
 		}
 		if len(f.Peers) != 0 {
 			t.Errorf("peers = %+v, want none", f.Peers)
+		}
+	})
+}
+
+// PIN: product contract — the id a row is offered under resolves to that
+// row's computer and no other (waired-agent#325; waired#1370 review). Rows and
+// PeerForDirective must agree for every row, whatever the names.
+func TestPeerForDirective(t *testing.T) {
+	team := func(v inferencemesh.PeerView, owner string) inferencemesh.PeerView {
+		v.Grant = &signer.PeerGrant{ID: "g_" + v.DeviceID, Kind: "team", Role: "provider", DisplayName: owner}
+		return v
+	}
+	ownIdle := peerView("studio-mac", "dev_own", "qwen3.5:4b", false)
+	peers := []inferencemesh.PeerView{
+		team(peerView("studio-mac", "dev_tanaka", "qwen3.5:4b", true), "田中"),
+		team(peerView("studio-mac", "dev_sato", "qwen3.5:4b", true), "佐藤"),
+		ownIdle,
+		team(peerView("sv-evo-box", "dev_mail1", "qwen3.5:4b", true), "alice.example@example.com"),
+		team(peerView("sv-evo-box", "dev_mail2", "qwen3.5:4b", true), "alice.example@example.org"),
+		peerView("studio-mac-2", "dev_literal2", "qwen3.5:4b", true),
+		peerView("linux-gpu", "dev_gpu", "qwen3.5:4b", true),
+	}
+	f := FactsFromSnapshot(&inferencemesh.Snapshot{Peers: peers}, 10, false)
+
+	t.Run("every offered row resolves to its own computer", func(t *testing.T) {
+		rows := claudecode.PeerDirectiveModels(f.Peers, 10)
+		if len(rows) != 6 {
+			t.Fatalf("got %d peer rows, want the 6 serving peers: %+v", len(rows), rows)
+		}
+		var serving []inferencemesh.PeerView
+		for _, p := range peers {
+			if inferencemesh.PeerServing(p) {
+				serving = append(serving, p)
+			}
+		}
+		for i, r := range rows {
+			got, ok := PeerForDirective(peers, r.ID)
+			if !ok {
+				t.Errorf("row %q resolves to nothing", r.ID)
+				continue
+			}
+			if got.DeviceID != serving[i].DeviceID {
+				t.Errorf("row %q (%s) resolves to %s", r.ID, r.DisplayName, got.DeviceID)
+			}
+		}
+	})
+
+	t.Run("the bare slug no longer names any of the same-named computers", func(t *testing.T) {
+		if got, ok := PeerForDirective(peers, "waired/peer-studio-mac"); ok {
+			t.Errorf("waired/peer-studio-mac resolved to %s", got.DeviceID)
+		}
+	})
+
+	t.Run("an old -2 id names only a computer called that", func(t *testing.T) {
+		got, ok := PeerForDirective(peers, "waired/peer-studio-mac-2")
+		if !ok || got.DeviceID != "dev_literal2" {
+			t.Errorf("resolved to %q, %v; want the computer named studio-mac-2", got.DeviceID, ok)
+		}
+		without := append([]inferencemesh.PeerView(nil), peers[:5]...)
+		if got, ok := PeerForDirective(without, "waired/peer-studio-mac-2"); ok {
+			t.Errorf("with no studio-mac-2 on the mesh, the old ordinal id resolved to %s", got.DeviceID)
+		}
+	})
+
+	t.Run("a computer that stopped answering is still the one its id names", func(t *testing.T) {
+		ids := claudecode.PeerDirectiveIDs(f.Peers)
+		idle := 0
+		for i, p := range f.Peers {
+			if !p.NotServing {
+				continue
+			}
+			idle++
+			got, ok := PeerForDirective(peers, ids[i])
+			if !ok || got.DeviceID != "dev_own" {
+				t.Errorf("id %q resolved to %q, %v; want your own idle studio-mac", ids[i], got.DeviceID, ok)
+			}
+		}
+		if idle != 1 {
+			t.Errorf("the facts hold %d idle peers, want your own idle studio-mac", idle)
+		}
+	})
+
+	t.Run("a public machine's hash does not come from its device id", func(t *testing.T) {
+		pub := peerView("stranger", "dev_stranger", "qwen3.5:4b", true)
+		pub.Grant = &signer.PeerGrant{ID: "g_pub", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3"}
+		pub2 := pub
+		pub2.DeviceID = "dev_stranger2"
+		pub2.Grant = &signer.PeerGrant{ID: "g_pub2", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3"}
+		facts, _ := peerFacts([]inferencemesh.PeerView{pub, pub2})
+		if facts[0].Key != "g_pub" || facts[1].Key != "g_pub2" {
+			t.Errorf("keys = %q, %q; want the grant ids", facts[0].Key, facts[1].Key)
 		}
 	})
 }

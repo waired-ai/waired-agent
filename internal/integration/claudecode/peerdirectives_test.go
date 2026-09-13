@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -107,32 +108,54 @@ func TestPeerDirectiveModels(t *testing.T) {
 	// Two machines whose names reduce to the same slug must stay two rows,
 	// with two ids — otherwise the second is unreachable and the first is
 	// ambiguous.
-	t.Run("colliding names get an ordinal on both id and label", func(t *testing.T) {
+	//
+	// Inverted (waired#1370 review): the ids used to be studio-mac,
+	// studio-mac-2 and studio-mac-3. An ordinal names a position in the list,
+	// and the resolver matched the slug and ignored it, so the "-2" row named
+	// nothing and the first row named whichever machine came first. Each id
+	// now ends in a hash of its own machine's key. The label ordinal now
+	// counts identical names only: "studio mac" and "studio-mac" already
+	// read differently, and a teammate's row would otherwise read
+	// "studio-mac (佐藤) (2)".
+	t.Run("colliding names each get a hashed id", func(t *testing.T) {
 		got := PeerDirectiveModels([]PeerFact{
-			{DisplayID: "studio mac", Model: "a"},
-			{DisplayID: "studio-mac", Model: "b"},
-			{DisplayID: "Studio.Mac", Model: "c"},
+			{DisplayID: "studio mac", Key: "dev_1", Model: "a"},
+			{DisplayID: "studio-mac", Key: "dev_2", Model: "b"},
+			{DisplayID: "Studio.Mac", Key: "dev_3", Model: "c"},
 		}, 5)
-		want := []string{
-			"waired/peer-studio-mac",
-			"waired/peer-studio-mac-2",
-			"waired/peer-studio-mac-3",
-		}
 		if len(got) != 3 {
 			t.Fatalf("got %d entries, want 3: %+v", len(got), got)
 		}
 		seen := map[string]bool{}
-		for i, w := range want {
-			if got[i].ID != w {
-				t.Errorf("entry %d id = %q, want %q", i, got[i].ID, w)
+		for i, e := range got {
+			if !regexp.MustCompile(`^waired/peer-studio-mac-[0-9a-f]{6}$`).MatchString(e.ID) {
+				t.Errorf("entry %d id = %q, want studio-mac and a hash", i, e.ID)
 			}
-			if seen[got[i].ID] {
-				t.Errorf("duplicate id %q — one of these rows is unreachable", got[i].ID)
+			if seen[e.ID] {
+				t.Errorf("duplicate id %q — one of these rows is unreachable", e.ID)
 			}
-			seen[got[i].ID] = true
+			seen[e.ID] = true
 		}
-		if !strings.Contains(got[1].DisplayName, "(2)") {
-			t.Errorf("the second row does not say which one it is: %q", got[1].DisplayName)
+		for _, e := range got {
+			if strings.Contains(e.DisplayName, "(2)") || strings.Contains(e.DisplayName, "(3)") {
+				t.Errorf("names that already read differently got an ordinal: %q", e.DisplayName)
+			}
+		}
+	})
+
+	t.Run("the same name twice gets an ordinal on the label", func(t *testing.T) {
+		got := PeerDirectiveModels([]PeerFact{
+			{DisplayID: "studio-mac", Key: "dev_1"},
+			{DisplayID: "studio-mac", Key: "dev_2"},
+		}, 5)
+		if len(got) != 2 {
+			t.Fatalf("got %d entries, want 2: %+v", len(got), got)
+		}
+		if got[0].DisplayName != "Waired peer: studio-mac" || got[1].DisplayName != "Waired peer: studio-mac (2)" {
+			t.Errorf("labels = %q, %q", got[0].DisplayName, got[1].DisplayName)
+		}
+		if got[0].ID == got[1].ID {
+			t.Errorf("two computers share id %q", got[0].ID)
 		}
 	})
 
@@ -183,6 +206,106 @@ func TestPeerDirectiveModels(t *testing.T) {
 		}, 9) {
 			if fixed[d.ID] {
 				t.Errorf("per-peer id %q collides with a fixed directive", d.ID)
+			}
+		}
+	})
+}
+
+// PIN: product contract — an id names one computer, and a turn carrying it is
+// never served by a different one (waired-agent#325, the fail-closed pin;
+// waired#1370 review for the cases below). The id shapes themselves are a
+// record of today's behaviour.
+func TestPeerDirectiveIDs(t *testing.T) {
+	idsOf := func(peers ...PeerFact) []string { return PeerDirectiveIDs(peers) }
+	hashed := regexp.MustCompile(`-[0-9a-f]{6}$`)
+
+	t.Run("a common ASCII name keeps its readable id", func(t *testing.T) {
+		got := idsOf(
+			PeerFact{DisplayID: "linux-gpu", Key: "dev_a"},
+			PeerFact{DisplayID: "mac-mini.local", Key: "dev_b"},
+			PeerFact{DisplayID: "studio-mac (Alice Example)", Key: "dev_c"},
+		)
+		want := []string{"waired/peer-linux-gpu", "waired/peer-mac-mini-local", "waired/peer-studio-mac-alice-example"}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("id %d = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("two teammates' computers with the same name and your own are three ids", func(t *testing.T) {
+		got := idsOf(
+			PeerFact{DisplayID: "studio-mac (田中)", Key: "dev_tanaka"},
+			PeerFact{DisplayID: "studio-mac (佐藤)", Key: "dev_sato"},
+			PeerFact{DisplayID: "studio-mac", Key: "dev_own", NotServing: true},
+		)
+		seen := map[string]bool{}
+		for i, id := range got {
+			if !hashed.MatchString(id) {
+				t.Errorf("id %d = %q, want a hash: the slug alone is studio-mac for all three", i, id)
+			}
+			if seen[id] {
+				t.Errorf("id %q names two computers", id)
+			}
+			seen[id] = true
+		}
+		// The hash follows the key, not the position.
+		again := idsOf(
+			PeerFact{DisplayID: "studio-mac", Key: "dev_own", NotServing: true},
+			PeerFact{DisplayID: "studio-mac (佐藤)", Key: "dev_sato"},
+			PeerFact{DisplayID: "studio-mac (田中)", Key: "dev_tanaka"},
+		)
+		if again[2] != got[0] || again[1] != got[1] || again[0] != got[2] {
+			t.Errorf("reordering moved an id to another computer: %v then %v", got, again)
+		}
+	})
+
+	t.Run("a non-ASCII name is hashed even with nothing to collide with", func(t *testing.T) {
+		// Your own studio-mac may have been offered as waired/peer-studio-mac
+		// yesterday. A teammate's studio-mac (田中) must not answer to it today.
+		got := idsOf(PeerFact{DisplayID: "studio-mac (田中)", Key: "dev_tanaka"})
+		if got[0] == "waired/peer-studio-mac" || !hashed.MatchString(got[0]) {
+			t.Errorf("id = %q, want studio-mac and a hash", got[0])
+		}
+	})
+
+	t.Run("a name the cap cuts is hashed", func(t *testing.T) {
+		got := idsOf(
+			PeerFact{DisplayID: "sv-evo-box (alice.example@example.com)", Key: "dev_1"},
+			PeerFact{DisplayID: "sv-evo-box (alice.example@example.org)", Key: "dev_2"},
+		)
+		for i, id := range got {
+			if !hashed.MatchString(id) {
+				t.Errorf("id %d = %q, want a hash: both names cut to the same 32 bytes", i, id)
+			}
+			if slug := strings.TrimPrefix(id, PeerDirectivePrefix); len(slug) > peerSlugMaxBytes {
+				t.Errorf("slug %q is %d bytes, over the %d cap", slug, len(slug), peerSlugMaxBytes)
+			}
+		}
+		if got[0] == got[1] {
+			t.Errorf("two computers share id %q", got[0])
+		}
+		// Alone, too: yesterday's list may have held the other one, and
+		// its id must not come to name this computer today.
+		if id := idsOf(PeerFact{DisplayID: "sv-evo-box (alice.example@example.com)", Key: "dev_1"})[0]; id != got[0] {
+			t.Errorf("alone, id = %q; want %q, the same id it had beside its namesake", id, got[0])
+		}
+		// A name exactly at the cap loses nothing and needs no hash.
+		exact := strings.Repeat("a", peerSlugMaxBytes)
+		if id := idsOf(PeerFact{DisplayID: exact, Key: "dev_x"})[0]; id != PeerDirectivePrefix+exact {
+			t.Errorf("id = %q, want the name unchanged", id)
+		}
+	})
+
+	t.Run("an id that could be either computer names neither", func(t *testing.T) {
+		got := idsOf(
+			PeerFact{DisplayID: "studio-mac", Key: "dev_same"},
+			PeerFact{DisplayID: "studio mac", Key: "dev_same"},
+			PeerFact{DisplayID: "作業用 box"},
+		)
+		for i, id := range got {
+			if id != "" {
+				t.Errorf("id %d = %q, want none", i, id)
 			}
 		}
 	})
