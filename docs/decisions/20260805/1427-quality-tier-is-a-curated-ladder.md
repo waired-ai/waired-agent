@@ -1,11 +1,15 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
 ---
 
 # quality_tier は「載せると決めた世代の並び順」である (20260805 14:27)
 
 ## Status
 Accepted
+
+`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md`（オーナー裁定 2026-09-13）が**部分的に狭める（覆さない）**: 高帯の `tier_override` に「能動的に更新される独立ランナーの出典」を必須とする規則は外れ、理由の記載だけが必須になる（決定 3。カタログの構成はオーナーの裁量で、指標は参考値）。`quality_tier` が「載せると決めた世代の並び順」であること、composite からベンチ項を消したこと、`benchmarks.json` を証拠置き場として残すこと、gpt-oss を載せて推奨しないことはそのまま有効。
 
 ## Context
 

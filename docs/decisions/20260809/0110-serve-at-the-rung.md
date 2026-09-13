@@ -2,12 +2,15 @@
 status: accepted
 superseded_by:
   - docs/decisions/20260828/1900-retire-the-forced-generation-batch.md
+  - docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
 ---
 
 # エンジンは rung で起動する — sub-rung 切り詰めの撤廃 (20260809 01:10)
 
 ## Status
 Accepted
+
+`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md`（オーナー裁定 2026-09-13）が**部分的に狭める（覆さない）**: 規則 2（上限付きスピル）と規則 3（単調性）は serve 側の rung 選びに残るが、推奨の判定には使わない（推奨は完全常駐、決定 10）。rung 固定起動、宣言ゲート、verify の latch はそのまま有効。
 
 ## Context
 

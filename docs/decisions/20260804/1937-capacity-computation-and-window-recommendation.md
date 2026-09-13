@@ -4,6 +4,7 @@ supersedes:
   - docs/decisions/20260801/1318-recommend-on-resident-weights.md
 superseded_by:
   - docs/decisions/20260820/0005-windows-apu-carve-out-is-not-additive.md
+  - docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
 ---
 
 # 容量は計算式・推奨は「200k を宣言できるか」 (20260804 19:37)
@@ -14,6 +15,8 @@ Accepted。決定 2 のうち「Windows のレジストリ読み値は OS が RA
 `docs/decisions/20260820/0005-windows-apu-carve-out-is-not-additive.md`
 (20260820 00:05) で取り消された。判別軸を出どころに置く方針そのもの、
 および決定 1・3 は引き続き有効。
+
+`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md`（オーナー裁定 2026-09-13）が §3 の条件 3 を**部分的に狭める（覆さない）**: 「serve tuning のサイジングが 200k に到達する（上限付きのスピルを含む）」は「200k のコンテキストウィンドウ込みで完全常駐（CPU に落ちる層が 0）」になる（決定 10）。条件 1・2、GPU の無いホストの免除、§4「予測速度では除外しない」、§5 の単調性（serve 側）はそのまま有効。
 
 方針の一次ソースは waired-ai/waired#1056 のオーナー決定コメント
 (2026-08-03) と、その決定ログ

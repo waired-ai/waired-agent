@@ -1,11 +1,15 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
 ---
 
 # 量子化 KV とフラッシュアテンションは「文脈長を買えるとき」だけ要求する (20260727 17:15)
 
 ## Status
 Accepted
+
+`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md`（オーナー裁定 2026-09-13）が**部分的に狭める（覆さない）**: GPU / UMA 予算があるホストの枝は `q8_0` ではなく `q4_0` を既定にし、variant の許容表 `kv_cache_types` に無ければ `q8_0` → `f16` の順に落とす（決定 2）。CPU-only の `f16`、「文脈長を買えるときだけ量子化 KV とフラッシュアテンションを要求する」規律、FA を出力しない側の扱いはそのまま有効。
 
 ## Context
 
