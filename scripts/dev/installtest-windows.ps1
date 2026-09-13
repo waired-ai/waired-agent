@@ -842,9 +842,12 @@ function Assert-Inference {
         ItBad "local inference is off (mgmt API desired_state=$desired; the host-speed cutoff claims this: turned_inference_off=$byCutoff)"
     }
 
-    # 4) benchmark ran in the init transcript (offerBenchmark): require a
-    #    THROUGHPUT NUMBER (tok/s | tokens/s). Mirrors installtest-enroll.sh
-    #    and installtest-macos.sh (cross-OS parity). The bare "Local inference
+    # 4) benchmark ran in the init transcript (offerBenchmark): require the
+    #    served model's MEASURED FIGURE in seconds per request
+    #    (waired-ai/waired-agent#1341; it used to be tok/s). The suffix keeps
+    #    the host-speed row ("N s per request, measured with a small model")
+    #    from satisfying it. Mirrors installtest-enroll.sh and
+    #    installtest-macos.sh (cross-OS parity). The bare "Local inference
     #    works" line used to be accepted for a host too slow to measure a
     #    rate — but a benchmark whose warm-up got an engine 500 printed that
     #    same line, so the assert passed while the engine was dead
@@ -857,7 +860,7 @@ function Assert-Inference {
     #    is what the red says, not whether it is red.
     if (Test-Path -LiteralPath $InitLog) {
         $txt = Get-Content -LiteralPath $InitLog -Raw
-        $m = [regex]::Match($txt, '(?i)[0-9]+(\.[0-9]+)?\s*(tok|tokens)/s')
+        $m = [regex]::Match($txt, '[0-9]+(\.[0-9]+)? s (or more )?per request( on this computer| here| \(target)')
         $nr = [regex]::Match($txt, $BenchNotReadyRe)
         if ($m.Success) {
             ItOk "benchmark ran during init ($($m.Value))"
@@ -894,7 +897,7 @@ function Assert-Inference {
             & (Join-Path $InstallDir 'waired.exe') logs --since 30m --state-dir $StateDir -o $bundle *> $null
             Write-EvidenceDump -Bundle $bundle
         } else {
-            ItBad "no benchmark THROUGHPUT figure in init transcript ($InitLog)"
+            ItBad "no benchmark figure (seconds per request) in init transcript ($InitLog)"
             ($txt -split "`n" | Select-String -Pattern 'benchmark|inference|engine' |
                 Select-Object -Last 20 | ForEach-Object { "    init| $_" }) | Write-Host
         }
