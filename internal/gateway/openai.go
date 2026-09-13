@@ -229,6 +229,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		"mode", sel.ExecutionMode,
 		"peer", peerDisplayID(sel),
 		"fallback_from", probed.FallbackFrom,
+		"class", class,
 	)
 	// Release the in-flight slot the Selector held on our behalf.
 	// Production Selector always sets a non-nil Release (noopRelease
