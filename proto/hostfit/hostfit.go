@@ -1148,7 +1148,7 @@ func ServingWindowKVMB(v catalog.Variant, window int) int {
 	if v.KVBytesPerTokenFP16 <= 0 || window <= 0 {
 		return 0
 	}
-	return bytesToMiB(float64(v.KVBytesPerTokenFP16) * OllamaKVCacheFactor(OllamaDefaultKVCacheType(Host{})) * float64(window))
+	return bytesToMiB(float64(v.KVBytesPerTokenFP16) * OllamaKVCacheFactor(ResolveKVCacheType(catalog.RuntimeOllama, v, Host{GPUCount: 1}, nil, "")) * float64(window))
 }
 
 // OllamaWindowResidentMB is what a variant must hold in GPU-addressable
@@ -1173,7 +1173,7 @@ func OllamaWindowResidentMB(v catalog.Variant, window int, unifiedMemory bool) i
 		return 0
 	}
 	h := Host{UnifiedMemory: unifiedMemory, GPUCount: 1}
-	return OllamaEstimateMemory(v, h, OllamaDefaultKVCacheType(h), window, 1).DeviceMB()
+	return OllamaEstimateMemory(v, h, ResolveKVCacheType(catalog.RuntimeOllama, v, h, nil, ""), window, 1).DeviceMB()
 }
 
 // OllamaResident is the GPU-residency half of the ollama fit: can this
@@ -1329,7 +1329,7 @@ func ollamaCapacityAtWindow(v catalog.Variant, h Host, window int) Verdict {
 		return out
 	}
 	have := h.TotalMemoryMB()
-	mem := OllamaEstimateMemory(v, h, OllamaDefaultKVCacheType(h), window, 1)
+	mem := OllamaEstimateMemory(v, h, ResolveKVCacheType(catalog.RuntimeOllama, v, h, nil, ""), window, 1)
 	ramMB := max((h.RAMTotalGB-h.OSMemoryDeductionGB())*1024, 0)
 	switch need := mem.TotalMB(); {
 	case need > 0 && need > have:

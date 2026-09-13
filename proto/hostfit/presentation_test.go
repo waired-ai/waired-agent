@@ -507,14 +507,15 @@ func TestVLLMRecommendModel(t *testing.T) {
 // TestProjectModelFromNamesTheBuildAndCache pins the identity half of the
 // waired-ai/waired-agent#1346 wire: every projected row says which build
 // it judged and which KV-cache type it priced, so a console offering both
-// as choices can tell its rows apart. The ollama row reads the type the
-// serve tuning exports unless the caller asked for another; the vLLM row
-// reads the engine's own rule (fp8 on Ada and later).
+// as choices can tell its rows apart. Both engines resolve the type
+// through ResolveKVCacheType: the one the caller asked for when the host
+// and the build allow it, the default otherwise.
 func TestProjectModelFromNamesTheBuildAndCache(t *testing.T) {
 	m := catalog.Manifest{ModelID: "m", ContextLength: 262144}
 	v := catalog.Variant{
 		VariantID: "q3-gguf", Quantization: "UD-Q3_K_XL",
 		EstimatedWeightGB: 13.15, KVBytesPerTokenFP16: 65536, QualityTier: 66,
+		KVCacheTypes: []string{catalog.KVCacheQ4_0, catalog.KVCacheQ8_0, catalog.KVCacheF16},
 	}
 	h := hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24467}
 
@@ -522,15 +523,26 @@ func TestProjectModelFromNamesTheBuildAndCache(t *testing.T) {
 	if got.VariantID != "q3-gguf" || got.Quantization != "UD-Q3_K_XL" {
 		t.Errorf("ollama row names %q / %q, want q3-gguf / UD-Q3_K_XL", got.VariantID, got.Quantization)
 	}
-	if got.KVCacheType != hostfit.OllamaDefaultKVCacheType(h) {
-		t.Errorf("ollama row priced %q, want the default %q", got.KVCacheType, hostfit.OllamaDefaultKVCacheType(h))
+	if got.KVCacheType != catalog.KVCacheQ4_0 {
+		t.Errorf("ollama row priced %q, want the q4_0 default", got.KVCacheType)
 	}
 
 	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{
-		Manifest: m, Variant: v, Engine: catalog.RuntimeOllama, Host: h, KVCacheType: catalog.KVCacheQ4_0,
+		Manifest: m, Variant: v, Engine: catalog.RuntimeOllama, Host: h, KVCacheType: catalog.KVCacheF16,
 	})
-	if got.KVCacheType != catalog.KVCacheQ4_0 {
-		t.Errorf("ollama row asked for q4_0 priced %q", got.KVCacheType)
+	if got.KVCacheType != catalog.KVCacheF16 {
+		t.Errorf("ollama row asked for f16 priced %q", got.KVCacheType)
+	}
+
+	// A build that does not list q4_0 is priced at the next rung, even
+	// when q4_0 is asked for: the row names what would actually be served.
+	unlisted := v
+	unlisted.KVCacheTypes = nil
+	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{
+		Manifest: m, Variant: unlisted, Engine: catalog.RuntimeOllama, Host: h, KVCacheType: catalog.KVCacheQ4_0,
+	})
+	if got.KVCacheType != catalog.KVCacheQ8_0 {
+		t.Errorf("ollama row for a build without q4_0, asked for q4_0, priced %q; want q8_0", got.KVCacheType)
 	}
 
 	vl := catalog.Variant{VariantID: "fp8", Quantization: "FP8", MinVRAMMB: 20000, QualityTier: 70}
@@ -538,6 +550,15 @@ func TestProjectModelFromNamesTheBuildAndCache(t *testing.T) {
 	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: catalog.RuntimeVLLM, Host: h, BudgetMB: 24564, GPUs: ada})
 	if got.VariantID != "fp8" || got.KVCacheType != catalog.KVCacheFP8 {
 		t.Errorf("vLLM row on Ada = %q / %q, want fp8 / fp8", got.VariantID, got.KVCacheType)
+	}
+	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: catalog.RuntimeVLLM, Host: h, BudgetMB: 24564, GPUs: ada, KVCacheType: catalog.KVCacheFP16})
+	if got.KVCacheType != catalog.KVCacheFP16 {
+		t.Errorf("vLLM row on Ada asked for fp16 = %q, want fp16", got.KVCacheType)
+	}
+	ampere := []signer.HardwareGPUSummary{{Vendor: "nvidia", VRAMTotalMB: 24564, ComputeCap: "8.6"}}
+	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: catalog.RuntimeVLLM, Host: h, BudgetMB: 24564, GPUs: ampere, KVCacheType: catalog.KVCacheFP8})
+	if got.KVCacheType != catalog.KVCacheFP16 {
+		t.Errorf("vLLM row before Ada asked for fp8 = %q, want fp16", got.KVCacheType)
 	}
 	got = hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: "mlx", Host: h})
 	if got.VariantID != "" || got.KVCacheType != "" {
