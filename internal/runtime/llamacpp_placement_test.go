@@ -13,7 +13,9 @@ func readPlacementFixture(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b)
+	// A Windows checkout converts the fixture to CRLF; the cases below
+	// splice lines by "\n".
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
 }
 
 // TestParseLlamaPlacement reads real llama.cpp load transcripts. The CUDA

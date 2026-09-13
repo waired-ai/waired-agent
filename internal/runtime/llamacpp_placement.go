@@ -74,7 +74,9 @@ func ParseLlamaPlacement(tail string) (LlamaPlacement, bool) {
 	if tail == "" {
 		return LlamaPlacement{}, false
 	}
-	lines := strings.Split(tail, "\n")
+	// Windows writes the engine log with CRLF; the parser reads lines,
+	// not line endings.
+	lines := strings.Split(strings.ReplaceAll(tail, "\r\n", "\n"), "\n")
 	start := 0
 	for i, l := range lines {
 		if llamaStartRe.MatchString(l) {
