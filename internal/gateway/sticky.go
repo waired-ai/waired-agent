@@ -13,6 +13,19 @@ import (
 // this; the gateway respects it verbatim (after sanitisation).
 const stickyHeader = "X-Waired-Conversation-Id"
 
+// sessionAffinityHeader is a client's own session id, sent for the purpose
+// its name says. OpenCode 1.18.30 sends it on every request, equal to that
+// session's x-session-id, and a subagent gets a session of its own
+// (captured with a pass-through proxy, waired-agent#1366).
+//
+// It sits above the body rungs because OpenCode opens every session of one
+// agent with the same system prompt, so the first-message hash put every
+// subagent of a turn in one conversation and bound them to one peer. It is
+// hashed rather than kept verbatim like stickyHeader: a session id is longer
+// than the 32 characters the sanitiser keeps, and ids that share a prefix
+// would collapse.
+const sessionAffinityHeader = "X-Session-Affinity"
+
 // stickyPrefixBytes bounds how much of the request body the
 // last-resort hash consumes. 1 KiB is cheap and, for a client that
 // offers nothing better, is all there is.
@@ -58,14 +71,15 @@ type StickyIdentity struct {
 //  1. The X-Waired-Conversation-Id header, sanitised (32 chars max,
 //     alphanumeric / dash / underscore). Nothing in this repository
 //     sets it; it is there for a client that threads its own identity.
-//  2. A hash of the caller's identity material: the client's own user
+//  2. A hash of the X-Session-Affinity header (sessionAffinityHeader).
+//  3. A hash of the caller's identity material: the client's own user
 //     id and its first message, whichever of the two it sent.
-//  3. A hash of the first stickyPrefixBytes bytes of the body.
+//  4. A hash of the first stickyPrefixBytes bytes of the body.
 //
 // Empty inputs produce an empty string — the Selector reads that as
 // "no affinity hint" and routes purely by rank.
 //
-// # Why rung 2 uses BOTH halves
+// # Why rung 3 uses BOTH halves
 //
 // Neither half is sufficient alone, and each covers the other's gap
 // (all four rows measured on a real `claude` CLI, waired-agent#1125):
@@ -97,6 +111,9 @@ type StickyIdentity struct {
 func ComputeStickyID(headers http.Header, body []byte, id StickyIdentity) string {
 	if explicit := headers.Get(stickyHeader); explicit != "" {
 		return sanitiseStickyHeader(explicit)
+	}
+	if session := headers.Get(sessionAffinityHeader); session != "" {
+		return stickyHash('s', []byte(session))
 	}
 	if material := id.material(); len(material) > 0 {
 		return stickyHash('i', material)

@@ -858,6 +858,26 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.RouteDirectiveRows = func() []modelrows.Row {
 		return provider.routeDirectiveRows(cfg.ClaudeModelPeerEntries)
 	}
+	// OpenCode's subagents arrive here, so the class that decides a
+	// subagent's affinity, its capacity wait and the Serve main
+	// conversation / Serve subagents switches is read here too
+	// (waired-agent#1366).
+	gwDeps.ClassifyRequest = classifyOpenAIListenerClass
+	// A request that finds every slot taken waits for one, with the same
+	// per-class figures the Claude intercept waits with — they already state
+	// how long this deployment accepts waiting before a turn's first byte.
+	// Read through CapacityQueueBudget rather than TTFBBudget, which would
+	// also put a deadline on this listener's peer legs.
+	gwDeps.CapacityQueueBudget = func(class string) time.Duration {
+		ms := cfg.ClaudeTTFBBudgetMainMs
+		if class == state.ClaudeClassSub {
+			ms = cfg.ClaudeTTFBBudgetSubMs
+		}
+		if ms <= 0 {
+			return 0
+		}
+		return time.Duration(ms) * time.Millisecond
+	}
 	gwDeps.AllowOpenAI = cfg.AllowOpenAIAPI
 	gwDeps.AllowAnthropic = cfg.AllowAnthropicAPI
 	gwDeps.IsPaused = isPaused

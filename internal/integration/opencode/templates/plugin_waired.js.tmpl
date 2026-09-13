@@ -49,10 +49,16 @@ async function discover() {
     if (!m || !m.waired_route || !m.id) continue;
     const key = modelKey(m.id);
     if (!key) continue;
+    // OpenCode's config schema requires `output` beside `context`, and warns
+    // on every start without it (waired-agent#1367). Nothing on this host
+    // states an output figure, so 0: it is the value OpenCode itself stores
+    // when the key is absent, and OpenCode reads it as "not stated" — its
+    // own default cap applies either way. Measured on OpenCode 1.18.30: the
+    // same resolved model and the same max_tokens with and without it.
     models[key] = {
       id: m.id,
       name: m.display_name || m.id,
-      ...(m.max_input_tokens > 0 ? { limit: { context: m.max_input_tokens } } : {}),
+      ...(m.max_input_tokens > 0 ? { limit: { context: m.max_input_tokens, output: 0 } } : {}),
     };
   }
   return Object.keys(models).length ? models : null;

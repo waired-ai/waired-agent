@@ -196,8 +196,10 @@ type Deps struct {
 	// class ("main" / "sub", state.ClaudeClass*) from the request's
 	// headers. The class is stamped on router.Request.Class and folded
 	// into the sticky id so main and subagent legs of one conversation
-	// don't share peer affinity. nil means no classification (every
-	// other listener).
+	// don't share peer affinity. Wired on the Claude intercept and on the
+	// OpenAI-compatible listener, whose classifier also leaves a request
+	// that identifies neither way unclassified; nil means no classification
+	// (the overlay listener).
 	//
 	// It read the model id until waired-agent#1186, which meant waired had
 	// to pin a label of its own as every subagent's model just to have
@@ -272,6 +274,15 @@ type Deps struct {
 	// local/waired-only leg is never aborted. Wired only on the
 	// Claude-intercept HandlerSet; nil on every other listener.
 	TTFBBudget func(class string) time.Duration
+
+	// CapacityQueueBudget, when non-nil, is how long a request of the given
+	// traffic class waits for a free slot before its selection gives up
+	// (see capacityQueueBudget). It is read in place of TTFBBudget, for a
+	// listener that should wait for a slot without arming TTFBBudget's
+	// peer-leg deadline: the OpenAI-compatible listener, whose OpenCode
+	// subagents were refused with 503 in half a second when every slot on
+	// their row was taken (waired-agent#1366). nil falls back to TTFBBudget.
+	CapacityQueueBudget func(class string) time.Duration
 
 	// PeerWaitCeiling, when non-nil, returns how long a PEER leg of the
 	// given traffic class may wait in total while the peer keeps saying it

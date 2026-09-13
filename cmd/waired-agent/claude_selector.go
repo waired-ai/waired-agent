@@ -79,6 +79,40 @@ func classifyClaudeClass(h http.Header) string {
 	return state.ClaudeClassMain
 }
 
+// OpenCode's session headers. OpenCode 1.18.30 sends x-session-id on every
+// request, and x-parent-session-id only on a request from a subagent, naming
+// the session that spawned it (captured with a pass-through proxy in front
+// of the OpenAI-compatible listener, waired-agent#1366: absent on the main
+// turn and on the title request, present on every subagent turn).
+const (
+	openCodeSessionHeader       = "X-Session-Id"
+	openCodeParentSessionHeader = "X-Parent-Session-Id"
+)
+
+// classifyOpenAIListenerClass is the traffic class for the OpenAI-compatible
+// listener, where OpenCode's requests arrive.
+//
+// It differs from classifyClaudeClass in one answer, on purpose: a request
+// that identifies neither way is unclassified ("") rather than main. This
+// listener also serves `waired infer`, chat clients and OpenClaw, none of
+// which has a main conversation or a subagent, and a class would subject
+// them to the Serve main conversation switch they were never under. The
+// owner decided the switches apply to OpenCode (2026-09-14, recorded in
+// docs/decisions/20260914/0300-opencode-subagents-get-the-subagent-class.md).
+//
+// Claude Code's attribution header is honoured here too, so an Anthropic-
+// shaped request on this listener from Claude Code is classified the way
+// the intercept would classify it.
+func classifyOpenAIListenerClass(h http.Header) string {
+	if h.Get(subagentIDHeader) != "" || h.Get(openCodeParentSessionHeader) != "" {
+		return state.ClaudeClassSub
+	}
+	if h.Get(openCodeSessionHeader) != "" {
+		return state.ClaudeClassMain
+	}
+	return ""
+}
+
 // workerPref reads the operator's live worker routing preference — the same
 // node selection general inference uses (auto / local-only / peer-preferred /
 // pinned). A nil provider routing accessor falls back to auto.

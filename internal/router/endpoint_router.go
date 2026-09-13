@@ -1318,7 +1318,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if s.in.MeshSnapshotFn != nil {
 			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 			if err != nil {
-				return nil, meshSelectionError(err, manifest.ModelID)
+				return nil, meshSelectionError(err, requestedName(req, manifest.ModelID))
 			}
 			if len(cands) > 0 {
 				return cands, nil
@@ -1351,7 +1351,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		}
 		cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 		if err != nil {
-			return nil, meshSelectionError(err, manifest.ModelID)
+			return nil, meshSelectionError(err, requestedName(req, manifest.ModelID))
 		}
 		if len(cands) > 0 {
 			return cands, nil
@@ -1384,7 +1384,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		} else {
 			cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 			if err != nil {
-				return nil, meshSelectionError(err, manifest.ModelID)
+				return nil, meshSelectionError(err, requestedName(req, manifest.ModelID))
 			}
 			if len(cands) > 0 {
 				return cands, nil
@@ -1440,7 +1440,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 				// a branch this arm does not have.
 				cands, err := s.tryMeshFallbackK(req, want, reasons, k, &short, local)
 				if err != nil {
-					return nil, meshSelectionError(err, manifest.ModelID)
+					return nil, meshSelectionError(err, requestedName(req, manifest.ModelID))
 				}
 				if len(cands) > 0 {
 					return cands, nil
@@ -1461,7 +1461,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			if s.in.MeshSnapshotFn != nil {
 				cands, err := s.tryMeshFallbackK(req, want, meshReasons, k, &short, LocalNode{})
 				if err != nil {
-					return nil, meshSelectionError(err, manifest.ModelID)
+					return nil, meshSelectionError(err, requestedName(req, manifest.ModelID))
 				}
 				if len(cands) > 0 {
 					return cands, nil
@@ -2217,6 +2217,23 @@ func pinReachableInSnapshot(snap inferencemesh.Snapshot, pin string) bool {
 // peer's name along with it (waired-agent#752).
 func meshSelectionError(err error, modelID string) error {
 	return fmt.Errorf("%w: %q", err, modelID)
+}
+
+// requestedName is what a mesh selection error names as the thing the
+// client asked for: the /model row it picked when it picked one, and the
+// catalog id otherwise.
+//
+// A row names a computer, not a model, so the router is handed the
+// "caller named none" alias and resolves it to this host's own default
+// (see Request.NodeDirective). Naming that resolved id told an OpenCode
+// user on the peers-only row that every peer was at capacity for the
+// requester's own local model, which none of those peers runs
+// (waired-agent#1366).
+func requestedName(req Request, modelID string) string {
+	if req.NodeDirective != "" {
+		return req.NodeDirective
+	}
+	return modelID
 }
 
 // pinUnreachable emits the strict-pin event and builds the error for the

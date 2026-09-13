@@ -166,6 +166,19 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	// mid-conversation must not have its affinity move under it because
 	// our normalisation started or stopped applying.
 	stickyID := ComputeStickyID(r.Header, body, stickyIdentityFromOpenAIBody(raw))
+	// Traffic class, the same fold the Anthropic surface makes: OpenCode's
+	// subagents announce themselves with the parent session's id
+	// (waired-agent#1366), and main and subagent legs of one conversation
+	// keep separate peer affinity. Empty for a client that says neither,
+	// which is every client this listener served before.
+	class := ""
+	if h.deps.ClassifyRequest != nil {
+		class = h.deps.ClassifyRequest(r.Header)
+	}
+	if stickyID != "" && class != "" {
+		stickyID += ":" + class
+	}
+	rr.ev.Class = class
 
 	// waired-agent#1055: fold a mid-conversation system / developer turn
 	// into the leading system message, as AnthropicToOpenAI already does
@@ -191,14 +204,17 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		body = folded
 	}
 
-	// No capacity queue on this leg (waired-agent#786 arms one only for
-	// the Claude surface). `waired infer` sends one request at a time, so
-	// there are no concurrent sub-requests to pace, and this same handler
-	// serves the mesh-ingress leg — where holding the peer's caller open
-	// would move the wait onto a machine that cannot see why.
-	routeReq := router.Request{Model: model, StickyID: stickyID}
+	// A request that finds every slot taken waits for one, for as long as
+	// its class allows (capacityQueueBudget). This leg used to answer 503
+	// at once, on the grounds that `waired infer` sends one request at a
+	// time and that this handler also serves the mesh-ingress leg. Neither
+	// holds: OpenCode sends its subagents here concurrently, and six of them
+	// on a peers-only row drew thirteen 503s in 85 s and one failed subagent
+	// (waired-agent#1366); and the mesh-ingress leg is the overlay listener's
+	// own HandlerSet, which has no budget wired, so it still answers at once.
+	routeReq := router.Request{Model: model, StickyID: stickyID, Class: class}
 	h.applyRouteDirective(&routeReq)
-	probed, err := h.selectAndProbe(r.Context(), routeReq, 0)
+	probed, err := h.selectAndProbe(r.Context(), routeReq, capacityQueueBudget(h.deps, class))
 	if err != nil {
 		rr.ev.Model = model
 		rr.failSelection(err, selectionStatus(err))

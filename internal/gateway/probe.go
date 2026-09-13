@@ -695,6 +695,12 @@ func queueAgain(attempt int, elapsed, capacityWait time.Duration, capacityFull b
 // so the condition that turned the wait off went with it — which is the
 // same reasoning, applied to every leg.
 func capacityQueueBudget(deps Deps, class string) time.Duration {
+	if deps.CapacityQueueBudget != nil {
+		if b := deps.CapacityQueueBudget(class); b > 0 {
+			return b
+		}
+		return 0
+	}
 	if deps.TTFBBudget == nil {
 		return 0
 	}
