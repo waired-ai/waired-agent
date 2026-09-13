@@ -98,7 +98,9 @@ with that key. Machines that already joined stay signed in.
 
 `waired init` on a machine that is already signed in ignores the key and
 says *“The auth key was not used. Pass --force-reauth to sign in again with
-it.”* Add `--force-reauth` to replace the machine's existing sign-in.
+it.”* Add `--force-reauth` to sign in again with it. The key has to come from
+the account the machine already belongs to. To use a key from another account,
+run `waired logout` on the machine first.
 
 ## What next
 

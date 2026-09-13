@@ -75,11 +75,13 @@ Control Plane: https://app.waired.ai
 ```
 </Expected>
 
-Without administrator rights, the `Control Plane:` line reads `couldn't read
-this computer's setting from here; the link above is the one that counts`
-instead. The link is still the right one. The background service, which has
-the rights, produced it. Only this terminal could not read the setting that
-records which control plane this computer uses.
+The `Control Plane:` line names the control plane the link goes to, as the
+background service chose it. The service reads the setting that records which
+control plane this computer uses, so the line is right even in a terminal
+without administrator rights. With a background service from an earlier
+version, a terminal without administrator rights shows `couldn't read this
+computer's setting from here; the link above is the one that counts` there
+instead.
 
 What happens next depends on where you are running the command.
 
@@ -153,7 +155,7 @@ you in a second time. It says *“Already signed in as you@example.com —
 resuming setup”* and continues with setup. It does not count as a new device
 against your account.
 
-To sign in again on purpose, for example with a different account, run:
+To sign in again on purpose, run:
 
 ```sh
 sudo waired init --force-reauth
@@ -161,6 +163,20 @@ sudo waired init --force-reauth
 
 The terminal asks `Sign in to this computer again?` first. Answering no leaves
 the computer as it is.
+
+`--force-reauth` signs this computer in again to the account it already belongs
+to, with any sign-in method added to that account. If you choose an account the
+computer does not belong to, the sign-in page stops there, and you can go back
+and choose again. To move the computer to a different account, sign it out
+first, then sign in with the other account:
+
+```sh
+waired logout
+sudo waired init
+```
+
+Signing out removes this computer's identity, so it joins the other account as
+a new device. See [`waired logout`](/reference/cli/setup/#waired-logout).
 
 When a sign-in has expired and cannot be renewed, a plain `waired init` signs
 you in again by itself.
