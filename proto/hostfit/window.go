@@ -25,23 +25,44 @@ import (
 // decision explicitly ruled out inventing one ("×1.2 等の新定数は作らない").
 
 // KV-cache quantization factors relative to fp16, matching ollama's
-// OLLAMA_KV_CACHE_TYPE options. The serve tuning exports q8_0 on every
-// coding path, so that is what the window arithmetic is priced at.
+// OLLAMA_KV_CACHE_TYPE options.
+//
+// OllamaKVFactorQ8_0 rounds ggml's q8_0 block (34 bytes per 32 values,
+// 0.53125 of f16) down to a half, which under-priced a 200k window by
+// 389 MiB on a dense 27B. The sizing reads OllamaKVCacheFactor now; the
+// constant keeps meaning "q8_0" to OllamaPlannedRung's factor parameter
+// (waired-ai/waired-agent#1337).
 const (
 	OllamaKVFactorF16  = 1.0
 	OllamaKVFactorQ8_0 = 0.5
 )
 
 const (
-	// OllamaSpillCalibration maps the byte-math spill prediction to
+	// OllamaSpillCalibration mapped the byte-math spill prediction to
 	// ollama's own /api/ps accounting. Single-point calibration on the
 	// 24 GB anchor host: predicted 3.9 % ↔ measured 13.5 %
-	// (docs/reports, waired-ai/waired-agent#625).
+	// (waired-ai/waired-agent#625).
+	//
+	// Deprecated: the prediction is priced term by term now
+	// (OllamaEstimateMemory, OllamaPredictPlacement) and nothing reads
+	// this; decision 8 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md
+	// retires the single-point constants (waired-ai/waired-agent#1337). It
+	// stays because proto is additive-only across published tags.
 	OllamaSpillCalibration = 3.0
 
-	// OllamaMaxExpectedSpillFraction bounds the expected measured spill
-	// the window sizing will deliberately CREATE to reach the coding
-	// window. Derived from the #664 A/B on the anchor host, where the
+	// OllamaMaxExpectedSpillFraction bounds the share of the weights the
+	// window sizing will deliberately put in system RAM to reach the coding
+	// window, for a model the user chose (rung rule 2). It no longer takes
+	// part in the recommendation, which asks for the whole window on the
+	// accelerator (decision 10 of
+	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
+	// Since waired-ai/waired-agent#1337 it is compared with a predicted
+	// byte share of the weights (OllamaPredictPlacement.CPUWeightShare),
+	// which is the quantity the derivation below is written in; it used to
+	// be compared with a calibrated /api/ps figure.
+	//
+	// Derived from the #664 A/B on the anchor host, where the
 	// spilled fraction executes on a single CPU thread: no-spill decode
 	// 158.6 tok/s, 13.4 % measured spill → ~85 tok/s. Modelling
 	// 1/rate = (1-s)/158.6 + s/21.25 keeps decode at or above the 60
@@ -244,33 +265,23 @@ func OllamaCeilingWindow(m catalog.Manifest) int {
 	return w[0]
 }
 
-// OllamaExpectedSpillFraction predicts the /api/ps-visible spill fraction
-// of serving ctxTokens on this host: the byte-math overshoot of
-// (weights + KV + engine overhead) over the GPU budget, scaled by the
-// measured calibration factor. 0 means no spill expected; the result is
-// clamped to [0, 1].
+// OllamaExpectedSpillFraction predicts the share of the weights llama.cpp's
+// fit places in system RAM when serving ctxTokens on this host: the
+// CPUWeightShare of OllamaPredictPlacement, for the KV-cache type the
+// factor names. 0 means everything is expected on the accelerator; a host
+// with no accelerator has nothing to overflow and returns 0 as well — a
+// statement about where the weights live, not a claim that reading them is
+// free.
 //
-// It is measured against the ACCELERATOR budget, because spill is by
-// definition what does not fit there. A host with no accelerator has
-// nothing to overflow and returns 0 — which is a statement about where
-// the weights live, not a claim that reading them is free.
+// It used to scale a byte overshoot by OllamaSpillCalibration to predict
+// what /api/ps would report. Both halves of that are gone: the terms the
+// calibration stood in for are now priced (OllamaEstimateMemory), and
+// /api/ps is not a placement witness (waired-ai/waired-agent#1337).
 func OllamaExpectedSpillFraction(v catalog.Variant, h Host, kvFactor float64, ctxTokens int) float64 {
-	eff := h.OllamaVRAMBudgetMB()
-	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 || kvFactor <= 0 || ctxTokens <= 0 || eff <= 0 {
+	if ctxTokens <= 0 || kvFactor <= 0 || h.OllamaVRAMBudgetMB() <= 0 || v.KVBytesPerTokenFP16 <= 0 {
 		return 0
 	}
-	budgetGB := mibToGB(eff)
-	requiredGB := v.EstimatedWeightGB +
-		float64(v.KVBytesPerTokenFP16)*kvFactor*float64(ctxTokens)/1e9 +
-		mibToGB(OllamaVRAMOverheadMB(h.UnifiedMemory, v.EstimatedWeightGB))
-	if requiredGB <= budgetGB {
-		return 0
-	}
-	expected := OllamaSpillCalibration * (requiredGB - budgetGB) / requiredGB
-	if expected > 1 {
-		return 1
-	}
-	return expected
+	return OllamaPredictPlacement(v, h, kvCacheTypeForFactor(kvFactor), ctxTokens, 1).CPUWeightShare
 }
 
 // OllamaMaxContextAtSpill inverts OllamaExpectedSpillFraction: the
@@ -324,11 +335,9 @@ type OllamaWindowPlan struct {
 	// that.
 	NoSpillCapacityTokens int
 
-	// ExpectedSpillFraction is the /api/ps spill predicted at
-	// ContextLength. It must be reported honestly on every branch: the
-	// verify pass widens its tolerance to twice this figure before it
-	// calls a load degraded, so under-reporting it makes the engine
-	// restart into a smaller window than the plan asked for.
+	// ExpectedSpillFraction is the predicted share of the weights in
+	// system RAM at ContextLength (see OllamaRungPlan's field of the same
+	// name).
 	ExpectedSpillFraction float64
 }
 
@@ -516,12 +525,14 @@ type OllamaRungPlan struct {
 	// (see OllamaWindowPlan's field of the same name).
 	NoSpillCapacityTokens int
 
-	// ExpectedSpillFraction is the /api/ps spill predicted at
-	// ContextLength — 0 when the rung is held outright or the host has
-	// no accelerator to overflow. It must be reported honestly on every
-	// branch: the verify pass widens its tolerance to twice this figure
-	// before it calls a load degraded, so under-reporting it makes the
-	// engine restart into a lower rung the plan did not ask for.
+	// ExpectedSpillFraction is the predicted share of the weights
+	// llama.cpp's fit places in system RAM at ContextLength
+	// (OllamaPredictPlacement) — 0 when the rung is held outright or the
+	// host has no accelerator to overflow. It must be reported honestly on
+	// every branch: the verify pass compares the engine's own placement
+	// with the prediction before it calls a load degraded, so
+	// under-reporting it makes the engine restart into a lower rung the
+	// plan did not ask for.
 	ExpectedSpillFraction float64
 }
 
@@ -562,10 +573,22 @@ type OllamaRungPlan struct {
 // (2026-08-08 owner rulings on waired-ai/waired#1067, superseding the
 // intentional-spill selection; waired-ai/waired-agent#587).
 func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor float64, ceiling int) OllamaRungPlan {
+	return OllamaPlannedRungFor(m, v, h, kvCacheTypeForFactor(kvFactor), ceiling)
+}
+
+// OllamaPlannedRungFor is OllamaPlannedRung with the KV-cache type named
+// rather than approximated by a factor (catalog.KVCache*). Every rule is
+// priced with OllamaEstimateMemory, term by term the way llama.cpp's fit
+// adds them, and rule 2 reads the predicted placement: the share of the
+// device-placeable weights the fit would put in system RAM
+// (waired-ai/waired-agent#1337).
+func OllamaPlannedRungFor(m catalog.Manifest, v catalog.Variant, h Host, kvType string, ceiling int) OllamaRungPlan {
 	rungs := OllamaServedWindows(m)
-	budgetGB := OllamaSizingBudgetGB(h, v.EstimatedWeightGB)
-	ramGB := OllamaSystemRAMBudgetGB(h)
-	if len(rungs) == 0 || v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 || (budgetGB <= 0 && ramGB <= 0) {
+	ramMB := 0
+	if h.RAMTotalGB > h.OSMemoryDeductionGB() {
+		ramMB = (h.RAMTotalGB - h.OSMemoryDeductionGB()) * 1024
+	}
+	if len(rungs) == 0 || v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 || (h.OllamaVRAMBudgetMB() <= 0 && ramMB <= 0) {
 		return OllamaRungPlan{}
 	}
 	if ceiling > 0 {
@@ -573,7 +596,7 @@ func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor f
 			rungs = rungs[1:]
 		}
 	}
-	maxCtx := MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, budgetGB)
+	maxCtx := OllamaDeviceCapacityTokens(v, h, kvType)
 
 	discrete := h.Class() == ClassDiscrete
 	floorCtx := OllamaEffectiveContextFloor(m)
@@ -584,15 +607,16 @@ func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor f
 		if !discrete || rung > floorCtx {
 			return false
 		}
-		// Rule 2 — bounded intentional spill toward the floor.
-		if e := OllamaExpectedSpillFraction(v, h, kvFactor, rung); e > 0 && e <= OllamaMaxExpectedSpillFraction {
+		// Rule 2 — bounded intentional spill toward the floor. The bound
+		// reads as a share of the weights in system RAM, the quantity the
+		// #664 decode model it was derived from is written in.
+		if p := OllamaPredictPlacement(v, h, kvType, rung, 1); p.CPUWeightShare > 0 && p.CPUWeightShare <= OllamaMaxExpectedSpillFraction {
 			return true
 		}
-		// Rule 3 — the accelerator may not make the window smaller. The
-		// card-less machine sizes from system RAM, less the same engine
-		// reservation the card-less sizing budget would subtract.
-		cardless := ramGB - mibToGB(OllamaVRAMOverheadMB(false, v.EstimatedWeightGB))
-		return MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, cardless) >= rung
+		// Rule 3 — the accelerator may not make the window smaller: the
+		// same machine with the card removed sizes from system RAM.
+		cardless := Host{RAMTotalGB: h.RAMTotalGB, RAMAvailableGB: h.RAMAvailableGB}
+		return OllamaDeviceCapacityTokens(v, cardless, kvType) >= rung
 	}
 
 	plan := OllamaRungPlan{NoSpillCapacityTokens: maxCtx}
@@ -606,7 +630,9 @@ func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor f
 	if !plan.Fits {
 		plan.ContextLength = rungs[len(rungs)-1]
 	}
-	plan.ExpectedSpillFraction = OllamaExpectedSpillFraction(v, h, kvFactor, plan.ContextLength)
+	if h.HasGPU() && h.OllamaVRAMBudgetMB() > 0 {
+		plan.ExpectedSpillFraction = OllamaPredictPlacement(v, h, kvType, plan.ContextLength, 1).CPUWeightShare
+	}
 	return plan
 }
 
@@ -636,7 +662,21 @@ func OllamaDeclaresWindow(m catalog.Manifest, v catalog.Variant, h Host, window 
 	if DeclarableNativeWindow(m) < window {
 		return false
 	}
-	plan := OllamaPlannedRung(m, v, h, OllamaKVFactorQ8_0, 0)
+	return OllamaDeclaresWindowFor(m, v, h, OllamaDefaultKVCacheType(h), window)
+}
+
+// OllamaDeclaresWindowFor is OllamaDeclaresWindow for a named KV-cache
+// type (catalog.KVCache*). OllamaDeclaresWindow reads the type the serve
+// tuning exports by default (OllamaDefaultKVCacheType); it used to assume
+// q8_0 unconditionally.
+func OllamaDeclaresWindowFor(m catalog.Manifest, v catalog.Variant, h Host, kvType string, window int) bool {
+	if window <= 0 {
+		return true
+	}
+	if DeclarableNativeWindow(m) < window {
+		return false
+	}
+	plan := OllamaPlannedRungFor(m, v, h, kvType, 0)
 	// Fits=false means the sizing could not be proved — an unannotated
 	// variant, a host whose accelerator budget the engine overhead
 	// consumes entirely, or a lowest rung the host was given anyway
@@ -692,22 +732,55 @@ func OllamaDeclaresWindow(m catalog.Manifest, v catalog.Variant, h Host, window 
 // MEASURED (waired-ai/waired-agent#466); the boot benchmark already
 // measures the real rate once a model is on disk.
 func OllamaRecommendModel(m catalog.Manifest, v catalog.Variant, h Host) Verdict {
+	return OllamaRecommendModelFor(m, v, h, OllamaDefaultKVCacheType(h))
+}
+
+// OllamaRecommendModelFor is OllamaRecommendModel with the KV-cache type
+// named (catalog.KVCache*): the recommendation prices the cache the serve
+// tuning will export (decision 1 of
+// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
+//
+// Clause 3 on a host with GPU-addressable memory — discrete or unified —
+// is full residency: the load priced by OllamaEstimateMemory at the coding
+// window fits the accelerator budget outright, so no layer lands in system
+// RAM (decision 10 of the same record, waired-ai/waired-agent#1347). The
+// bounded intentional spill a user-chosen model may still be served with
+// (rung rule 2) takes no part here. A host with no accelerator keeps the
+// earlier clause: the serve tuning's own sizing reaches the coding window.
+func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvType string) Verdict {
 	out := Verdict{Fits: true}
+	budget := h.OllamaVRAMBudgetMB()
+	accelerated := h.HasGPU() && budget > 0 && v.EstimatedWeightGB > 0
 	switch {
 	case DeclarableNativeWindow(m) < ServingWindow200k:
 		out = Verdict{Reason: ReasonWindowTooSmall}
 
-	case h.HasGPU() && !weightsResident(v, h):
+	case accelerated && v.GGUF != nil && OllamaEstimateMemory(v, h, kvType, 0, 1).DeviceMB() > budget:
+		out = Verdict{
+			Reason: ReasonWeightsSpill,
+			NeedMB: OllamaEstimateMemory(v, h, kvType, 0, 1).DeviceMB(),
+			HaveMB: budget,
+		}
+
+	case h.HasGPU() && v.GGUF == nil && !weightsResident(v, h):
 		out = Verdict{
 			Reason: ReasonWeightsSpill,
 			NeedMB: OllamaWeightsResidentMB(v, h.UnifiedMemory),
-			HaveMB: h.OllamaVRAMBudgetMB(),
+			HaveMB: budget,
 		}
 
-	case !OllamaDeclaresWindow(m, v, h, ServingWindow200k):
+	case accelerated && v.KVBytesPerTokenFP16 > 0 &&
+		OllamaPlannedRungFor(m, v, h, kvType, 0).NoSpillCapacityTokens < ServingWindow200k:
 		out = Verdict{
 			Reason: ReasonWindowExceedsMemory,
-			NeedMB: OllamaWindowResidentMB(v, ServingWindow200k, h.UnifiedMemory),
+			NeedMB: OllamaEstimateMemory(v, h, kvType, ServingWindow200k, 1).DeviceMB(),
+			HaveMB: budget,
+		}
+
+	case !accelerated && !OllamaDeclaresWindowFor(m, v, h, kvType, ServingWindow200k):
+		out = Verdict{
+			Reason: ReasonWindowExceedsMemory,
+			NeedMB: OllamaEstimateMemory(v, h, kvType, ServingWindow200k, 1).TotalMB(),
 			HaveMB: h.TotalMemoryMB(),
 		}
 	}
@@ -772,10 +845,18 @@ func VLLMRecommendModel(m catalog.Manifest, _ catalog.Variant, _ Host) Verdict {
 func VLLMRecommendModelOnHost(
 	m catalog.Manifest, v catalog.Variant, h Host, gpus []signer.HardwareGPUSummary,
 ) Verdict {
+	return VLLMRecommendModelOnHostFor(m, v, h, gpus, VLLMKVCacheType(gpus, ""))
+}
+
+// VLLMRecommendModelOnHostFor is VLLMRecommendModelOnHost priced at a
+// named KV-cache type (see VLLMKVCacheType).
+func VLLMRecommendModelOnHostFor(
+	m catalog.Manifest, v catalog.Variant, h Host, gpus []signer.HardwareGPUSummary, kvType string,
+) Verdict {
 	if out := VLLMRecommendModel(m, v, h); !out.Fits {
 		return out
 	}
-	if !VLLMServesContextFloor(m, v, gpus) {
+	if !VLLMServesContextFloorFor(m, v, gpus, kvType) {
 		return Verdict{Reason: ReasonWindowExceedsMemory}
 	}
 	return Verdict{Fits: true}

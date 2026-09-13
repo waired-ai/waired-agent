@@ -104,12 +104,12 @@ func TestFromHardwareSummary(t *testing.T) {
 		wire string
 		want hostfit.Host
 	}{
-		{"discrete nvidia", wireRTX4090, hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24564}},
-		{"big ram, small gpu", wireBigRAMSmallGPU, hostfit.Host{RAMTotalGB: 128, GPUCount: 1, VRAM0MB: 24564}},
+		{"discrete nvidia", wireRTX4090, hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24564, GPUVendor: "nvidia"}},
+		{"big ram, small gpu", wireBigRAMSmallGPU, hostfit.Host{RAMTotalGB: 128, GPUCount: 1, VRAM0MB: 24564, GPUVendor: "nvidia"}},
 		{
 			"unified memory",
 			wireMac16,
-			hostfit.Host{RAMTotalGB: 16, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 12288, VRAM0MB: 16384},
+			hostfit.Host{RAMTotalGB: 16, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 12288, VRAM0MB: 16384, GPUVendor: "apple"},
 		},
 		{"cpu only", wireCPUOnly, hostfit.Host{RAMTotalGB: 128}},
 		{"pre-v0.2.4 agent", wireLegacyGPU, hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24564}},
@@ -118,7 +118,7 @@ func TestFromHardwareSummary(t *testing.T) {
 			wireMac24M4,
 			hostfit.Host{
 				RAMTotalGB: 24, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 18432,
-				VRAM0MB: 24576, MemoryBandwidthSpecGBs: 120,
+				VRAM0MB: 24576, MemoryBandwidthSpecGBs: 120, GPUVendor: "apple",
 			},
 		},
 		{
@@ -129,7 +129,7 @@ func TestFromHardwareSummary(t *testing.T) {
 			wireMac24UnknownChip,
 			hostfit.Host{
 				RAMTotalGB: 24, GPUCount: 1, UnifiedMemory: true,
-				UsableVRAMMB: 18432, VRAM0MB: 24576,
+				UsableVRAMMB: 18432, VRAM0MB: 24576, GPUVendor: "apple",
 			},
 		},
 		{
@@ -139,7 +139,7 @@ func TestFromHardwareSummary(t *testing.T) {
 			// context.
 			"two cards pool",
 			wireDual4090,
-			hostfit.Host{RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564, VRAMPoolMB: 48104},
+			hostfit.Host{RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564, VRAMPoolMB: 48104, GPUVendor: "nvidia"},
 		},
 		{
 			// GPUCount 2, pool 0: the count is every accelerator that
@@ -147,7 +147,7 @@ func TestFromHardwareSummary(t *testing.T) {
 			// spread over. They are allowed to disagree.
 			"cards of different vendors do not pool",
 			wireMixedVendors,
-			hostfit.Host{RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564},
+			hostfit.Host{RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564, GPUVendor: "nvidia"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

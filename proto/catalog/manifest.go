@@ -235,9 +235,83 @@ type Variant struct {
 	// the CPU unconditionally because a table lookup gains nothing from
 	// offload, and ollama's /api/ps does not count it
 	// (docs/knowledges/20260914/0120-input-layer-tensors-stay-on-the-cpu.md).
-	// Decimal GB, derived from the GGUF tensor table
-	// (waired-ai/waired-agent#1337). 0 = unknown, priced as all-device.
+	// Decimal GB, derived from the GGUF tensor table by
+	// `catalog-tool layout`. 0 = unknown, priced as all-device.
 	HostResidentWeightGB float64 `json:"host_resident_weight_gb,omitempty"`
+
+	// GGUF is the layout of an ollama build that the VRAM sizing reads
+	// beyond the weight total (waired-ai/waired-agent#1337). nil = not
+	// derived; the sizing then falls back to its older overhead term.
+	GGUF *GGUFLayout `json:"gguf,omitempty"`
+}
+
+// GGUFLayout is what a GGUF header and its ollama tag say about how a
+// build occupies memory once llama.cpp loads it. Every figure is an exact
+// read or sum over the header (`catalog-tool layout --tag`), so a reviewer
+// can re-derive it without the weights.
+type GGUFLayout struct {
+	// BlockCount is <arch>.block_count, including any next-token (MTP)
+	// prediction blocks. llama.cpp's "offloaded N/M layers" counts
+	// BlockCount + 1: the output layer is the extra one.
+	BlockCount int `json:"block_count"`
+
+	// FullAttentionLayers is how many of the repeating blocks keep a KV
+	// cache that grows with the context window, spaced evenly with the
+	// last block of each group being the full-attention one (qwen3.5's
+	// full_attention_interval, gpt-oss's alternating layer_types). On a
+	// hybrid model the other blocks hold a fixed recurrent state instead.
+	FullAttentionLayers int `json:"full_attention_layers,omitempty"`
+
+	// RecurrentStateBytes is the recurrent state one sequence holds
+	// (llama_memory_recurrent, f32 R + S), independent of the window.
+	RecurrentStateBytes int64 `json:"recurrent_state_bytes,omitempty"`
+
+	// DraftMaxTokens is the tag's draft_num_predict: how many tokens the
+	// next-token prediction head drafts per step. ollama enables the MTP
+	// draft only when the tag (or the request) sets it, even for a GGUF
+	// that carries nextn blocks (server/routes.go modelOptions, ollama
+	// v0.33.3). 0 = no draft context. When set, llama.cpp keeps
+	// 1 + DraftMaxTokens copies of the recurrent state and a second,
+	// f16 context for the draft head.
+	DraftMaxTokens int `json:"draft_max_tokens,omitempty"`
+
+	// TensorBytes is the whole tensor table of the GGUF weights file.
+	TensorBytes int64 `json:"tensor_bytes"`
+
+	// ProjectorBytes is the multimodal projector blob ollama loads beside
+	// the model and offloads with it. 0 when the tag carries none (a build
+	// with its vision tensors inline reports them in InlineProjectorBytes).
+	ProjectorBytes int64 `json:"projector_bytes,omitempty"`
+
+	// InlineProjectorBytes is the part of TensorBytes in vision / audio
+	// tensors (v.*, mm.*, a.*) that ollama loads as the projector when the
+	// build carries them inside the weights file.
+	InlineProjectorBytes int64 `json:"inline_projector_bytes,omitempty"`
+
+	// NextNLayers is how many of the BlockCount blocks are next-token
+	// prediction blocks (<arch>.nextn_predict_layers). They sit after the
+	// repeating blocks.
+	NextNLayers int `json:"nextn_layers,omitempty"`
+
+	// NextNBytes is the part of TensorBytes in next-token prediction
+	// blocks. llama.cpp loads them only when the MTP draft runs, so a tag
+	// with DraftMaxTokens 0 does not occupy them.
+	NextNBytes int64 `json:"nextn_bytes,omitempty"`
+
+	// RepeatingBytes is the sum of the blk.* tensors outside the nextn
+	// blocks: what moves to system RAM, a block at a time, when a dense
+	// model does not fit.
+	RepeatingBytes int64 `json:"repeating_bytes,omitempty"`
+
+	// TiedOutputBytes is token_embd's size on a model with no output tensor:
+	// llama.cpp builds the output layer from a second copy of the embedding,
+	// which goes to the device while the input copy stays in system RAM. 0
+	// when the model has its own output tensor.
+	TiedOutputBytes int64 `json:"tied_output_bytes,omitempty"`
+
+	// ExpertBytes is the part of RepeatingBytes in *_exps tensors. llama.cpp's
+	// fit moves these to system RAM before any whole block. 0 on a dense model.
+	ExpertBytes int64 `json:"expert_bytes,omitempty"`
 }
 
 // VendorSupportMatrix records, for one variant, which GPU vendor / runtime
@@ -528,8 +602,8 @@ func (m *Manifest) Validate() error {
 }
 
 // validateSizingLayout checks the fields the VRAM sizing reads beyond the
-// weight total: KV-cache types the variant's engines understand, and a
-// host-resident part no larger than the whole.
+// weight total: KV-cache types the variant's engines understand, a
+// host-resident part no larger than the whole, and a non-negative layout.
 func validateSizingLayout(modelID string, v Variant) error {
 	for _, t := range v.KVCacheTypes {
 		ok := false
@@ -547,6 +621,18 @@ func validateSizingLayout(modelID string, v Variant) error {
 	}
 	if v.HostResidentWeightGB < 0 || (v.EstimatedWeightGB > 0 && v.HostResidentWeightGB > v.EstimatedWeightGB) {
 		return fmt.Errorf("manifest %s variant %s: host_resident_weight_gb %.2f must be in [0, estimated_weight_gb %.2f]", modelID, v.VariantID, v.HostResidentWeightGB, v.EstimatedWeightGB)
+	}
+	if g := v.GGUF; g != nil {
+		if g.BlockCount <= 0 || g.FullAttentionLayers < 0 || g.FullAttentionLayers > g.BlockCount ||
+			g.RecurrentStateBytes < 0 || g.DraftMaxTokens < 0 || g.RepeatingBytes < 0 ||
+			g.ExpertBytes < 0 || g.ExpertBytes > g.RepeatingBytes ||
+			g.TensorBytes <= 0 || g.ProjectorBytes < 0 || g.NextNBytes < 0 ||
+			g.InlineProjectorBytes < 0 || g.InlineProjectorBytes > g.TensorBytes ||
+			g.TiedOutputBytes < 0 || g.TiedOutputBytes > g.TensorBytes ||
+			g.NextNLayers < 0 || g.NextNLayers >= g.BlockCount ||
+			g.RepeatingBytes+g.NextNBytes > g.TensorBytes {
+			return fmt.Errorf("manifest %s variant %s: gguf layout %+v is inconsistent", modelID, v.VariantID, *g)
+		}
 	}
 	return nil
 }

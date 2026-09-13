@@ -63,8 +63,6 @@ var receiveOnly = []exemption{
 		"the owner's hand-picked build per engine; authored in the manifest (#1349), read by the pickers"},
 	{reflect.TypeFor[catalog.Variant](), "KVCacheTypes",
 		"KV-cache types a build may be served with; authored in the manifest (#1349), read by the tuning"},
-	{reflect.TypeFor[catalog.Variant](), "HostResidentWeightGB",
-		"input-layer weights llama.cpp keeps in system RAM; derived from the GGUF header by the catalog authoring pipeline (#1337, #1349)"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "LlamaCPP",
 		"vendor×runtime support cell; authored in the catalog, read by the picker"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "MLX",
@@ -200,6 +198,44 @@ var producedInProto = []exemption{
 		"the window sizing's own working, computed inside hostfit.OllamaPlannedWindow"},
 	{reflect.TypeFor[hostfit.OllamaRungPlan](), "NoSpillCapacityTokens",
 		"the rung sizing's own working, computed inside hostfit.OllamaPlannedRung"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "DeviceWeightsMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "HostWeightsMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "TotalLayers",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "KVCacheMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "RecurrentStateMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "ComputeMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "DraftMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "DraftKVCacheMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "FixedMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaMemory](), "FitTargetMB",
+		"the per-term memory estimate, computed inside hostfit.OllamaEstimateMemory"},
+	{reflect.TypeFor[hostfit.OllamaPlacement](), "GPULayers",
+		"the predicted fit placement, computed inside hostfit.OllamaPredictPlacement"},
+	{reflect.TypeFor[hostfit.OllamaPlacement](), "TotalLayers",
+		"the predicted fit placement, computed inside hostfit.OllamaPredictPlacement"},
+	{reflect.TypeFor[hostfit.OllamaPlacement](), "CPUWeightMB",
+		"the predicted fit placement, computed inside hostfit.OllamaPredictPlacement"},
+	{reflect.TypeFor[hostfit.OllamaPlacement](), "CPUWeightShare",
+		"the predicted fit placement, computed inside hostfit.OllamaPredictPlacement"},
+	{reflect.TypeFor[hostfit.OllamaPlacement](), "ShortMB",
+		"the predicted fit placement, computed inside hostfit.OllamaPredictPlacement"},
+	{reflect.TypeFor[hostfit.Presentation](), "GPULayers",
+		"the shared fit projection's predicted placement, built by hostfit.ProjectModelFrom"},
+	{reflect.TypeFor[hostfit.Presentation](), "TotalLayers",
+		"the shared fit projection's predicted placement, built by hostfit.ProjectModelFrom"},
+	{reflect.TypeFor[hostfit.Presentation](), "DeviceWeightsMB",
+		"the shared fit projection's itemised window figure, built by hostfit.ProjectModelFrom"},
+	{reflect.TypeFor[hostfit.Presentation](), "KVCacheMB",
+		"the shared fit projection's itemised window figure, built by hostfit.ProjectModelFrom"},
 	{reflect.TypeFor[hostfit.Presentation](), "NotRecommended",
 		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[hostfit.Presentation](), "NotRecommendedReason",
@@ -359,16 +395,6 @@ var producerPending = []exemption{
 	// Pick.MeasuredTurnSeconds now share their names with fields that
 	// management and /healthz write.
 
-	// waired-agent#1346 publishes the layer-count wire ahead of the
-	// placement prediction that fills it (#1337, which owns the proto
-	// estimator): the console's rows (waired#1387 / #1388) can be built
-	// against the shape while the arithmetic is calibrated on hardware.
-	// Until then every row sends neither field, which a consumer reads as
-	// "no prediction", exactly as for a host with no GPU.
-	{reflect.TypeFor[hostfit.Presentation](), "GPULayers",
-		"layer-count prediction lands with the estimator (#1337)"},
-	{reflect.TypeFor[hostfit.Presentation](), "TotalLayers",
-		"layer-count prediction lands with the estimator (#1337)"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

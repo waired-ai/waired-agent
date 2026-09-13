@@ -106,8 +106,8 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 
 | model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `gpt-oss-120b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 85 | 4 | 62.0 | 96 | — | 116.8B / A5.1B | sliding_window | 98,304 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=E | ollama:gpt-oss:120b | — |
-| `gpt-oss-20b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 60 | 4 | 14.0 | 16 | — | 20.9B / A3.6B | sliding_window | 73,728 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:gpt-oss:20b | — |
+| `gpt-oss-120b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 85 | 4 | 62.0 | 96 | — | 116.8B / A5.1B | sliding_window | 36,864 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=E | ollama:gpt-oss:120b | — |
+| `gpt-oss-20b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 60 | 4 | 14.0 | 16 | — | 20.9B / A3.6B | sliding_window | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:gpt-oss:20b | — |
 | `qwen3.5-122b-a10b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 83 | 4 | 81.0 | 128 | — | 122B / A10B | hybrid_mamba | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:122b-a10b-q4_K_M | — |
 | `qwen3.5-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 73 | 4 | 24.0 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:35b-a3b-q4_K_M | — |
 | `qwen3.6-35b-a3b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 90 | 4 | 22.6 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-mtp-q4_K_M | 0.30.0 |
@@ -135,8 +135,8 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `deepseek-v4-flash` | `fp8-safetensors` | safetensors | FP8 | vllm | 93 | 8 | 160.0 | — | 196,608 | 284B / A13B | mla | 124,928 | nv:vllm=S · amd:vllm=E · mac:ollama=×,mlx=× | hf:deepseek-ai/DeepSeek-V4-Flash | — |
 | `glm-5.2` | `fp8-safetensors` | safetensors | FP8 | vllm | 97 | 8 | 755.0 | — | 1,130,000 | 744B / A40B | mla | 89,856 | nv:vllm=S · amd:vllm=E · mac:ollama=×,mlx=× | hf:zai-org/GLM-5.2-FP8 | — |
 | `glm-5.2` | `nvfp4-safetensors` | safetensors | NVFP4 | vllm | 96 | 4 | 465.0 | — | 560,000 | 744B / A40B | mla | 89,856 | nv:vllm=S · amd:vllm=× · mac:ollama=×,mlx=× | hf:nvidia/GLM-5.2-NVFP4 | — |
-| `gpt-oss-120b` | `mxfp4-safetensors` | safetensors | MXFP4 | vllm | 88 | 4 | 62.0 | — | 80,000 | 116.8B / A5.1B | sliding_window | 98,304 | nv:vllm=S · amd:vllm=E · mac:mlx=E | hf:openai/gpt-oss-120b | — |
-| `gpt-oss-20b` | `mxfp4-safetensors` | safetensors | MXFP4 | vllm | 62 | 4 | 14.0 | — | 20,000 | 20.9B / A3.6B | sliding_window | 73,728 | nv:vllm=S · amd:vllm=E · mac:mlx=E | hf:openai/gpt-oss-20b | — |
+| `gpt-oss-120b` | `mxfp4-safetensors` | safetensors | MXFP4 | vllm | 88 | 4 | 62.0 | — | 80,000 | 116.8B / A5.1B | sliding_window | 36,864 | nv:vllm=S · amd:vllm=E · mac:mlx=E | hf:openai/gpt-oss-120b | — |
+| `gpt-oss-20b` | `mxfp4-safetensors` | safetensors | MXFP4 | vllm | 62 | 4 | 14.0 | — | 20,000 | 20.9B / A3.6B | sliding_window | 24,576 | nv:vllm=S · amd:vllm=E · mac:mlx=E | hf:openai/gpt-oss-20b | — |
 
 <!-- 自動生成セクションここまで。編集は `catalog-tool docs` 経由で。 -->
 <!-- END GENERATED: catalog-tool docs -->

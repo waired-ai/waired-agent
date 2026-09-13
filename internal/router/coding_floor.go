@@ -105,11 +105,10 @@ func EffectiveContextFloor(m catalog.Manifest) int {
 	return modelrank.EffectiveContextFloor(m)
 }
 
-// OllamaExpectedSpillFraction predicts the /api/ps-visible spill
-// fraction of serving ctxTokens with the given KV factor on this host:
-// byte-math overshoot of (weights + KV + engine overhead) over the
-// GPU budget, scaled by the measured calibration factor. 0 = no spill
-// expected; results are clamped to [0, 1].
+// OllamaExpectedSpillFraction predicts the share of the weights
+// llama.cpp's fit places in system RAM when serving ctxTokens with the
+// given KV factor on this host (hostfit.OllamaPredictPlacement). 0 = no
+// spill expected; results are in [0, 1].
 //
 // The arithmetic is hostfit's; this is the hardware.Profile-shaped door
 // into it, like every other function in this file.

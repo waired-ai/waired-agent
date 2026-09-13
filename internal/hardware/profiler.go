@@ -142,6 +142,7 @@ func (p Profile) HostFit() hostfit.Host {
 	if len(p.GPUs) > 0 {
 		h.VRAM0MB = p.GPUs[0].VRAMTotalMB
 		h.VRAMAvailable0MB = p.GPUs[0].VRAMFreeMB
+		h.GPUVendor = p.GPUs[0].Vendor
 	}
 	// The pool rule itself lives in hostfit so this adapter and
 	// FromHardwareSummary cannot drift — the same reason every other

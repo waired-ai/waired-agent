@@ -48,6 +48,17 @@
           "mlx": "stable"
         }
       },
+      "host_resident_weight_gb": 0.521,
+      "gguf": {
+        "block_count": 32,
+        "full_attention_layers": 8,
+        "recurrent_state_bytes": 52690944,
+        "tensor_bytes": 3377987584,
+        "inline_projector_bytes": 667686912,
+        "nextn_bytes": 74641408,
+        "repeating_bytes": 2114177024,
+        "tied_output_bytes": 521472000
+      },
       "source": {
         "type": "ollama",
         "tag": "qwen3.5:4b-q4_K_M"

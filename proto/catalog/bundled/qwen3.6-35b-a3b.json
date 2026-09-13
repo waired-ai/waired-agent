@@ -30,6 +30,19 @@
         "amd":    {"ollama": "stable", "vllm": "experimental"},
         "mac":    {"ollama": "stable", "mlx": "stable"}
       },
+      "host_resident_weight_gb": 0.286,
+      "gguf": {
+        "block_count": 41,
+        "full_attention_layers": 10,
+        "recurrent_state_bytes": 65863680,
+        "draft_max_tokens": 2,
+        "tensor_bytes": 21706498560,
+        "projector_bytes": 902821728,
+        "nextn_layers": 1,
+        "nextn_bytes": 550893568,
+        "repeating_bytes": 20452354560,
+        "expert_bytes": 19503513600
+      },
       "source": {"type": "ollama", "tag": "qwen3.6:35b-a3b-mtp-q4_K_M"}
     },
     {
@@ -49,6 +62,17 @@
         "nvidia": {"ollama": "stable", "vllm": "stable"},
         "amd":    {"ollama": "stable", "vllm": "experimental"},
         "mac":    {"ollama": "stable", "mlx": "stable"}
+      },
+      "host_resident_weight_gb": 0.286,
+      "gguf": {
+        "block_count": 40,
+        "full_attention_layers": 10,
+        "recurrent_state_bytes": 65863680,
+        "tensor_bytes": 23926312384,
+        "inline_projector_bytes": 893955008,
+        "nextn_bytes": 546699264,
+        "repeating_bytes": 21782407680,
+        "expert_bytes": 20887633920
       },
       "source": {"type": "ollama", "tag": "qwen3.6:35b-a3b-q4_K_M"}
     },
@@ -73,6 +97,18 @@
         "amd":    {"ollama": "stable"},
         "mac":    {"ollama": "stable"}
       },
+      "host_resident_weight_gb": 0.54,
+      "gguf": {
+        "block_count": 41,
+        "full_attention_layers": 10,
+        "recurrent_state_bytes": 65863680,
+        "tensor_bytes": 17216578048,
+        "projector_bytes": 902822528,
+        "nextn_layers": 1,
+        "nextn_bytes": 423999488,
+        "repeating_bytes": 15835048448,
+        "expert_bytes": 14237564928
+      },
       "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL"}
     },
     {
@@ -95,6 +131,18 @@
         "nvidia": {"ollama": "stable"},
         "amd":    {"ollama": "stable"},
         "mac":    {"ollama": "stable"}
+      },
+      "host_resident_weight_gb": 0.35,
+      "gguf": {
+        "block_count": 41,
+        "full_attention_layers": 10,
+        "recurrent_state_bytes": 65863680,
+        "tensor_bytes": 12563137024,
+        "projector_bytes": 902822528,
+        "nextn_layers": 1,
+        "nextn_bytes": 322836480,
+        "repeating_bytes": 11604593152,
+        "expert_bytes": 10487857152
       },
       "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL"}
     }

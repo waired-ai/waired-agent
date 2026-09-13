@@ -94,7 +94,7 @@ func EffectiveContextFloor(m catalog.Manifest) int {
 //
 // Permissive on unknown sizing inputs, like the rest of this package.
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, host hostfit.Host) (bool, float64) {
-	plan := hostfit.OllamaPlannedRung(m, v, host, hostfit.OllamaKVFactorQ8_0, 0)
+	plan := hostfit.OllamaPlannedRungFor(m, v, host, hostfit.OllamaDefaultKVCacheType(host), 0)
 	if plan.ContextLength <= 0 {
 		return true, 0
 	}

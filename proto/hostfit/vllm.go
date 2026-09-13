@@ -91,6 +91,20 @@ const (
 	// margin is ~5%.
 	vllmWeightOverhead = 1.15
 
+	// vllmActivationReserveMB is charged per device by the max-model-len
+	// sizing only, on top of the two terms above. vLLM 0.28.0's own
+	// profile lines on a 24 GB card put more than ×1.15 + 1 GiB outside the
+	// KV pool: 13.8 GiB of gpt-oss-20b weights left 4.14 GiB of KV cache
+	// (1.28 GiB activation peak, 0.43 GiB CUDA graphs), 8.61 GiB of
+	// qwen3.5-4b left 8.89 GiB (2.11 GiB activation), and the 1.72 GiB
+	// qwen3.5-0.8b probe left 16.26 GiB (1.72 GiB activation) — the two
+	// terms above over-promised those pools by 0.2 to 1.2 GiB, and a
+	// window sized into that difference is one the engine refuses to
+	// start with. The selection aggregate (VLLMVRAMBudgetMB) does not
+	// take it: whether the weights fit a card is a different question
+	// from how much window fits beside them (waired-agent#1337).
+	vllmActivationReserveMB = 1280
+
 	// DefaultVLLMGPUMemoryUtilization mirrors the agent config default
 	// for vllm_gpu_memory_utilization. Selection-time callers (the
 	// context-floor gate, the recommendation) have no agent config in
@@ -254,7 +268,7 @@ func VLLMMaxModelLen(
 		return 0
 	}
 	const mib = float64(1 << 20)
-	perGPUBudgetGB := (gpuMemUtil*float64(perGPU) - vllmPerGPUOverheadMB) * mib / 1e9
+	perGPUBudgetGB := (gpuMemUtil*float64(perGPU) - vllmPerGPUOverheadMB - vllmActivationReserveMB) * mib / 1e9
 	if perGPUBudgetGB <= 0 {
 		return 0
 	}
@@ -278,6 +292,26 @@ func VLLMMaxModelLen(
 func VLLMServesContextFloor(
 	m catalog.Manifest, v catalog.Variant, gpus []signer.HardwareGPUSummary,
 ) bool {
+	return VLLMServesContextFloorFor(m, v, gpus, VLLMKVCacheType(gpus, ""))
+}
+
+// VLLMKVCacheType is the --kv-cache-dtype vLLM serves with on these GPUs
+// when requested is asked for (catalog.KVCacheFP8 / KVCacheFP16): fp8 only
+// where every NVIDIA GPU supports it (VLLMUsesFP8KV), fp16 otherwise, and
+// the hardware's own answer when nothing is requested.
+func VLLMKVCacheType(gpus []signer.HardwareGPUSummary, requested string) string {
+	if requested == catalog.KVCacheFP16 || !VLLMUsesFP8KV(gpus) {
+		return catalog.KVCacheFP16
+	}
+	return catalog.KVCacheFP8
+}
+
+// VLLMServesContextFloorFor is VLLMServesContextFloor priced at a named
+// KV-cache type (catalog.KVCacheFP8 / KVCacheFP16), so a row for a chosen
+// type is judged at that type (waired-ai/waired-agent#1347).
+func VLLMServesContextFloorFor(
+	m catalog.Manifest, v catalog.Variant, gpus []signer.HardwareGPUSummary, kvType string,
+) bool {
 	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 {
 		return true
 	}
@@ -292,6 +326,13 @@ func VLLMServesContextFloor(
 		return true
 	}
 	est := VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
-		VLLMTensorParallelSize(gpus), DefaultVLLMGPUMemoryUtilization, VLLMKVFactor(gpus), gpus)
+		VLLMTensorParallelSize(gpus), DefaultVLLMGPUMemoryUtilization, vllmKVFactorForType(kvType), gpus)
 	return est >= OllamaEffectiveContextFloor(m)
+}
+
+func vllmKVFactorForType(kvType string) float64 {
+	if kvType == catalog.KVCacheFP8 {
+		return VLLMKVFactorFP8
+	}
+	return VLLMKVFactorF16
 }

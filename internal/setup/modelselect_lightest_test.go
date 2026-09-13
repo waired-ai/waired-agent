@@ -57,7 +57,12 @@ func TestSelectBundledModel_TheBottomRung(t *testing.T) {
 		want    string
 	}{
 		{"cpu", cpuProfile, "qwen3.5-0.8b"}, // 7 GB only; see the doc above
-		{"unified", unifiedProfile, "qwen3.5-2b"},
+		// MOVED from qwen3.5-2b by waired-agent#1337: a 6 GB unified host
+		// (4,608 MB budget) holds neither the 2b nor the 0.8b with the
+		// ~200k window at q8_0 KV — the 0.8b's compute buffer alone is
+		// ~1.5 GB at ollama's ubatch of 2048 — so the recommendation pass
+		// empties there and tier order returns the 0.8b as best effort.
+		{"unified", unifiedProfile, "qwen3.5-0.8b"},
 	}
 
 	for _, class := range classes {

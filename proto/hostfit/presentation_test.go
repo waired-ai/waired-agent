@@ -544,3 +544,75 @@ func TestProjectModelFromNamesTheBuildAndCache(t *testing.T) {
 		t.Errorf("an unknown engine's row carries %q / %q, want the zero identity it always had", got.VariantID, got.KVCacheType)
 	}
 }
+
+// A vLLM row asked for a KV-cache type is projected — and judged — at the
+// type the engine would serve: fp16 when fp16 is chosen, and fp16 when fp8
+// is asked of a card that cannot run it (waired-ai/waired-agent#1347).
+func TestProjectModelFromVLLMHonoursTheChosenCacheType(t *testing.T) {
+	m := catalog.Manifest{ModelID: "m", ContextLength: 262144}
+	v := catalog.Variant{VariantID: "fp8", MinVRAMMB: 16000, EstimatedWeightGB: 14, KVBytesPerTokenFP16: 32768, QualityTier: 70}
+	h := hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24564}
+	ada := []signer.HardwareGPUSummary{{Vendor: "nvidia", VRAMTotalMB: 24564, ComputeCap: "8.9"}}
+	ampere := []signer.HardwareGPUSummary{{Vendor: "nvidia", VRAMTotalMB: 24564, ComputeCap: "8.6"}}
+	project := func(gpus []signer.HardwareGPUSummary, kv string) hostfit.Presentation {
+		return hostfit.ProjectModelFrom(hostfit.ModelProjection{
+			Manifest: m, Variant: v, Engine: catalog.RuntimeVLLM, Host: h, BudgetMB: 24564, GPUs: gpus, KVCacheType: kv,
+		})
+	}
+	if got := project(ada, catalog.KVCacheFP16).KVCacheType; got != catalog.KVCacheFP16 {
+		t.Errorf("fp16 chosen on Ada projected %q", got)
+	}
+	if got := project(ampere, catalog.KVCacheFP8).KVCacheType; got != catalog.KVCacheFP16 {
+		t.Errorf("fp8 asked of an Ampere card projected %q, want the fp16 it would serve", got)
+	}
+	// The same window costs twice the KV at fp16, which is what the verdict
+	// has to see: 200k fits beside 14 GB of weights at fp8 and not at fp16.
+	if fp8, fp16 := project(ada, ""), project(ada, catalog.KVCacheFP16); fp8.NotRecommended || !fp16.NotRecommended {
+		t.Errorf("fp8 NotRecommended=%v, fp16 NotRecommended=%v; want the window judged at the chosen type", fp8.NotRecommended, fp16.NotRecommended)
+	}
+}
+
+// The ollama row itemises its window figure so a surface can print the
+// weights, the KV cache and the engine's overhead separately, and none of
+// the overhead reads as KV cache: the three add up to
+// RequiredWindowResidentMB, and the MTP draft head's cache counts as KV
+// cache (waired-ai/waired-agent#1337).
+func TestProjectModelFromItemisesTheWindowFigure(t *testing.T) {
+	m := catalog.Manifest{ModelID: "qwen3.8-27b", ContextLength: 262144}
+	var v catalog.Variant
+	ms, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bm := range ms {
+		for _, bv := range bm.Variants {
+			if bm.ModelID == "qwen3.8-27b" && bv.VariantID == "mtp-q4-gguf" {
+				v = bv
+			}
+		}
+	}
+	if v.GGUF == nil {
+		t.Fatal("the bundled catalog has no qwen3.8-27b/mtp-q4-gguf with a GGUF layout")
+	}
+	h := hostfit.Host{RAMTotalGB: 121, GPUCount: 1, VRAM0MB: 24467, GPUVendor: "nvidia"}
+	got := hostfit.ProjectModelFrom(hostfit.ModelProjection{
+		Manifest: m, Variant: v, Engine: catalog.RuntimeOllama, Host: h, KVCacheType: catalog.KVCacheQ8_0,
+	})
+	e := hostfit.OllamaEstimateMemory(v, h, catalog.KVCacheQ8_0, hostfit.ServingWindow200k, 1)
+	// 6,664 MiB of q8_0 cache for 200,704 cells plus the draft head's
+	// f16 layer, 784 MiB.
+	if got.KVCacheMB != 6664+784 || e.DraftKVCacheMB != 784 {
+		t.Errorf("KVCacheMB = %d (draft %d), want 6664 + 784", got.KVCacheMB, e.DraftKVCacheMB)
+	}
+	if got.DeviceWeightsMB != e.DeviceWeightsMB || got.DeviceWeightsMB <= 0 {
+		t.Errorf("DeviceWeightsMB = %d, want the estimate's %d", got.DeviceWeightsMB, e.DeviceWeightsMB)
+	}
+	if overhead := got.RequiredWindowResidentMB - got.DeviceWeightsMB - got.KVCacheMB; overhead != e.RecurrentStateMB+e.ComputeMB+e.DraftMB-e.DraftKVCacheMB+e.FixedMB+e.FitTargetMB {
+		t.Errorf("overhead = %d MiB, want the estimate's non-weight, non-KV terms", overhead)
+	}
+
+	vl := catalog.Variant{VariantID: "fp8", MinVRAMMB: 16000, EstimatedWeightGB: 14, KVBytesPerTokenFP16: 32768}
+	if got := hostfit.ProjectModelFrom(hostfit.ModelProjection{Manifest: m, Variant: vl, Engine: catalog.RuntimeVLLM, Host: h, BudgetMB: 24467}); got.DeviceWeightsMB != 0 || got.KVCacheMB != 0 {
+		t.Errorf("vLLM row itemised %d / %d, want both absent", got.DeviceWeightsMB, got.KVCacheMB)
+	}
+}

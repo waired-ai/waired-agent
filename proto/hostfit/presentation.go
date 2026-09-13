@@ -274,14 +274,26 @@ type Presentation struct {
 	// GPULayers / TotalLayers predict llama.cpp's "offloaded N/M layers"
 	// for the coding window: how many layers stay in GPU-addressable
 	// memory, of how many (OllamaPredictPlacement). A surface shows this
-	// instead of a spill percentage (waired-ai/waired-agent#1347; the
-	// prediction lands with #1337).
+	// instead of a spill percentage (waired-ai/waired-agent#1347).
 	// TotalLayers is set whenever the prediction was made, so TotalLayers
 	// with GPULayers absent reads as "no layer on the GPU". Both absent on
 	// a host with no GPU-addressable memory, for a variant without a GGUF
 	// layout, and on the vLLM path.
 	GPULayers   int `json:"gpu_layers,omitempty"`
 	TotalLayers int `json:"total_layers,omitempty"`
+
+	// DeviceWeightsMB and KVCacheMB itemise RequiredWindowResidentMB on the
+	// ollama path: the weights llama.cpp places in GPU-addressable memory
+	// (the input-layer tensors it keeps in system RAM excluded), and the
+	// KV cache for the coding window at KVCacheType, the MTP draft head's
+	// own cache included. What RequiredWindowResidentMB holds beyond the
+	// two is the engine's overhead — compute buffers, recurrent state, the
+	// draft head's setup, the process context and the fit target — so a
+	// surface prints "weights W + KV cache K + engine overhead O" without
+	// calling any of that overhead a KV cache (waired-ai/waired-agent#1337).
+	// Absent wherever RequiredWindowResidentMB is, and on the vLLM path.
+	DeviceWeightsMB int `json:"device_weights_mb,omitempty"`
+	KVCacheMB       int `json:"kv_cache_mb,omitempty"`
 }
 
 // Project builds the Presentation for one variant on one host under one
@@ -411,22 +423,33 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 		QualityTier: v.QualityTier, ModelSize: ModelSize(m),
 		VariantID: v.VariantID, Quantization: v.Quantization,
 	}
+	kvType := in.KVCacheType
+	if kvType == "" {
+		kvType = OllamaDefaultKVCacheType(h)
+	}
 	var got Verdict
 	switch engine {
 	case catalog.RuntimeOllama:
 		got = OllamaCapacityFit(m, v, h)
-		out.KVCacheType = in.KVCacheType
-		if out.KVCacheType == "" {
-			out.KVCacheType = OllamaDefaultKVCacheType(h)
-		}
+		out.KVCacheType = kvType
 		// Always the CODING window, even where capacity was priced at a
 		// smaller one the host would actually serve: this is the figure a
 		// user reads as "what would this need here", and answering it with
 		// a truncated window would understate it exactly on the hosts that
 		// most need to know.
-		out.RequiredWindowResidentMB = OllamaWindowResidentMB(
-			v, OllamaEffectiveContextFloor(m), h.UnifiedMemory)
-		out.WeightsResidentMB = OllamaWeightsResidentMB(v, h.UnifiedMemory)
+		floor := OllamaEffectiveContextFloor(m)
+		atFloor := OllamaEstimateMemory(v, h, kvType, floor, 1)
+		out.RequiredWindowResidentMB = atFloor.DeviceMB()
+		out.DeviceWeightsMB = atFloor.DeviceWeightsMB
+		out.KVCacheMB = atFloor.KVCacheMB + atFloor.DraftKVCacheMB
+		// The window-independent part of the same estimate, so the
+		// difference a surface prints as the session's cache is exactly
+		// what the window adds.
+		out.WeightsResidentMB = OllamaEstimateMemory(v, h, kvType, 0, 1).DeviceMB()
+		if h.HasGPU() && h.OllamaVRAMBudgetMB() > 0 {
+			p := OllamaPredictPlacement(v, h, kvType, floor, 1)
+			out.GPULayers, out.TotalLayers = p.GPULayers, p.TotalLayers
+		}
 		// Meaningless without GPU-addressable memory — see the field doc.
 		if h.HasGPU() {
 			out.RequiredResidentMB = OllamaResidentMB(v, h.UnifiedMemory)
@@ -434,10 +457,7 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 	case catalog.RuntimeVLLM:
 		got = VLLMFit(v, budgetMB)
 		out.RequiredResidentMB = v.MinVRAMMB
-		out.KVCacheType = catalog.KVCacheFP16
-		if VLLMUsesFP8KV(in.GPUs) {
-			out.KVCacheType = catalog.KVCacheFP8
-		}
+		out.KVCacheType = VLLMKVCacheType(in.GPUs, in.KVCacheType)
 	default:
 		return Presentation{QualityTier: v.QualityTier, ModelSize: ModelSize(m)}
 	}
@@ -451,9 +471,9 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 		var rec Verdict
 		switch engine {
 		case catalog.RuntimeOllama:
-			rec = OllamaRecommendModel(m, v, h)
+			rec = OllamaRecommendModelFor(m, v, h, kvType)
 		case catalog.RuntimeVLLM:
-			rec = VLLMRecommendModelOnHost(m, v, h, in.GPUs)
+			rec = VLLMRecommendModelOnHostFor(m, v, h, in.GPUs, out.KVCacheType)
 		}
 		if !rec.Fits {
 			out.NotRecommended = true

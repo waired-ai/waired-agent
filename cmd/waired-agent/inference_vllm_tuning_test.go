@@ -26,11 +26,12 @@ func vllmTuningFixture() (catalog.Manifest, catalog.Variant, hardware.Profile) {
 
 func TestComputeVLLMTuning_ClampsBelowNative(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
-	// 1×L4 @ 0.85: ~19.5 GB budget (util×VRAM − per-GPU overhead) −
-	// 14×1.15 GB weights → ~45k tokens (see router.TestVLLMMaxModelLen).
+	// 1×L4 @ 0.85: ~18.1 GB budget (util×VRAM − per-GPU overhead −
+	// activation reserve) − 14×1.15 GB weights → ~27k tokens (see
+	// router.TestVLLMMaxModelLen).
 	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
-	if maxLen != 45056 {
-		t.Fatalf("maxLen = %d, want 45056", maxLen)
+	if maxLen != 26624 {
+		t.Fatalf("maxLen = %d, want 26624", maxLen)
 	}
 	if mt.ContextLength != maxLen {
 		t.Errorf("ModelTuning.ContextLength = %d, want %d", mt.ContextLength, maxLen)
@@ -38,7 +39,7 @@ func TestComputeVLLMTuning_ClampsBelowNative(t *testing.T) {
 	if mt.ModelID != "gpt-oss-20b" || mt.VariantID != "mxfp4-safetensors" {
 		t.Errorf("identity fields not filled: %+v", mt)
 	}
-	if !strings.Contains(mt.Warning, "clamped to 45056 tokens") ||
+	if !strings.Contains(mt.Warning, "clamped to 26624 tokens") ||
 		!strings.Contains(mt.Warning, "131072") {
 		t.Errorf("clamp warning should name both windows, got %q", mt.Warning)
 	}
@@ -54,8 +55,8 @@ func TestComputeVLLMTuning_SubFloorClampNamesCodingTarget(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	m.ContextLength = 262144 // above the native floor → floor phrasing applies
 	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
-	if maxLen != 45056 {
-		t.Fatalf("maxLen = %d, want 45056", maxLen)
+	if maxLen != 26624 {
+		t.Fatalf("maxLen = %d, want 26624", maxLen)
 	}
 	if !strings.Contains(mt.Warning, "~200k coding") {
 		t.Errorf("expected the ~200k coding-target phrasing, got %q", mt.Warning)
@@ -110,8 +111,8 @@ func TestComputeVLLMTuning_FP8DoublesTheClampedWindow(t *testing.T) {
 	if fp8 <= f16 {
 		t.Fatalf("fp8 window %d should exceed the f16 window %d", fp8, f16)
 	}
-	if fp8 != 90112 {
-		t.Errorf("fp8 clamp = %d, want 90112 (halved KV → ~2× f16 45056)", fp8)
+	if fp8 != 54272 {
+		t.Errorf("fp8 clamp = %d, want 54272 (halved KV → ~2× f16 26624)", fp8)
 	}
 	if mt.ContextLength != fp8 {
 		t.Errorf("ModelTuning.ContextLength = %d, want %d", mt.ContextLength, fp8)

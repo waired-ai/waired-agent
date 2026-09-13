@@ -21,13 +21,20 @@ import (
 // stand behind, so an under-stated KV lets a host declare a window it
 // cannot hold — the exact failure the window contract exists to remove.
 //
-// Scope: HYBRID-ATTENTION models. Their KV is not a function of parameter
-// count — only the full-attention layers hold a cache that grows with the
-// sequence, and the linear/Mamba layers carry a constant state — which is
-// precisely the assumption that produces a transcription like #448's. The
-// dense and sliding-window families are deliberately NOT covered here;
-// several of them disagree with this package's own formula and settling
-// them needs a per-family convention decision, tracked separately.
+// Scope: HYBRID-ATTENTION and SLIDING-WINDOW models. Their KV is not a
+// function of parameter count — only the full-attention layers hold a
+// cache that grows with the sequence; linear/Mamba layers carry a constant
+// state and sliding-window layers a cache capped at the window — which is
+// precisely the assumption that produces a transcription like #448's.
+// Dense families are not covered here.
+//
+// The sliding-window rows joined with waired-agent#1337. gpt-oss shipped
+// annotated at every layer's width (73,728 for the 20b, 3× the derivation),
+// and both engines disagree with that: on a 24 GB card vLLM 0.28.0 kept a
+// 339,160-token KV pool for gpt-oss-20b, which is what 24,576 B/token at
+// fp8 buys in the ~4.2 GB left beside the weights, while the old figure
+// made the product clamp the window to 124,928. llama.cpp's iSWA cache
+// likewise sizes the window layers at the window, not the context.
 
 // hybridArchConfigs maps a bundled model_id to its published attention
 // architecture.
@@ -124,6 +131,56 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// annotates. The architecture itself is not lost: archCases still pins
 	// it from the scoring report, where it is evidence about a derivation
 	// rather than a claim about a shipped file.
+}
+
+// slidingWindowArchConfigs is hybridArchConfigs for the sliding-window
+// family: layer_types alternates window and full layers, and only the full
+// ones are priced (ArchConfig.FullAttnLayers counts them). Values from the
+// models' config.json, the same rows archCases pins in scoring_test.go.
+var slidingWindowArchConfigs = map[string]ArchConfig{
+	// L=24, full=12, n_kv=8, head_dim=64 → 2×12×8×64×2 = 24576
+	"gpt-oss-20b": {NumHiddenLayers: 24, HiddenSize: 2880, NumAttentionHeads: 64, NumKeyValueHeads: 8, HeadDim: 64, SlidingWindow: 128, NumLocalExperts: 32, NumExpertsPerTok: 4, LayerTypes: alternating(24)},
+	// L=36, full=18, n_kv=8, head_dim=64 → 36864
+	"gpt-oss-120b": {NumHiddenLayers: 36, HiddenSize: 2880, NumAttentionHeads: 64, NumKeyValueHeads: 8, HeadDim: 64, SlidingWindow: 128, NumLocalExperts: 128, NumExpertsPerTok: 4, LayerTypes: alternating(36)},
+}
+
+// TestBundledSlidingWindowManifestsMatchTheDerivation holds the gpt-oss
+// annotations to their architecture (waired-agent#1337), and fails on a
+// sliding_window variant with a KV figure but no row here.
+func TestBundledSlidingWindowManifestsMatchTheDerivation(t *testing.T) {
+	manifests, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if v.AttentionArch != catalog.AttentionSlidingWindow || v.KVBytesPerTokenFP16 == 0 {
+				continue
+			}
+			cfg, ok := slidingWindowArchConfigs[m.ModelID]
+			if !ok {
+				t.Errorf("%s/%s: sliding_window variant carries kv_bytes_per_token_fp16 = %d with no architecture row to derive it from",
+					m.ModelID, v.VariantID, v.KVBytesPerTokenFP16)
+				continue
+			}
+			seen[m.ModelID] = true
+			full, inferred := cfg.FullAttnLayers()
+			headDim, derived := cfg.ResolvedHeadDim()
+			if inferred || derived {
+				t.Errorf("%s: layer count or head_dim had to be guessed; record the architecture", m.ModelID)
+			}
+			if want := KVBytesPerTokenFP16ForConfig(cfg, full, headDim); v.KVBytesPerTokenFP16 != want {
+				t.Errorf("%s/%s: kv_bytes_per_token_fp16 = %d, want %d (2 × %d full-attention layers × %d KV heads × %d head_dim × 2 bytes; window layers are capped at %d tokens)",
+					m.ModelID, v.VariantID, v.KVBytesPerTokenFP16, want, full, cfg.NumKeyValueHeads, headDim, cfg.SlidingWindow)
+			}
+		}
+	}
+	for id := range slidingWindowArchConfigs {
+		if !seen[id] {
+			t.Errorf("slidingWindowArchConfigs names %q, which the bundled catalog no longer ships — drop the row", id)
+		}
+	}
 }
 
 // TestBundledHybridManifestsMatchTheDerivation is the check that was

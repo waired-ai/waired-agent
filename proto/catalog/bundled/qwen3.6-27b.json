@@ -30,6 +30,18 @@
         "amd":    {"ollama": "stable", "vllm": "experimental"},
         "mac":    {"ollama": "stable", "mlx": "stable"}
       },
+      "host_resident_weight_gb": 0.715,
+      "gguf": {
+        "block_count": 65,
+        "full_attention_layers": 16,
+        "recurrent_state_bytes": 156893184,
+        "draft_max_tokens": 3,
+        "tensor_bytes": 16825933824,
+        "projector_bytes": 931145568,
+        "nextn_layers": 1,
+        "nextn_bytes": 289527808,
+        "repeating_bytes": 14778279936
+      },
       "source": {"type": "ollama", "tag": "qwen3.6:27b-mtp-q4_K_M"}
     },
     {
@@ -49,6 +61,16 @@
         "nvidia": {"ollama": "stable", "vllm": "stable"},
         "amd":    {"ollama": "stable", "vllm": "experimental"},
         "mac":    {"ollama": "stable", "mlx": "stable"}
+      },
+      "host_resident_weight_gb": 0.715,
+      "gguf": {
+        "block_count": 64,
+        "full_attention_layers": 16,
+        "recurrent_state_bytes": 156893184,
+        "tensor_bytes": 17408408512,
+        "inline_projector_bytes": 922278848,
+        "nextn_bytes": 263313408,
+        "repeating_bytes": 14464690176
       },
       "source": {"type": "ollama", "tag": "qwen3.6:27b-q4_K_M"}
     },
