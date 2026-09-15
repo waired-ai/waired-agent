@@ -87,12 +87,12 @@ package runtime
 //     tok/s on gpt-oss-20b and 66 tok/s on Qwen3.5-4B on both releases.
 //     The KV pool did, because V2 reserves more for CUDA graphs and peaks
 //     higher in the activation profile: gpt-oss-20b's pool is 264,060
-//     tokens against 285,284 on a first start (compile cache cold), and
-//     379,778 against 399,082 once the cache is warm. Forcing the V1
-//     runner on 0.29.0 gives 0.28.0's 285,284 back exactly. Note the
-//     cold/warm spread itself (about 30%) is not new: the first start
-//     after a venv is built profiles with a cold torch.compile cache on
-//     either release.
+//     tokens against 285,284 on each configuration's first start, and
+//     379,778 against 399,082 on a repeat start of the same
+//     configuration. Forcing the V1 runner on 0.29.0 gives 0.28.0's
+//     285,284 back exactly. The first-versus-repeat spread itself (about
+//     30-40%) is on both releases; compile and CUDA-graph caches are the
+//     likely reason, not isolated.
 //   - Under WSL2, V2 needs pinned host memory that vLLM turns off by
 //     default there, and dies with "UVA is not available" instead of
 //     falling back — see processEnv.

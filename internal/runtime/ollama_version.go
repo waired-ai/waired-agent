@@ -220,6 +220,11 @@ package runtime
 //     engine.log is still logfmt with msg="..."; the runner still gets
 //     -c / -np 1 / -b 512 -ub 512 and --cache-type-k/-v from
 //     OLLAMA_KV_CACHE_TYPE.
+//   - The same checks on Windows (a Strix Halo, Radeon 8060S on Vulkan
+//     with OLLAMA_VULKAN=1) answered the same: 200 on both surfaces, 5 and
+//     41 minutes, the same /api/ps keys, cached_tokens 918, and the
+//     runner started with -c 262144 -np 1 from the 102.2 GiB VRAM tier.
+//     macOS was checked by archive layout only.
 //   - ParseLlamaPlacement reads a 0.34.0 load log to the same fields it
 //     reads from 0.33.3's (offloaded layers, model buffers, n_ctx, KV
 //     type, the fit projection), which is expected with llama.cpp
