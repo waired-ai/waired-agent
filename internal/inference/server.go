@@ -268,7 +268,8 @@ func (s *Server) AdmittedCount() uint64 {
 
 // AdmitLocal counts one of THIS DEVICE's own requests against the shared
 // admission counter for as long as it occupies this machine's engine, and
-// raises the owner-priority latch when the machine is saturated.
+// holds the owner-priority latch while it waits for a full machine or
+// fills one, re-arming the latch window when it ends.
 //
 // This device's traffic never touches the overlay listener: it arrives on
 // the loopback gateway, the Claude intercept or the data-plane surface,
@@ -308,35 +309,50 @@ func (s *Server) AdmitLocal(ctx context.Context) (release func(), ok bool) {
 	if _, isPeer := PeerFromContext(ctx); isPeer {
 		return func() {}, true
 	}
-	if !s.inflight.AcquireWait(ctx) {
-		return func() {}, false
+	// Owner-priority latch (spec §8.2). This request holds it when it
+	// finds the machine full, from the moment it starts waiting, or when
+	// it takes the last slot; it re-arms the window when it ends.
+	//
+	// "Owner" is every computer enrolled in this account's network, which
+	// is what capacityGateAdapter has always meant by it (ownerRequest =
+	// not a public consumer) and what the 2026-09-12 ruling confirms the
+	// contract was about. The latch is priority over PUBLIC consumers, and
+	// over nothing else — it does not order this account's own computers
+	// against each other.
+	held := false
+	hold := func() {
+		if s.public != nil && !held {
+			s.public.holdOwner()
+			held = true
+		}
 	}
-	s.latchOnOwnerPressure()
+	unhold := func() {
+		if held {
+			s.public.releaseOwner(nowOrTime(s.now))
+		}
+	}
+	if !s.inflight.Acquire() {
+		// Full on arrival. Waiting is this path's refusal, so it latches
+		// the way a refusal on the overlay does — without it a slot a
+		// guest frees could go to the next guest while the owner waits.
+		hold()
+		if !s.inflight.AcquireWait(ctx) {
+			unhold()
+			return func() {}, false
+		}
+	}
+	if s.inflight.atSaturation() {
+		hold()
+	}
 	s.recordInflight()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			s.inflight.Release()
+			unhold()
 			s.recordInflight()
 		})
 	}, true
-}
-
-// latchOnOwnerPressure raises the owner-priority latch when this machine is
-// at or past its ceiling with a non-public request on it.
-//
-// "Owner" is every computer enrolled in this account's network, which is
-// what capacityGateAdapter has always meant by it (ownerRequest = not a
-// public consumer) and what the 2026-09-12 ruling confirms the contract
-// was about. The latch is priority over PUBLIC consumers, and over nothing
-// else — it does not order this account's own computers against each other.
-func (s *Server) latchOnOwnerPressure() {
-	if s.public == nil || s.inflight == nil {
-		return
-	}
-	if s.inflight.atSaturation() {
-		s.public.latch(nowOrTime(s.now), ownerPriorityLatchWindow)
-	}
 }
 
 // recordInflight republishes the shared counter to the telemetry
@@ -363,6 +379,11 @@ type publicAdmission struct {
 	publicCap  atomic.Int32 // CP-served PublicCapacity; <=0 ⇒ headroom default
 	totalCap   atomic.Int32 // mirror of the total capacity, for the default rule
 	latchUntil atomic.Int64 // unix nanos; owner-priority latch deadline
+	// ownerHolds counts the owner requests that hit the ceiling and are
+	// still running (or still waiting for a slot). While any is, the
+	// latch holds whatever latchUntil says; each one re-arms the window
+	// when it ends (waired-agent#1387).
+	ownerHolds atomic.Int32
 
 	// cancelRegistry holds the in-flight public requests the kill switch
 	// terminates.
@@ -419,13 +440,37 @@ func (p *publicAdmission) acquire() bool {
 func (p *publicAdmission) release() { p.n.Add(-1) }
 
 // latch records an owner-priority event: new public admissions pause
-// until now+d (refreshed on every owner attempt, spec §8.2).
+// until now+d. The deadline only moves later: two owner events racing
+// with slightly different clocks must not shorten each other's window.
 func (p *publicAdmission) latch(now time.Time, d time.Duration) {
-	p.latchUntil.Store(now.Add(d).UnixNano())
+	until := now.Add(d).UnixNano()
+	for {
+		cur := p.latchUntil.Load()
+		if until <= cur || p.latchUntil.CompareAndSwap(cur, until) {
+			return
+		}
+	}
 }
 
+// latched reports whether new public admissions are paused: an owner
+// request that hit the ceiling is still running, or one ended (or was
+// refused) less than the latch window ago.
 func (p *publicAdmission) latched(now time.Time) bool {
-	return now.UnixNano() < p.latchUntil.Load()
+	return p.ownerHolds.Load() > 0 || now.UnixNano() < p.latchUntil.Load()
+}
+
+// holdOwner pins the latch for as long as an owner request that hit the
+// ceiling lasts. Pair every call with exactly one releaseOwner.
+func (p *publicAdmission) holdOwner() { p.ownerHolds.Add(1) }
+
+// releaseOwner ends one hold and re-arms the window from now, so the
+// owner's next turn, a few seconds later, still finds public admission
+// paused (owner ruling 2026-09-16 on waired-agent#1387). The window is
+// armed before the hold drops so there is no instant in which neither
+// keeps a guest out.
+func (p *publicAdmission) releaseOwner(now time.Time) {
+	p.latch(now, ownerPriorityLatchWindow)
+	p.ownerHolds.Add(-1)
 }
 
 // killEpoch returns the current kill-switch generation. A caller that
@@ -493,8 +538,11 @@ func (r *cancelRegistry) abortAll() {
 }
 
 // ownerPriorityLatchWindow is how long new public admissions stay
-// paused after the owner's own traffic hit the capacity ceiling
-// (refreshed per owner attempt, spec §8.2).
+// paused after the owner's traffic that hit the capacity ceiling ENDS:
+// a refusal ends at once, an admitted request when it lets go of the
+// engine, and until then the latch holds regardless (spec §8.2; the
+// window counts from the end since waired-agent#1387, when a 27 s owner
+// turn left a guest only 3 s of pause).
 const ownerPriorityLatchWindow = 30 * time.Second
 
 // PublicInflightCount reports the current public-consumer in-flight
@@ -1212,10 +1260,11 @@ func publicAdmissionGateAdapter(p *publicAdmission, now func() time.Time) func(h
 // surfaces are distinguished without intercepting the body).
 //
 // When public is non-nil, the gate also drives the owner-priority
-// latch (spec §8.2): a NON-public request that is rejected at
-// capacity — or admitted exactly at saturation — pauses new public
-// admissions for ownerPriorityLatchWindow (refreshed per attempt), so
-// the owner reclaims slots as in-flight public requests drain.
+// latch (spec §8.2): a NON-public request that is rejected at capacity
+// pauses new public admissions for ownerPriorityLatchWindow; one
+// admitted exactly at saturation pauses them for as long as it runs and
+// for the window after it ends, so the owner reclaims slots as
+// in-flight public requests drain and keeps them between turns.
 func capacityGateAdapter(counter *inflightCounter, rec Recorder, public *publicAdmission, now func() time.Time) func(http.Handler) http.Handler {
 	if counter == nil {
 		return nil
@@ -1239,12 +1288,14 @@ func capacityGateAdapter(counter *inflightCounter, rec Recorder, public *publicA
 					"waired-agent on this peer is at its concurrent-request capacity; retry on another peer or wait.")
 				return
 			}
-			if ownerRequest {
-				if capacity := int(counter.capacity.Load()); capacity > 0 && int(counter.InFlight()) >= capacity {
-					// Admitted, but this owner request took the last
-					// slot — arriving at saturation also latches (§8.2).
-					public.latch(nowOrTime(now), ownerPriorityLatchWindow)
-				}
+			if ownerRequest && counter.atSaturation() {
+				// Admitted, but this owner request took the last slot —
+				// arriving at saturation also latches (§8.2), held until
+				// the request ends and re-armed from there (#1387).
+				// The clock is read when the request ends: a deferred
+				// call's arguments would be evaluated here, at admission.
+				public.holdOwner()
+				defer func() { public.releaseOwner(nowOrTime(now)) }()
 			}
 			if rec != nil {
 				rec.SetInflight(int(counter.InFlight()))

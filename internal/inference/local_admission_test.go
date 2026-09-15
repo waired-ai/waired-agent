@@ -100,11 +100,15 @@ func TestAdmittedCount_NoCounterIsZero(t *testing.T) {
 // headroom is the whole point. What the ruling changed is the other half,
 // the unbounded local admit; see
 // TestAdmitLocal_AtCapacityWaitsInsteadOfOversubscribing.
+//
+// The latch holds for as long as the request that raised it runs, and
+// its 30 s window counts from when that request ends (waired-agent#1387).
 func TestAdmitLocal_LatchesAtSaturation(t *testing.T) {
 	at := time.Date(2026, 5, 9, 18, 0, 0, 0, time.UTC)
+	var offset atomic.Int64 // seconds added to at
 	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
 		c.Capacity = 2
-		c.Now = func() time.Time { return at }
+		c.Now = func() time.Time { return at.Add(time.Duration(offset.Load()) * time.Second) }
 	})
 
 	first := mustAdmitLocal(t, srv, context.Background())
@@ -116,14 +120,25 @@ func TestAdmitLocal_LatchesAtSaturation(t *testing.T) {
 	if !srv.public.latched(at) {
 		t.Fatal("owner request took the last slot but no owner-priority latch")
 	}
-	if !srv.public.latched(at.Add(29 * time.Second)) {
-		t.Fatal("latch expired before the 30s window")
+	if !srv.public.latched(at.Add(10 * time.Minute)) {
+		t.Fatal("latch expired while the owner request that raised it was still running")
 	}
-	if srv.public.latched(at.Add(31 * time.Second)) {
-		t.Fatal("latch outlived the 30s window")
-	}
+
+	// The request ends 45 s in: the window counts from here.
+	offset.Store(45)
 	second()
+	if !srv.public.latched(at.Add(74 * time.Second)) {
+		t.Fatal("latch expired before 30 s had passed since the owner request ended")
+	}
+	if srv.public.latched(at.Add(76 * time.Second)) {
+		t.Fatal("latch outlived the 30 s window after the owner request ended")
+	}
+	// The first request never raised it, so ending it re-arms nothing.
+	offset.Store(200)
 	first()
+	if srv.public.latched(at.Add(201 * time.Second)) {
+		t.Fatal("a request admitted below saturation re-armed the latch when it ended")
+	}
 }
 
 // TestAdmitLocal_AtCapacityWaitsInsteadOfOversubscribing INVERTS the
@@ -388,17 +403,21 @@ func TestOwnerPriorityLatch_LocalRequestPausesPublicAdmission(t *testing.T) {
 		t.Fatalf("public during owner-local latch: got %d %q, want 503 waired_inference_overloaded", rec.Code, rec.Body.String())
 	}
 
-	// The owner's request finishes, freeing the slot — the latch still
-	// holds for the rest of its window (§8.2: in-flight publics drain,
-	// new ones wait).
+	// The owner's turn runs longer than the window. Measured on hardware
+	// (waired#843, §15-6): a 27 s turn left the guest 3 s of pause.
+	offset.Store(40)
+
+	// The owner's request finishes, freeing the slot — the latch holds
+	// for a full window from HERE (waired-agent#1387: the owner's next
+	// turn follows within seconds), not from when the request arrived.
 	release()
-	rec = do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, now()))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("public inside the latch window after the owner finished: got %d, want 503", rec.Code)
+	offset.Store(69)
+	if code := doExpectingRefusal(t, srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, now())); code != http.StatusServiceUnavailable {
+		t.Fatalf("public 29 s after the owner finished: got %d, want 503", code)
 	}
 
 	// Past the window public admission recovers.
-	offset.Store(31)
+	offset.Store(71)
 	result := make(chan int, 1)
 	go func() {
 		result <- do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, now())).Code
