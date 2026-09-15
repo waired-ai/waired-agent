@@ -445,7 +445,7 @@ func (rr *requestRec) setSelection(probed probedSelection) {
 	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
 		rr.peerDeviceID = strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)
 		// The variant travels with the peer id for the same reason a
-		// published rate carries it: a prefill rate is meaningless
+		// published speed carries it: a figure is meaningless
 		// against another model, so an observation keyed only by peer
 		// would survive a model switch it should not (#1127).
 		rr.peerVariantID = sel.VariantID

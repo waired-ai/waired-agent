@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -93,8 +92,8 @@ func TestBenchmarkStatus_AFinishedRunCarriesTheSeconds(t *testing.T) {
 }
 
 // PRODUCT CONTRACT (decision 9): /healthz publishes the served model's
-// seconds per request, withholds a figure measured on another variant, and
-// keeps one legacy prefill rung — a bound for a stalled measurement.
+// seconds per request — a lower bound for a stalled measurement — and
+// withholds a figure measured on another model or variant.
 func TestHealthPublishers_ServeTheServedModelsMeasurement(t *testing.T) {
 	p := statusRecProvider(t, BenchResult{
 		VariantID: "q4", ModelID: "heavy", TurnSeconds: 228, PrefillTokps: 252.9, DecodeTokps: 15.8,
@@ -104,17 +103,9 @@ func TestHealthPublishers_ServeTheServedModelsMeasurement(t *testing.T) {
 	if s == nil || s.TurnSeconds != 228 || s.PrefillTokps != 252.9 || s.DecodeTokps != 15.8 || s.DepthTokens != 32780 || s.MeasuredAt == "" {
 		t.Fatalf("speed = %+v", s)
 	}
-	pr := p.PrefillRateForHealth()
-	if pr == nil || len(pr.Rungs) != 1 || pr.Rungs[0].Depth != 32780 || pr.Rungs[0].Tokps != 252.9 || pr.Rungs[0].Bound {
-		t.Fatalf("prefill_rate = %+v, want one measured rung", pr)
-	}
 
-	// A bound: the legacy rung says "no faster than".
+	// A bound: only the lower bound is published.
 	p.SetLastBench(BenchResult{VariantID: "q4", TurnFloorSeconds: 400, DepthTokens: 32768, Capacity: 1, Outcome: benchOutcomeMeasured})
-	pr = p.PrefillRateForHealth()
-	if pr == nil || !pr.Rungs[0].Bound || math.Abs(pr.Rungs[0].Tokps-float64(hostfit.SpeedMeasurementDepthTokens)/400) > 1e-9 {
-		t.Fatalf("bound rung = %+v", pr)
-	}
 	if s := p.SpeedForHealth(); s == nil || s.TurnFloorSeconds != 400 || s.TurnSeconds != 0 {
 		t.Errorf("bound speed = %+v", s)
 	}
@@ -128,7 +119,7 @@ func TestHealthPublishers_ServeTheServedModelsMeasurement(t *testing.T) {
 	if err := p.store.Update(func(st *catalog.State) { st.Active.ModelID = "light" }); err != nil {
 		t.Fatal(err)
 	}
-	if p.SpeedForHealth() != nil || p.PrefillRateForHealth() != nil || p.modelSpeedStatus() != nil {
+	if p.SpeedForHealth() != nil || p.modelSpeedStatus() != nil {
 		t.Error("another model's figure was published because the two share a variant id")
 	}
 	if err := p.store.Update(func(st *catalog.State) { st.Active.ModelID = "heavy" }); err != nil {
@@ -139,7 +130,7 @@ func TestHealthPublishers_ServeTheServedModelsMeasurement(t *testing.T) {
 	if err := p.store.Update(func(st *catalog.State) { st.Active.VariantID = "q8" }); err != nil {
 		t.Fatal(err)
 	}
-	if p.SpeedForHealth() != nil || p.PrefillRateForHealth() != nil {
+	if p.SpeedForHealth() != nil {
 		t.Error("a figure measured on another variant was published against the served one")
 	}
 

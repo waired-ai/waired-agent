@@ -121,7 +121,11 @@ func TestPrefillWindow_AnObservedTurnReplacesThePrefillTerm(t *testing.T) {
 			hostfit.TurnSecondsAt(32768, 300, 15.8)},
 		{"the band's low edge", true, 15.8, 23000, 100 * time.Second,
 			hostfit.TurnSecondsAt(32768, 230, 15.8)},
-		{"a turn at 8k depth resembles another rung", true, 15.8, 8192, 10 * time.Second, 0},
+		{"the band's high edge", true, 15.8, 49152, 100 * time.Second,
+			hostfit.TurnSecondsAt(32768, 491.52, 15.8)},
+		{"a turn at 8k depth is outside the band", true, 15.8, 8192, 10 * time.Second, 0},
+		{"just below the band", true, 15.8, 20000, 100 * time.Second, 0},
+		{"far above the band", true, 15.8, 200000, 100 * time.Second, 0},
 		{"no published decode rate", true, 0, 30000, 100 * time.Second, 0},
 		{"nothing published at all", false, 0, 30000, 100 * time.Second, 0},
 	}
@@ -166,28 +170,9 @@ func TestPrefillWindow_AnObservedTurnReplacesThePrefillTerm(t *testing.T) {
 	})
 }
 
-// A #1341 peer on a window too small for 32,768 publishes its one rung at a
-// shallower depth; an older round still has to be able to compare it.
-func TestPrefillWindow_AMeasuredDepthIsFiledUnderTheRungItResembles(t *testing.T) {
-	w, _ := newTestPrefillWindow(t)
-	w.RecordProbe("peer-A", HealthStatus{PrefillRate: &PrefillRate{VariantID: "v", Rungs: []PrefillRung{
-		{Depth: 30592, Tokps: 900},
-		{Depth: 20000, Tokps: 950}, // resembles no rung: dropped
-	}}})
-	rungs := w.Snapshot()["peer-A"].Rungs
-	if r, ok := rungs[32768]; !ok || r.Tokps != 900 || len(rungs) != 1 {
-		t.Errorf("rungs = %+v, want the 30,592 reading at 32,768 and nothing else", rungs)
-	}
-}
-
 func turnSpeed(turn, floor float64, capacityUsed int) PeerSpeed {
 	return PeerSpeed{VariantID: "v", CapacityUsed: capacityUsed,
 		Turn: &PeerTurn{TurnSeconds: turn, TurnFloorSeconds: floor}}
-}
-
-func withRung(s PeerSpeed, tokps float64) PeerSpeed {
-	s.Rungs = map[int]PrefillRung{32768: {Depth: 32768, Tokps: tokps}}
-	return s
 }
 
 func bucketsOf(cands []meshCandidate) map[string]int {
@@ -206,8 +191,8 @@ func cands(ids ...string) []meshCandidate {
 	return out
 }
 
-// PRODUCT CONTRACT (decision 9): when the whole round publishes seconds, a
-// request's cost orders it — (capacity_used + 1) × TurnSeconds, 25 % bands.
+// PRODUCT CONTRACT (decision 9): a request's cost orders the round —
+// (capacity_used + 1) × TurnSeconds, 25 % bands.
 func TestAssignSpeedRanks_SecondsOrderTheRound(t *testing.T) {
 	cs := cands("m5-35b", "m5-27b", "busy")
 	assignSpeedRanks(cs, map[string]PeerSpeed{
@@ -257,42 +242,6 @@ func TestAssignSpeedRanks_ABoundSitsBelowTheMeasured(t *testing.T) {
 			t.Errorf("buckets = %v", b)
 		}
 	})
-}
-
-// PRODUCT CONTRACT (the rollout rule): a round that mixes an older agent
-// (prefill rungs only) with #1341 agents ranks on the rungs every one of them
-// publishes. Reading the old peer as "unmeasured, best bucket" would put it
-// level with the fastest new peer and above every slower one.
-func TestAssignSpeedRanks_AMixedRoundFallsBackToTheRungs(t *testing.T) {
-	cs := cands("new-fast", "new-slow", "old")
-	assignSpeedRanks(cs, map[string]PeerSpeed{
-		"new-fast": withRung(turnSpeed(70, 0, 0), 900),
-		"new-slow": withRung(turnSpeed(228, 0, 0), 250),
-		"old":      withRung(PeerSpeed{VariantID: "v"}, 400),
-	})
-	b := bucketsOf(cs)
-	if b["old"] == b["new-fast"] {
-		t.Errorf("buckets = %v: the old peer shares the best bucket as though unmeasured", b)
-	}
-	if b["new-fast"] >= b["old"] || b["old"] >= b["new-slow"] {
-		t.Errorf("buckets = %v, want the rung order 900 > 400 > 250 tok/s", b)
-	}
-	if b["new-fast"] != speedBucketOf(1.0/900) {
-		t.Errorf("new-fast bucket = %d, want its rung bucket %d", b["new-fast"], speedBucketOf(1.0/900))
-	}
-}
-
-// A #1341 peer whose rung an old peer never reached, in a mixed round: no
-// common depth, so speed does not order the round — today's behaviour.
-func TestAssignSpeedRanks_AMixedRoundWithNoCommonRungOrdersNothing(t *testing.T) {
-	cs := cands("new", "old")
-	assignSpeedRanks(cs, map[string]PeerSpeed{
-		"new": withRung(turnSpeed(70, 0, 0), 900),
-		"old": {VariantID: "v", Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 1200}}},
-	})
-	if b := bucketsOf(cs); b["new"] != 0 || b["old"] != 0 {
-		t.Errorf("buckets = %v, want no speed key", b)
-	}
 }
 
 func TestRoundSpeeds_FoldsTheLocalSecondsReading(t *testing.T) {

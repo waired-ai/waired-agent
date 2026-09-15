@@ -5,7 +5,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/inference"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // The readiness half of waired-agent#1127.
@@ -126,28 +125,6 @@ func (p *agentInferenceProvider) SpeedForHealth() *inference.SpeedReading {
 		out.MeasuredAt = at.UTC().Format(time.RFC3339Nano)
 	}
 	return out
-}
-
-// PrefillRateForHealth is inference.Config.PrefillRate: the same
-// measurement as one rung at the depth it was taken, for requesters older
-// than HealthSnapshot.Speed, which compare peers at a common prefill rung.
-// Kept for one release (waired-ai/waired-agent#1341). A measurement that
-// stalled publishes its rung as a bound: no faster than depth / elapsed.
-func (p *agentInferenceProvider) PrefillRateForHealth() *inference.PrefillRate {
-	b, _, ok := p.servedSpeed()
-	if !ok || b.DepthTokens <= 0 {
-		return nil
-	}
-	rung := inference.PrefillRung{Depth: b.DepthTokens, Tokps: b.PrefillTokps, Samples: b.Samples, SpreadPct: b.SpreadPct}
-	if b.TurnSeconds <= 0 {
-		// TurnFloorSeconds is normalised to the canonical depth.
-		rung.Bound = true
-		rung.Tokps = float64(hostfit.SpeedMeasurementDepthTokens) / b.TurnFloorSeconds
-	}
-	if rung.Tokps <= 0 {
-		return nil
-	}
-	return &inference.PrefillRate{VariantID: b.VariantID, Rungs: []inference.PrefillRung{rung}}
 }
 
 // activeVariantID is the committed active selection's variant, read from

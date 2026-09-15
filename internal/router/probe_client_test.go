@@ -268,13 +268,6 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 		ShareEnabled:  true,
 		ModelResident: &resident,
 		Measuring:     true,
-		PrefillRate: &inference.PrefillRate{
-			VariantID: "q4-gguf",
-			Rungs: []inference.PrefillRung{
-				{Depth: 4096, Tokps: 830.5, Samples: 3, SpreadPct: 1.9},
-				{Depth: 8192, Tokps: 690.5, Samples: 2, SpreadPct: 4.2, Bound: true},
-			},
-		},
 		Speed: &inference.SpeedReading{
 			VariantID: "q4-gguf", DepthTokens: 32768, PrefillTokps: 252.9, DecodeTokps: 15.8,
 			TurnSeconds: 228.3, TurnFloorSeconds: 0, MeasuredAt: "2026-09-14T01:02:03.456Z",
@@ -310,26 +303,6 @@ func TestHealthStatus_WireCompatWithInferenceHealthSnapshot(t *testing.T) {
 	}
 	if client.ModelResident == nil || *client.ModelResident != resident {
 		t.Errorf("ModelResident round-trip: got %v, want %v", client.ModelResident, resident)
-	}
-	if client.PrefillRate == nil {
-		t.Fatal("PrefillRate did not survive the round trip")
-	}
-	if client.PrefillRate.VariantID != server.PrefillRate.VariantID {
-		t.Errorf("PrefillRate.VariantID = %q, want %q",
-			client.PrefillRate.VariantID, server.PrefillRate.VariantID)
-	}
-	if len(client.PrefillRate.Rungs) != len(server.PrefillRate.Rungs) {
-		t.Fatalf("PrefillRate.Rungs = %d entries, want %d",
-			len(client.PrefillRate.Rungs), len(server.PrefillRate.Rungs))
-	}
-	for i, want := range server.PrefillRate.Rungs {
-		got := client.PrefillRate.Rungs[i]
-		if got != (PrefillRung{
-			Depth: want.Depth, Tokps: want.Tokps, Bound: want.Bound,
-			Samples: want.Samples, SpreadPct: want.SpreadPct,
-		}) {
-			t.Errorf("rung %d round-trip mismatch:\n  server=%+v\n  client=%+v", i, want, got)
-		}
 	}
 }
 

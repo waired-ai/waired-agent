@@ -1689,11 +1689,10 @@ func run(ctx context.Context, args []string) error {
 				if inferenceSub.provider != nil {
 					// waired-agent#1127: the readiness gate, and the
 					// figure it is waiting for. Both live rather than
-					// latched — the rate is withheld the moment the
+					// latched — the figure is withheld the moment the
 					// served variant stops matching the one it was
 					// measured on.
 					cfg.IsMeasuringSpeed = inferenceSub.provider.IsMeasuringSpeed
-					cfg.PrefillRate = inferenceSub.provider.PrefillRateForHealth
 					cfg.Speed = inferenceSub.provider.SpeedForHealth
 				}
 			}

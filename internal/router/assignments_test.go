@@ -10,15 +10,17 @@ import (
 )
 
 // burstMesh is the four-computer mesh waired-agent#1354 was measured on, as
-// this requester held it: the published prefill rates at 8,192 tokens, and
-// every peer's last probe saying it had nothing in flight. One model tag
-// everywhere so only the speeds and slots differ.
+// this requester held it: every peer's last probe saying it had nothing in
+// flight. One model tag everywhere so only the speeds and slots differ. The
+// seconds per request are the prefill rates measured at 8,192 tokens then
+// (1,443 / 588 / 354 / 293 tok/s) put on one scale, so the buckets keep the
+// spacing the measurement had.
 //
-//	candidate  slots  tok/s   bucket at 0 / 1 / 2 in use
-//	peer-A       1    1,443   -33 / -30
-//	peer-B       1      588   -29 / -26
-//	this device  1      354   -27 / -24 / -22
-//	peer-C       2      293   -26 / -23
+//	candidate  slots  s/request  bucket at 0 / 1 / 2 in use
+//	peer-A       1       48.6    17 / 20
+//	peer-B       1      119.2    21 / 24
+//	this device  1      197.9    23 / 26 / 28
+//	peer-C       2      239.1    24 / 27
 func burstMesh(t *testing.T, withAssignments bool) (*Selector, *InFlightTracker, *Assignments) {
 	t.Helper()
 	tag := "qwen3:8b-q4_K_M"
@@ -30,17 +32,15 @@ func burstMesh(t *testing.T, withAssignments bool) (*Selector, *InFlightTracker,
 			mkPeerWithCap("peer-C", tag, 2),
 		},
 	}
-	rung := func(tokps float64) map[int]PrefillRung {
-		return map[int]PrefillRung{8192: {Depth: 8192, Tokps: tokps}}
-	}
+	turn := func(seconds float64) *PeerTurn { return &PeerTurn{TurnSeconds: seconds} }
 	speeds := map[string]PeerSpeed{
-		"peer-A": {VariantID: "q4-gguf", Rungs: rung(1443)},
-		"peer-B": {VariantID: "q4-gguf", Rungs: rung(588)},
-		"peer-C": {VariantID: "q4-gguf", Rungs: rung(293)},
+		"peer-A": {VariantID: "q4-gguf", Turn: turn(48.6)},
+		"peer-B": {VariantID: "q4-gguf", Turn: turn(119.2)},
+		"peer-C": {VariantID: "q4-gguf", Turn: turn(239.1)},
 	}
 	ln := localFor(tag)
 	ln.Capacity = 1
-	ln.Prefill = &PrefillRate{VariantID: "q4-gguf", Rungs: []PrefillRung{{Depth: 8192, Tokps: 354}}}
+	ln.Speed = &PeerSpeedReading{VariantID: "q4-gguf", TurnSeconds: 197.9}
 
 	tracker := NewInFlightTracker()
 	var a *Assignments

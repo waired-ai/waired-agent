@@ -53,7 +53,6 @@ func (p *agentInferenceProvider) localNodeForRouting() router.LocalNode {
 		// machine's own work as well as any peer's. A machine busy with
 		// its owner's turn is busy.
 		f.capacityUsed = p.servingInFlight()
-		f.prefill = localPrefillForRouting(p)
 		f.speed = localSpeedForRouting(p)
 	}
 	return localNodeFrom(f)
@@ -80,7 +79,6 @@ type localFacts struct {
 	contextWindow  int
 	capacity       int
 	capacityUsed   int
-	prefill        *router.PrefillRate
 	speed          *router.PeerSpeedReading
 }
 
@@ -114,7 +112,6 @@ func localNodeFrom(f localFacts) router.LocalNode {
 		ContextWindow:  f.contextWindow,
 		Capacity:       f.capacity,
 		CapacityUsed:   f.capacityUsed,
-		Prefill:        f.prefill,
 		Speed:          f.speed,
 	}
 }
@@ -136,26 +133,6 @@ func localSpeedForRouting(p *agentInferenceProvider) *router.PeerSpeedReading {
 		TurnFloorSeconds: s.TurnFloorSeconds,
 		MeasuredAt:       s.MeasuredAt,
 	}
-}
-
-// localPrefillForRouting converts this host's published prefill measurement
-// into the router's shape. nil stays nil: the ordering must read "no
-// reading" as no information, never as slow
-// (docs/decisions/20260822/0218-residency-breaks-a-tie-not-a-ranking.md).
-func localPrefillForRouting(p *agentInferenceProvider) *router.PrefillRate {
-	m := p.PrefillRateForHealth()
-	if m == nil || len(m.Rungs) == 0 {
-		return nil
-	}
-	out := &router.PrefillRate{VariantID: m.VariantID}
-	for _, r := range m.Rungs {
-		out.Rungs = append(out.Rungs, router.PrefillRung{
-			Depth: r.Depth,
-			Tokps: r.Tokps,
-			Bound: r.Bound,
-		})
-	}
-	return out
 }
 
 // routingTieBreak is the in-tier randomiser (waired-agent#1303, S4). It is a
