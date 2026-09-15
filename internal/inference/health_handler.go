@@ -192,6 +192,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	case peerOK && peer.IsPublicConsumer() && s.public != nil:
 		snap.CapacityTotal = s.public.effectiveCap()
 		snap.CapacityUsed = int(s.public.n.Load())
+		if snap.CapacityTotal > 0 && s.public.latched(nowOrTime(s.now)) {
+			// The owner-priority latch refuses every new public request,
+			// so a free public slot is not one this guest can have. Say
+			// full, and the guest's router moves on to another candidate
+			// at probe time instead of committing here and taking a 503
+			// (waired-agent#1387). It discloses nothing a refusal would
+			// not: the owner's own load stays out of these numbers.
+			snap.CapacityUsed = snap.CapacityTotal
+		}
 	case s.inflight != nil:
 		snap.CapacityTotal = int(s.inflight.capacity.Load())
 		snap.CapacityUsed = int(s.inflight.InFlight())
