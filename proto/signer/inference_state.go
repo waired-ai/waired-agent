@@ -395,11 +395,23 @@ type InferenceState struct {
 	// prompt that overran the SERVING engine reached it and was truncated
 	// at the head instead of being compacted (waired-agent#436).
 	//
-	// 0 means the device declares no window: either an agent that
-	// predates the field, or one whose engine is not serving a window it
-	// is willing to stand behind. Consumers must treat 0 as "unknown" and
-	// fail open to whatever they did before, so the fleet can upgrade in
-	// any order.
+	// 0 means the device declares no window: its engine is not serving a
+	// window it is willing to stand behind — under the smallest declarable
+	// one, or not tuned yet. What a consumer does with that depends on the
+	// question it is asking:
+	//
+	//   - A request that carries a window floor (the 200k and 1M model
+	//     rows) reads 0 as NOT meeting it. The floor is a promise about the
+	//     serving node, and a node that promises nothing cannot keep it
+	//     (owner decision 2026-09-16, waired-agent#1395).
+	//   - A reader with no floor to enforce — an overflow guard sizing a
+	//     prompt, a display — reads 0 as "unknown" and does what it did
+	//     before the field existed.
+	//
+	// Readers used to fail open on 0 everywhere, so that a fleet could
+	// upgrade in any order past agents that predated the field. There are
+	// none to carry: the field shipped before the first release (private
+	// decision 20260802/1332).
 	//
 	// Unlike RecommendedMaxParallel / NotShared this DOES ride the served
 	// NetworkMap — routing is the whole point — so it is gated on
