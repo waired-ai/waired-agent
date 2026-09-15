@@ -4816,6 +4816,9 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		p.recordPullState(modelID, variantID, catalog.ModelStateFailed, failure)
 		return
 	}
+	// The build the standing choice names for this model, read once: a
+	// download can outlive the choice that started it.
+	chosenNow := p.chosenVariantFor(modelID)
 	_ = p.store.Update(func(s *catalog.State) {
 		m := s.Models[modelID]
 		// Another build of a model whose row is serving lands on its
@@ -4828,6 +4831,20 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 			sv.State = catalog.ModelStateReady
 			sv.Error = ""
 			sv.PulledAt = time.Now().UTC()
+			if chosenNow != variantID {
+				// The choice moved on while it downloaded. Nothing will
+				// swap onto a staged row nobody chose, and nothing reports
+				// one, so it would sit on disk out of every list (found on
+				// hardware 2026-09-16: 18 GB after a cancelled switch). As
+				// a stored build it is reported, removable, and a switch
+				// back to it needs no download.
+				delete(s.StagedVariants, modelID)
+				rows := slices.DeleteFunc(slices.Clone(s.RetainedVariants[modelID]), func(r catalog.ModelState) bool {
+					return r.VariantID == variantID
+				})
+				setRetained(s, modelID, append(rows, sv))
+				return
+			}
 			s.StagedVariants[modelID] = sv
 			return
 		}
@@ -4914,8 +4931,10 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 	// downloaded), bounce the engine now so the new model's per-model serve
 	// env applies — the same in-process swap the on-disk path takes, just
 	// deferred until the download finished. Boot-time / unrelated pulls never
-	// set pendingSwapModel, so they don't trigger a spurious bounce.
-	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == modelID {
+	// set pendingSwapModel, so they don't trigger a spurious bounce. Nor
+	// does a download of a build the choice has since left: the engine is
+	// already serving the chosen one (waired#1387).
+	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == modelID && (chosenNow == "" || chosenNow == variantID) {
 		p.pendingSwapModel.CompareAndSwap(psm, nil)
 		// Record the intent; do not bounce here. `ollama pull` is a CLIENT
 		// of `ollama serve`, so stopping the engine makes a SIBLING model's

@@ -124,6 +124,9 @@ type fakeSetupProvider struct {
 	// list could not tell "stopped the old one" from "started the new
 	// one".
 	cancels []string
+	// inFlightBuild is the build a download in flight is fetching, per
+	// model: the one fact the build-level cancel reads.
+	inFlightBuild map[string]string
 
 	// applies records every model the reconciler asked to APPLY, in
 	// order. Separate from pulls because the two are different
@@ -356,6 +359,19 @@ func (f *fakeSetupProvider) setModelStateFor(modelID, state string) {
 	e := f.modelStateFor[modelID]
 	e.state = state
 	f.modelStateFor[modelID] = e
+}
+
+// setupCancelOtherBuildPull answers from inFlightBuild, the fake's stand-in
+// for the job registry's variant, and records the ask with the build kept.
+func (f *fakeSetupProvider) setupCancelOtherBuildPull(_ context.Context, modelID, keepVariantID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	running, ok := f.inFlightBuild[modelID]
+	if !ok || (keepVariantID != "" && running == keepVariantID) {
+		return false
+	}
+	f.cancels = append(f.cancels, modelID+"|"+running)
+	return true
 }
 
 func (f *fakeSetupProvider) cancelledModels() []string {
@@ -3777,6 +3793,45 @@ func TestSupersededModelPullIsCancelled(t *testing.T) {
 	// a reason to hold the instruction that caused it.
 	if got := f.appliedModels(); len(got) == 0 || got[len(got)-1] != "m2" {
 		t.Fatalf("applies = %v, want it to end with m2", got)
+	}
+}
+
+// TestSupersededBuildPullIsCancelled pins the build-level twin of the test
+// above (waired#1387). Found on hardware (2026-09-16): a switch from the
+// served MTP-Q4 build to UD-Q3_K_XL was cancelled from the console, the
+// control plane put MTP-Q4 back, and the agent — already serving MTP-Q4 —
+// had nothing to apply and went on fetching the 18 GB it was told to drop.
+func TestSupersededBuildPullIsCancelled(t *testing.T) {
+	buildFrame := func(variant string) *signer.InferenceState {
+		st := desiredFrame("ollama", "m1", 0)
+		st.DesiredVariantID = variant
+		return st
+	}
+	for _, tc := range []struct {
+		name     string
+		from, to string
+		running  string
+		want     []string
+	}{
+		{"a named build replaced by another stops its download", "q3", "q4", "q3", []string{"m1|q3"}},
+		{"a named build replaced by no instruction stops its download", "q3", "", "q3", []string{"m1|q3"}},
+		{"the download of the build now chosen is left running", "q3", "q4", "q4", nil},
+		{"the same build re-sent cancels nothing", "q3", "q3", "q3", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+			f.setEngineFor("ollama", true, true)
+			r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+			ctx := context.Background()
+			r.Apply(ctx, buildFrame(tc.from))
+			f.mu.Lock()
+			f.inFlightBuild = map[string]string{"m1": tc.running}
+			f.mu.Unlock()
+			r.Apply(ctx, buildFrame(tc.to))
+			if got := f.cancelledModels(); !slices.Equal(got, tc.want) {
+				t.Fatalf("cancels = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -390,6 +390,15 @@ type setupProvider interface {
 	// the link — and the disk — on both, and the wizard's way out of a
 	// 79 GB mistake was to wait for it.
 	setupCancelPull(ctx context.Context, modelID string) (cancelled bool)
+	// setupCancelOtherBuildPull stops an in-flight download of modelID
+	// whose build is not keepVariantID ("" keeps none), and reports whether
+	// there was one. A change of build within one model supersedes the
+	// download of the build it replaces just as a change of model does,
+	// and setupCancelPull cannot tell the two builds apart: it reads the
+	// model's state, which reports the chosen build (waired#1387; found on
+	// hardware 2026-09-16, where a cancelled switch went on fetching the
+	// 18 GB build it had cancelled).
+	setupCancelOtherBuildPull(ctx context.Context, modelID, keepVariantID string) (cancelled bool)
 	// PullModel is the fallback for a target the in-process switch cannot
 	// apply (a cross-engine change). The weights are fetched now and the
 	// activation happens on the next boot, from the preference
@@ -706,6 +715,11 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	if changed && r.desired.modelID != "" && r.desired.modelID != d.modelID {
 		supersededModel = r.desired.modelID
 	}
+	// The same, one level down: another build of the same model.
+	supersededBuildOf := ""
+	if changed && r.desired.modelID != "" && r.desired.modelID == d.modelID && r.desired.variantID != d.variantID {
+		supersededBuildOf = d.modelID
+	}
 	// The serve-ask below must not read an inference-only change as
 	// "asked to serve" (#597): a wizard writing "off" beside a standing
 	// engine would otherwise fire an enable a breath before the off
@@ -785,6 +799,10 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// would otherwise share the link, and on ollama they share an engine
 	// that a finishing sibling can bounce.
 	r.cancelSupersededPull(ctx, supersededModel)
+	if supersededBuildOf != "" && r.provider.setupCancelOtherBuildPull(ctx, supersededBuildOf, d.variantID) && r.logger != nil {
+		r.logger.Info("setup: stopped the download of the build that was replaced",
+			"model", supersededBuildOf, "keep_variant", d.variantID)
+	}
 	if retried && r.logger != nil {
 		r.logger.Info("setup: retry requested; re-admitting the desired model",
 			"gen", d.modelGen, "model", d.modelID)
@@ -2981,6 +2999,17 @@ func (p *agentInferenceProvider) setupCancelPull(ctx context.Context, modelID st
 		return false
 	}
 	return res.Status == pullCancelCancelled
+}
+
+// setupCancelOtherBuildPull is setupCancelPull narrowed to a download of
+// another build than keepVariantID. The in-flight registry holds one job
+// per model, so the build it is fetching is read off that job.
+func (p *agentInferenceProvider) setupCancelOtherBuildPull(ctx context.Context, modelID, keepVariantID string) bool {
+	job := p.inFlightPull(modelID)
+	if job == nil || (keepVariantID != "" && job.variantID == keepVariantID) {
+		return false
+	}
+	return p.setupCancelPull(ctx, modelID)
 }
 
 func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID, variantID, kvType string) (bool, error) {
