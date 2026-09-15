@@ -412,6 +412,8 @@ func TestCancelPull_ReturnsWhenTheCallerGoesAway(t *testing.T) {
 func TestSetupCancelOtherBuildPull_ReadsTheRunningJobsBuild(t *testing.T) {
 	r := newBlockingRunner(t)
 	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: the same fixture as TestCancelPull_StopsTheJobAndLeavesNoRecord
+	// — no engine adapter and no profiler, so neither detached writer exists.
 	p.agentCtx = context.Background()
 
 	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
