@@ -2,12 +2,15 @@
 status: accepted
 superseded_by:
   - docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md
+  - docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md
 ---
 
 # 段下げは自動選定と同じ梯子を歩く (20260820 11:30)
 
 ## Status
 Accepted。docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md（オーナー裁定 2026-09-13、決定 3）が決定 3 の承認済み文面のうち「interactive floor」の句を**部分的に狭める（覆さない）**: 床の名指しは 1 リクエストあたりの秒数（目標 M 秒以下）の形に替わる。「廃止された床を主張しない」の原則、決定 1（ランク順で最初の候補）、決定 2（tier 差を出さない）はそのまま有効。
+
+docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md（オーナー判断 2026-09-16、決定 2）が決定 1 の受け入れ判定を**部分的に狭める（覆さない）**: 「baseline より厳密に軽い」は「参照機での 1 リクエストの秒数が active の variant より小さい」に替わる。ランク順で最初の候補を返すこと、active と同じモデルを除くこと、決定 2 はそのまま有効。
 
 ## Context
 
