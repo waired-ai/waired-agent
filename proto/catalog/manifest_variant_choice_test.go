@@ -43,6 +43,7 @@ func TestValidate_VariantChoiceFields(t *testing.T) {
 	ok.Variants[0].KVCacheTypes = []string{KVCacheQ4_0, KVCacheQ8_0, KVCacheF16}
 	ok.Variants[0].HostResidentWeightGB = 0.521
 	ok.Variants[1].KVCacheTypes = []string{KVCacheFP8, KVCacheFP16}
+	ok.Variants[0].Source.Digest = "sha256:864f48ac1a59062413932328fbb606a4b8436725cdbc1d088cdee9262a4eb5b6"
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("a manifest using every new field correctly must validate, got %v", err)
 	}
@@ -73,6 +74,18 @@ func TestValidate_VariantChoiceFields(t *testing.T) {
 		{"a negative host-resident part", func(m *Manifest) {
 			m.Variants[0].HostResidentWeightGB = -0.1
 		}, "host_resident_weight_gb"},
+		{"a digest on a Hugging Face source", func(m *Manifest) {
+			m.Variants[1].Source.Digest = "sha256:" + strings.Repeat("a", 64)
+		}, "source.digest"},
+		{"a digest without the sha256 prefix", func(m *Manifest) {
+			m.Variants[0].Source.Digest = strings.Repeat("a", 64)
+		}, "source.digest"},
+		{"a short digest", func(m *Manifest) {
+			m.Variants[0].Source.Digest = "sha256:" + strings.Repeat("a", 63)
+		}, "source.digest"},
+		{"an uppercase digest", func(m *Manifest) {
+			m.Variants[0].Source.Digest = "sha256:" + strings.Repeat("A", 64)
+		}, "source.digest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := base()
@@ -95,7 +108,7 @@ func TestVariantChoiceFields_AbsentWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"default_variant", "kv_cache_types", "host_resident_weight_gb"} {
+	for _, key := range []string{"default_variant", "kv_cache_types", "host_resident_weight_gb", "digest"} {
 		if strings.Contains(string(b), `"`+key+`"`) {
 			t.Errorf("unset %s is on the wire: %s", key, b)
 		}

@@ -251,7 +251,10 @@ const (
 	// CapabilityVariantChoiceV1 marks an agent that honours
 	// InferenceState.DesiredVariantID and DesiredKVCacheType on its own
 	// Self entry: it serves the chosen build of DesiredModelID with the
-	// chosen KV-cache type (waired-ai/waired-agent#1346, #1348).
+	// chosen KV-cache type (waired-ai/waired-agent#1346, #1348). The same
+	// agent honours DesiredRemoveVariants and understands ActiveVariantID,
+	// ActiveKVCacheType and StoredVariants, so the control plane gates all
+	// of them on this one declaration.
 	//
 	// Gated for the structural reason every signed field is — an agent
 	// that does not know the fields drops them on canonical re-marshal and

@@ -219,7 +219,7 @@ func collectFile(p *pkgAPI, f *ast.File) {
 			if d.Recv != nil && len(d.Recv.List) == 1 {
 				key = types.ExprString(d.Recv.List[0].Type) + "." + key
 			}
-			p.funcs[key] = types.ExprString(d.Type)
+			p.funcs[key] = types.ExprString(unnamedParams(d.Type))
 		case *ast.GenDecl:
 			switch d.Tok {
 			case token.CONST:
@@ -273,4 +273,29 @@ func collectFields(st *ast.StructType) map[string]fieldInfo {
 		}
 	}
 	return fields
+}
+
+// unnamedParams returns a copy of a func type with its parameter and
+// result names removed. Names are not part of a Go API — a caller cannot
+// tell `func(_ Host)` from `func(h Host)` — so renaming a parameter (the
+// usual way an unused one starts being read) must not count as a
+// signature change. Types, their order and variadics still do.
+func unnamedParams(ft *ast.FuncType) *ast.FuncType {
+	strip := func(fl *ast.FieldList) *ast.FieldList {
+		if fl == nil {
+			return nil
+		}
+		out := &ast.FieldList{}
+		for _, f := range fl.List {
+			n := len(f.Names)
+			if n == 0 {
+				n = 1
+			}
+			for i := 0; i < n; i++ {
+				out.List = append(out.List, &ast.Field{Type: f.Type})
+			}
+		}
+		return out
+	}
+	return &ast.FuncType{TypeParams: strip(ft.TypeParams), Params: strip(ft.Params), Results: strip(ft.Results)}
 }
