@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,6 +104,99 @@ func TestSwapPreferredBuild_StagesAnotherBuildThenSwapsOntoIt(t *testing.T) {
 	if got := storedVariants(st); len(got) != 1 || got[0].VariantID != "q4" {
 		t.Errorf("stored builds after the swap = %+v, want the replaced q4", got)
 	}
+}
+
+// PRODUCT CONTRACT (waired#1387; found on hardware 2026-09-16): a build
+// that finishes downloading after the choice moved off it is a stored build
+// — reported, removable, and no swap onto it — rather than a staged row
+// nothing will swap onto or report. Before this an 18 GB build a cancelled
+// switch had started sat on disk out of every list, and its landing bounced
+// an engine already serving the chosen build.
+func TestPullLandingAfterTheChoiceMovedIsAStoredBuild(t *testing.T) {
+	br := newBlockingRunner(t)
+	p := precacheProvider(t, br)
+	p.manifests = precacheVariantManifests()
+	p.cfg.PreferredModelID = "heavy"
+	if err := p.store.Update(func(s *catalog.State) {
+		s.Models["heavy"] = catalog.ModelState{State: catalog.ModelStateReady, VariantID: "q4", OllamaTag: "heavy:8b"}
+		s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "heavy", VariantID: "q4"}
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	adapter, _ := newSwapTestAdapter(t)
+	if err := adapter.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	p.ollama = adapter
+
+	if downloading, err := p.SwapPreferredBuild(context.Background(), "heavy", "mtp-q4", ""); err != nil || !downloading {
+		t.Fatalf("SwapPreferredBuild = %v, %v; want a download", downloading, err)
+	}
+	br.awaitStarted(t)
+	// The choice goes back to the served build while the download runs, the
+	// way a cancelled switch leaves it when nothing stops the job.
+	id := "heavy"
+	p.preferredBuild.Store(&buildChoice{ModelID: id, VariantID: "q4"})
+	p.preferredOverride.Store(&id)
+	// The reconcile names whether it is a switch; a switch is what the
+	// landing of an unchosen build must not ask for. Spawns are no signal
+	// here: the fixture's first reconcile re-tunes and bounces either way.
+	logs := &lockedLog{}
+	p.logger = slog.New(slog.NewTextHandler(logs, nil))
+	br.releaseAll()
+	p.waitForPulls()
+
+	st, _ := p.store.Load()
+	if _, staged := st.StagedVariants["heavy"]; staged {
+		t.Errorf("the landed build stayed staged: %+v", st.StagedVariants)
+	}
+	if got := storedVariants(st); len(got) != 1 || got[0].VariantID != "mtp-q4" {
+		t.Errorf("stored builds = %+v, want the landed mtp-q4", got)
+	}
+	if ms := st.Models["heavy"]; ms.VariantID != "q4" || st.Active == nil || st.Active.VariantID != "q4" {
+		t.Errorf("served build changed: row %+v active %+v", ms, st.Active)
+	}
+	// endPull turns a deferred bounce into a detached reconcile, so the
+	// spawn count is read once that work has settled: two quiet samples.
+	for quiet, i := 0, 0; quiet < 2 && i < 400; i++ {
+		if p.detachedWorkQuiet() {
+			quiet++
+		} else {
+			quiet = 0
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// endPull hands a deferred bounce to a detached reconcile; read the log
+	// once that work has settled (two quiet samples).
+	for quiet, i := 0, 0; quiet < 2 && i < 400; i++ {
+		if p.detachedWorkQuiet() {
+			quiet++
+		} else {
+			quiet = 0
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if strings.Contains(logs.String(), "switch=true") {
+		t.Errorf("the landing of a build nobody chose switched the engine:\n%s", logs.String())
+	}
+}
+
+// lockedLog is a log sink the detached reconcile and the test can share.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(b)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 // PRODUCT CONTRACT: switching back to a build still on disk downloads

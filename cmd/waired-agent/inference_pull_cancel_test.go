@@ -404,3 +404,41 @@ func TestCancelPull_ReturnsWhenTheCallerGoesAway(t *testing.T) {
 	}
 	p.waitForPulls()
 }
+
+// PRODUCT CONTRACT (waired#1387): the build-level cancel the setup
+// reconciler uses when a same-model build instruction changes stops a
+// download of another build and leaves the download of the kept build
+// running, reading the build off the real job registry.
+func TestSetupCancelOtherBuildPull_ReadsTheRunningJobsBuild(t *testing.T) {
+	r := newBlockingRunner(t)
+	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
+	// background: the same fixture as TestCancelPull_StopsTheJobAndLeavesNoRecord
+	// — no engine adapter and no profiler, so neither detached writer exists.
+	p.agentCtx = context.Background()
+
+	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	r.awaitStarted(t)
+	job := p.inFlightPull("dense-mtp")
+	if job == nil || job.variantID == "" {
+		t.Fatalf("no running job with a build: %+v", job)
+	}
+
+	if p.setupCancelOtherBuildPull(context.Background(), "dense-mtp", job.variantID) {
+		t.Fatal("the download of the build being kept was cancelled")
+	}
+	if p.inFlightPull("dense-mtp") == nil {
+		t.Fatal("keeping the running build stopped its job")
+	}
+	if !p.setupCancelOtherBuildPull(context.Background(), "dense-mtp", "another-build") {
+		t.Fatal("the download of a replaced build was not cancelled")
+	}
+	p.waitForPulls()
+	if p.inFlightPull("dense-mtp") != nil {
+		t.Error("the replaced build's job is still registered")
+	}
+	if p.setupCancelOtherBuildPull(context.Background(), "dense-mtp", "") {
+		t.Error("with nothing in flight the cancel claimed a job")
+	}
+}
