@@ -35,6 +35,17 @@ sv-xps15(Windows 11 Pro、`VerifiedAndReputablePolicyState=1`)を 1 日使った
 `RemoteException`(Message = "Usage of waired-agent:")が投げられる。**拒否と
 区別できない**ので、スモークテストは呼び出しの間だけ `Continue` に落とす。
 
+(追記 2026-09-16、waired-agent#1398)例外で終わるのは PowerShell 側だけではない。
+Windows PowerShell 5.1.26100 で `cmd /c "echo x 1>&2 & ping -n 3 127.0.0.1 >nul & echo after > marker"`
+を `try { & ... 2>$null | Out-Null } catch { }` で呼ぶと、`RemoteException` の後に
+**子プロセスの残りの処理が実行されず**、4 秒待っても marker は作られなかった。
+pwsh 7.6.6 では同じ呼び出しが例外にならず、marker も作られる。uninstall.ps1 の
+非昇格フェーズは `waired.exe claude disable` をこの形で呼んでいた。`claude disable`
+は管理者権限の無いときに managed settings を消せない旨を stderr に先に書くので、
+その後の per-user の片付け(statusLine・skills など)がこの経路では実行されなかった
+可能性がある(再現は cmd でのみ、`waired.exe` そのものでは未確認)。#1398 で
+`Invoke-WairedExe` に置き換え、呼び出しの間だけ `Continue` にした。
+
 **5. `$_.Exception.Message` には PowerShell の位置情報が同じ行に付く。**
 `... ではありません。発生場所 C:\...\install.ps1:2129 文字:9`。最初の 1 行を
 取っても消えない。**最内側の例外**(`Win32Exception`)が OS 自身の文言で、

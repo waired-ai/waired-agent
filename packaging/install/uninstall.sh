@@ -1049,7 +1049,7 @@ claude_leftover_edit() {
     grep -q -e waired -e '127\.0\.0\.1' "$_cle_path" 2>/dev/null || return 0
     _cle_tool="$(claude_json_tool)"
     if [ -z "$_cle_tool" ]; then
-        common_warn "$_cle_path may still send Claude Code to Waired, and there's no python3 here to check it. Remove Waired's settings from it by hand."
+        common_warn "$_cle_path may still point Claude Code at Waired, and there's no python3 on this computer to check it. Remove Waired's settings from it by hand."
         return 0
     fi
     case "$_cle_tool" in
@@ -1063,20 +1063,26 @@ claude_leftover_edit() {
     [ -r "$_cle_path" ] && _cle_look=""
     # shellcheck disable=SC2086  # the prefix is a command and its arguments
     if ! _cle_out="$($_cle_look "$@" plan "$_cle_kind" "$_cle_path" 2>&1)"; then
-        common_warn "Couldn't check $_cle_path: $_cle_out"
+        common_warn "Couldn't check $_cle_path ($_cle_out). If it still has Waired's settings, remove them by hand."
         return 0
     fi
     _cle_state="$(printf '%s\n' "$_cle_out" | sed -n 's/^state //p')"
     case "$_cle_state" in
         rewrite|delete) ;;
         unreadable)
-            common_warn "$_cle_path isn't JSON the uninstaller can read, so it was left as it is. If it still has Waired's settings, remove them by hand."
+            common_warn "$_cle_path isn't JSON the uninstaller can read, so it was left unchanged. If it still has Waired's settings, remove them by hand."
             return 0 ;;
         *) return 0 ;;
     esac
     _cle_removed="$(printf '%s\n' "$_cle_out" | awk '/^removed /{ sub(/^removed /, ""); printf "%s%s", (n++ ? ", " : ""), $0 }')"
     printf '%s\n' "$_cle_out" | grep -q '^wrapper$' && CLAUDE_WRAPPER=1
-    common_log "Removing what Waired left in $_cle_path ($_cle_removed)"
+    # The cache is removed whole, so it is named as a file rather than as a
+    # list of keys.
+    if [ "$_cle_kind" = cache ]; then
+        common_log "Removing $_cle_path, which Waired left behind"
+    else
+        common_log "Removing Waired's settings from $_cle_path ($_cle_removed)"
+    fi
     # shellcheck disable=SC2086
     if ! claude_leftovers_run "$_cle_state $_cle_path" $_cle_pre "$@" apply "$_cle_kind" "$_cle_path" >/dev/null; then
         common_warn "Couldn't change $_cle_path. Remove Waired's settings from it by hand."
@@ -1549,9 +1555,9 @@ print_done() {
     # Waired itself was already gone (waired-agent#1398).
     if [ "$DID_COUNT" -eq "$CLAUDE_LEFTOVERS" ]; then
         if [ "$DRY_RUN" = 1 ]; then
-            common_log "${_tag}Waired isn't installed, but Claude Code still has settings it left behind. They would be removed."
+            common_log "${_tag}Waired isn't installed, but Claude Code still has Waired's settings. They would be removed."
         else
-            common_log "Waired wasn't installed, but Claude Code still had settings it left behind. They're removed. Restart Claude Code to pick that up."
+            common_log "Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect."
         fi
         return 0
     fi

@@ -1047,9 +1047,13 @@ function Invoke-WairedExe {
         if ($Show) { foreach ($line in @($out)) { Write-Host "$line" } }
         return [pscustomobject]@{ Ran = $true; ExitCode = $code; Error = '' }
     } catch {
-        # First line only: 5.1 appends the failing script line and a caret
-        # marker to the message, which says nothing about waired.exe.
-        $why = (($_.Exception.Message.Trim()) -split "`r?`n")[0]
+        # The innermost exception is the OS's own words. The outer message
+        # carries PowerShell's position in this script on the same line, which
+        # says nothing about waired.exe
+        # (docs/knowledges/20260829/1740-sac-verdict-is-per-file-and-moves.md, 5).
+        $inner = $_.Exception
+        while ($inner.InnerException) { $inner = $inner.InnerException }
+        $why = (($inner.Message.Trim()) -split "`r?`n")[0]
         return [pscustomobject]@{ Ran = $false; ExitCode = -1; Error = $why }
     }
 }
@@ -1097,13 +1101,16 @@ function Invoke-ClaudeLeftoverEdit {
     $edit = Edit-ClaudeLeftovers -Kind $Kind -Text $text
     if ($edit.State -eq 'unreadable') {
         if ($text -match 'waired|127\.0\.0\.1') {
-            Common-Warn "$Path isn't JSON the uninstaller can read, so it was left as it is. If it still has Waired's settings, remove them by hand."
+            Common-Warn "$Path isn't JSON the uninstaller can read, so it was left unchanged. If it still has Waired's settings, remove them by hand."
         }
         return $edit
     }
     if ($edit.State -eq 'unchanged') { return $edit }
     $script:ClaudeLeftovers++
-    Common-Log "Removing what Waired left in $Path ($($edit.Removed -join ', '))"
+    # The cache is removed whole, so it is named as a file rather than as a
+    # list of keys.
+    if ($Kind -eq 'cache') { Common-Log "Removing $Path, which Waired left behind" }
+    else { Common-Log "Removing Waired's settings from $Path ($($edit.Removed -join ', '))" }
     $newText = $edit.Text
     if ($edit.State -eq 'delete') {
         Common-Run "Remove-Item $Path" { Remove-Item -LiteralPath $Path -Force }
@@ -1729,9 +1736,9 @@ function Show-Done {
     # Waired itself was already gone (waired-agent#1398).
     if ($script:DidCount -eq $script:ClaudeLeftovers) {
         if ($DryRun) {
-            Common-Log "${tag}Waired isn't installed, but Claude Code still has settings it left behind. They would be removed."
+            Common-Log "${tag}Waired isn't installed, but Claude Code still has Waired's settings. They would be removed."
         } else {
-            Common-Log "Waired wasn't installed, but Claude Code still had settings it left behind. They're removed. Restart Claude Code to pick that up."
+            Common-Log "Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect."
         }
         return
     }
@@ -1808,7 +1815,7 @@ if (-not $DryRun -and -not (Test-IsAdmin)) {
     Section 'Done'
     Common-Log "Uninstall finished in the Administrator window (full log: $LogPath)."
     if ($script:ClaudeLeftovers -gt 0) {
-        Common-Log "Settings Waired left in your Claude Code configuration were removed. Restart Claude Code to pick that up."
+        Common-Log "Waired's settings were removed from Claude Code. Restart Claude Code for the change to take effect."
     }
     if ($Clean) {
         Common-Log "Open a new shell to refresh PATH."

@@ -1716,9 +1716,9 @@ if [ -f "$cl_tmp/uninstall.sh" ] && command -v python3 >/dev/null 2>&1; then
   for want in "managed/managed-settings.json (ANTHROPIC_BASE_URL" \
               "home/.claude/settings.json (statusLine, modelPicker, model, CLAUDE_CODE_SUBAGENT_MODEL" \
               "skills/waired-status/SKILL.md, which Waired left behind" \
-              "cache/gateway-models.json (gateway-models.json)" \
+              "cache/gateway-models.json, which Waired left behind" \
               "waired/claude-fallback, which Waired left behind" \
-              "Claude Code still has settings it left behind"; do
+              "Claude Code still has Waired's settings"; do
     printf '%s' "$out" | grep -qF "$want" || missing="$missing [$want]"
   done
   if [ -z "$missing" ] && [ -f "$cl_tmp/managed/managed-settings.json" ] && [ -f "$cl_tmp/home/.claude/settings.json" ]; then
@@ -1757,7 +1757,7 @@ if [ -f "$cl_tmp/uninstall.sh" ] && command -v python3 >/dev/null 2>&1; then
   chmod +x "$cl_tmp/nopython/python3"
   cl_plant
   out="$(cl_run "PATH=$cl_tmp/nopython:$PATH" -- --dry-run)"
-  if printf '%s' "$out" | grep -qF "managed/managed-settings.json may still send Claude Code to Waired"; then
+  if printf '%s' "$out" | grep -qF "managed/managed-settings.json may still point Claude Code at Waired"; then
     ok "without python3 the uninstall names the managed settings file to fix by hand (#1398)"
   else
     printf '%s\n' "$out" >&2
@@ -1772,7 +1772,7 @@ if [ -f "$cl_tmp/uninstall.sh" ] && command -v python3 >/dev/null 2>&1; then
   cl_plant
   out="$(cl_run "PATH=$cl_tmp/withwaired:$PATH" -- --dry-run)"
   if printf '%s' "$out" | grep -qE '\[dry-run\].*waired claude disable' \
-     && ! printf '%s' "$out" | grep -q 'Removing what Waired left'; then
+     && ! printf '%s' "$out" | grep -q "Removing Waired's settings"; then
     ok "with the binary present, a dry run previews claude disable once (#1398)"
   else
     printf '%s\n' "$out" >&2
