@@ -70,6 +70,39 @@ package runtime
 // optional, because without it every host that takes this pin loses
 // local inference entirely.
 //
+// 0.28.0 -> 0.29.0, validated 2026-09-16 by replaying the same argv on
+// an RTX PRO 4000 Blackwell (gpt-oss-20b at 124,928 tokens, and
+// Qwen3.5-4B bf16) against a venv this installer built, with 0.28.0's
+// venv beside it as the control:
+//
+//   - Every flag commandArgs emits is still accepted, through the old
+//     api_server module and through `vllm serve` alike; the adapter now
+//     uses the second (see commandArgs). All five tool parsers are still
+//     registered. torch stays 2.13.0+cu130, flashinfer-python moves to
+//     0.6.18 and flashinfer-cubin is still not declared, so the nvcc
+//     PATH fix above is still load-bearing. transformers' floor rises to
+//     5.10.4 (TransformersConstraint).
+//   - Model Runner V2 is the default. Decode speed did not move: 131-135
+//     tok/s on gpt-oss-20b and 66 tok/s on Qwen3.5-4B on both releases.
+//     The KV pool did, because V2 reserves more for CUDA graphs and peaks
+//     higher in the activation profile: gpt-oss-20b's pool is 264,060
+//     tokens against 285,284 on a first start (compile cache cold), and
+//     379,778 against 399,082 once the cache is warm. Forcing the V1
+//     runner on 0.29.0 gives 0.28.0's 285,284 back exactly. Note the
+//     cold/warm spread itself (about 30%) is not new: the first start
+//     after a venv is built profiles with a cold torch.compile cache on
+//     either release.
+//   - Under WSL2, V2 needs pinned host memory that vLLM turns off by
+//     default there, and dies with "UVA is not available" instead of
+//     falling back — see processEnv.
+//   - The sliding-window prefix cache keeps fewer restore points by
+//     default (prefix_cache_retention_interval=0 for SWA/SSM models,
+//     vllm-project/vllm#52216). On gpt-oss-20b a resent history still
+//     reuses 5,536 of 5,540 tokens, but a history edited about a third of
+//     the way in now reuses 64 tokens where 0.28.0 reused 1,904.
+//   - GPU KV cache size: and the scheduler tiers read the same as at
+//     0.28.0 (vllmKVCapacityRe; router.vllmBigGPUVRAMMB).
+//
 // renovate: datasource=pypi depName=vllm
 const VLLMPinnedVersion = "0.29.0"
 
@@ -85,6 +118,9 @@ const VLLMPinnedVersion = "0.29.0"
 // Unchanged at 0.28.0, and the cap is doing work rather than sitting
 // idle: the verified venv resolved transformers 5.16.1, so the range is
 // live at its top end, not pinned at its floor.
+//
+// 0.29.0 raises the floor to transformers>=5.10.4 with no upper bound of
+// its own; its verified venv resolved 5.17.0.
 const TransformersConstraint = "transformers>=5.10.4,<6.0"
 
 // VLLMPythonVersion is the interpreter `uv venv --python` materialises
@@ -93,7 +129,8 @@ const TransformersConstraint = "transformers>=5.10.4,<6.0"
 // a venv built on a different interpreter is a different build even when
 // the vLLM version matches.
 //
-// 0.28.0 declares requires_python <3.15,>=3.10, so 3.12 stays inside it.
+// 0.28.0 and 0.29.0 both declare requires_python <3.15,>=3.10, so 3.12
+// stays inside it.
 const VLLMPythonVersion = "3.12"
 
 // VLLMPinSet is the tuple one venv was built from. Recorded beside the
