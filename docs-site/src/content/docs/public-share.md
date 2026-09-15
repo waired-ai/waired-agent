@@ -13,17 +13,17 @@ enable Public Share. Each section states what happens, and why.
 ## What Public Share is
 
 Public Share is off by default and strictly opt-in. When you turn it on, you
-can run inference on other Waired users' spare computers, called public
-nodes, and other Waired users can run work on yours. The people using your
+can run inference on public computers, the spare computers other Waired users
+share, and other Waired users can run work on yours. The people using your
 computer are guests. You appear to each other only under an automatically
-assigned nickname. To use public nodes you must also share one of yours. See
-[Why you must share to use](#why-you-must-share-to-use).
+assigned nickname. To use public computers, you must also share one of yours.
+See [Why you must share to use](#why-you-must-share-to-use).
 
 ## What the other side can and cannot see
 
 ### The owner could see what you send
 
-The owner of a public node could read what you send to it. Your request is
+The owner of a public computer could read what you send to it. Your request is
 processed in plain form in that computer's memory, and its owner fully
 controls that computer. The Waired client is open source under Apache-2.0
 and can be modified, so not logging your requests is our policy and the
@@ -31,22 +31,22 @@ official app's default behavior, not a technical guarantee. The official app
 does not write your prompts or replies to logs or disk.
 
 The consequence is simple. Do not send secrets, passwords, personal data, or
-private code through public nodes.
+private code through public computers.
 
 ### Leftover traces fade on their own
 
 While a model runs, it keeps a short-term cache of recent requests, the KV
-cache, to respond faster. On a public node that cache is overwritten by later
-requests and freed when the model is unloaded. In this version, nothing
+cache, to respond faster. On a public computer that cache is overwritten by
+later requests and freed when the model is unloaded. In this version, nothing
 actively erases it. Today's model runtimes offer no way to erase one request
 selectively, and force-unloading the model to clear the cache would disrupt
 the owner's own work.
 
-### Answers from public nodes are not verified
+### Answers from public computers are not verified
 
-This version does not verify that a public node ran the model faithfully, or
-that it returned honest, full-quality output. Your controls: set a minimum
-model size with `--min-model-size`, use explicit mode so public nodes are
+This version does not verify that a public computer ran the model faithfully,
+or that it returned honest, full-quality output. Your controls: set a minimum
+model size with `--min-model-size`, use explicit mode so public computers are
 used only when you say so, and judge results yourself.
 
 ### Your nickname is stable, so patterns can be linked
@@ -59,13 +59,13 @@ active, and how much you use.
 ### When your IP address is visible
 
 The consent message says the other side "may" see your IP address. Here is
-exactly when. When your computer and the public node connect directly, each
+exactly when. When your computer and the public computer connect directly, each
 side can see the other's public IP address, from which an approximate region
 and internet provider can be inferred. When traffic goes through a relay,
 used when a direct connection is not possible, the other side sees the
 relay's address, not yours. Which one happens is automatic and depends on
 both networks, so you cannot count on either. Treat your IP address as
-possibly visible whenever you use or share public nodes. Relayed traffic
+possibly visible whenever you use or share public computers. Relayed traffic
 stays end-to-end encrypted, and the relay cannot read it. See
 [Architecture](/concepts/architecture/).
 
@@ -81,7 +81,7 @@ form. See
 
 ## Why you must share to use
 
-Public Share works only if people contribute. Using public nodes requires at
+Public Share works only if people contribute. Using public computers requires at
 least one of your computers to be shared publicly and online. Accepting the
 consent message records your consent. It does not turn sharing on anywhere.
 The product says so when you accept: "To use other people's computers you
@@ -121,31 +121,32 @@ console cannot turn it back on. See
   on sharing with your own other computers, and turning **Your other
   computers** off also turns public sharing off.
 
-## Choosing when public nodes are used
+## Choosing when public computers are used
 
 `waired public use`, or **Public computers** in the Waired app, controls when
-your requests may go to public nodes:
+your requests may go to public computers:
 
-- **off**, the default. Public nodes are never used.
-- **auto**. A public node is used only when its model is better than the best
-  your own computers offer.
-- **explicit**. Public nodes are allowed whenever the filters below allow
+- **off**, the default. Public computers are never used.
+- **auto**. A public computer is used only when its model is better than the
+  best your own computers offer.
+- **explicit**. Public computers are allowed whenever the filters below allow
   them.
 
 Extra controls in the CLI: `--min-model-size small|medium|large` only uses
 computers running a model of at least that size. `--main on|off` and
-`--sub on|off` allow or deny public nodes for the main conversation and
+`--sub on|off` allow or deny public computers for the main conversation and
 subagents separately, for example to keep your main assistant off public
-nodes while subagents may use them.
+computers while subagents may use them.
 
-Your own computers are always preferred over public nodes.
+Your own computers are always preferred over public computers.
 
 ## Known limitations
 
-- The first request to a public node takes a few extra seconds to connect.
-- Owners come first. A public node can pause taking new guest work at any
-  moment, without notice. Your request then falls back to other nodes or
-  retries.
+- The first request to a public computer takes a few extra seconds to
+  connect.
+- Owners come first. A public computer can pause taking new guest work at
+  any moment, without notice. Your request then falls back to other
+  computers or retries.
 - If an owner stops sharing while your request is running, the request fails
   and partial output is discarded.
 
@@ -153,5 +154,5 @@ Your own computers are always preferred over public nodes.
 
 Consent is recorded once, together with the version of the message you
 accepted. If the wording ever changes in a meaningful way, you are asked
-again before public nodes are used. You can see usage under nicknames at any
+again before public computers are used. You can see usage under nicknames at any
 time in the web console's **Public share** tab.
