@@ -31,6 +31,8 @@ Wairedは、自分のパソコン上のアドレスで、OpenAI APIとAnthropic 
 
 APIキーは不要です。Wairedは確認しません。ツールがAPIキーを必須にしている場合は、どんな値でも構いません。
 
+チャットアプリが送る`waired/default`は、コンピュータのコンテキストウィンドウに条件を付けません。既定のモデルを提供しているコンピュータが、そのコンピュータのコンテキストウィンドウの大きさにかかわらず答えます。200kまたは1Mのコンテキストウィンドウを必要とするのは、コーディングツールが送る`waired`、`waired/peer`、`waired/public`と、それらの`[1m]`付きの項目です。[Claude Codeのターンはどこで実行されるか](/ja/guides/claude-code/how-turns-are-routed/)を参照してください。
+
 ## <a id="check-the-address-first"></a>先にアドレスを確認する
 
 ```sh

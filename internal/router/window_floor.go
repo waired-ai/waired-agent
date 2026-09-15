@@ -37,7 +37,7 @@ func (e *WindowFloorError) Error() string {
 		return fmt.Sprintf("router: this computer's context window is %d tokens, and this request needs %d", e.LocalWindow, e.Need)
 	}
 	if e.Public {
-		return fmt.Sprintf("router: no public machine that could take this request has a context window of %d tokens", e.Need)
+		return fmt.Sprintf("router: no public computer that could take this request has a context window of %d tokens", e.Need)
 	}
 	return fmt.Sprintf("router: no computer that could take this request has a context window of %d tokens", e.Need)
 }
@@ -89,30 +89,38 @@ type PinnedPeerDeclinedError struct {
 }
 
 func (e *PinnedPeerDeclinedError) Error() string {
+	// Worded like the pin's unreachable refusal ("The computer this turn is
+	// pinned to, sv-mag, is not answering"), which is also what keeps a
+	// computer's name from being capitalised by the Claude surface's
+	// sentence-casing.
 	who := e.PeerName
 	if who == "" {
 		who = e.PeerDisplayID
+	}
+	subject := "The computer this turn is pinned to"
+	if who != "" {
+		subject += ", " + who + ","
 	}
 	var why string
 	switch e.Reason {
 	case PinDeclinedWindow:
 		if e.Declared <= 0 {
-			why = fmt.Sprintf("it states no context window, and this request needs %d tokens", e.Need)
+			why = fmt.Sprintf("it does not state a context window, and the model you picked needs %d tokens", e.Need)
 		} else {
-			why = fmt.Sprintf("its context window is %d tokens, and this request needs %d", e.Declared, e.Need)
+			why = fmt.Sprintf("its context window is %d tokens, and the model you picked needs %d", e.Declared, e.Need)
 		}
 	case PinDeclinedServeMain:
-		why = "its owner has turned off serving main conversations"
+		why = "Serve main conversation is turned off on it"
 	case PinDeclinedServeSub:
-		why = "its owner has turned off serving subagents"
+		why = "Serve subagents is turned off on it"
 	case PinDeclinedPublicShare:
-		why = "your Public Share settings do not allow using it"
+		why = "your Public Share settings do not let this computer use it"
 	case PinDeclinedUnknownModel:
 		why = "it is running a model this version of Waired does not know"
 	default:
-		why = "it cannot take this request"
+		why = "it cannot take this kind of turn"
 	}
-	return fmt.Sprintf("%s cannot take this turn: %s. This turn is pinned to that computer, so no other computer can take it", who, why)
+	return fmt.Sprintf("%s cannot take it: %s", subject, why)
 }
 
 func (e *PinnedPeerDeclinedError) Unwrap() error { return ErrPinnedPeerDeclined }

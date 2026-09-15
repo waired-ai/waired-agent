@@ -27,10 +27,14 @@ line saying which computer it means.
 | **Waired public share** | *Someone else's computer* | A computer another Waired user is lending out. Offered only after you turn [Public Share](/public-share/) on. |
 | **Waired peer: studio-desktop** | The model it is running | That computer, and only that computer. One row per computer that can answer right now. |
 
-For the ordinary **Waired** row, a computer is used only when it is running a
-model with room for a 200,000-token conversation. Most can. Which of your
-computers is chosen is decided by `waired worker`. See
-[Choose which computer answers](/guides/routing/).
+For the rows where Waired chooses the computer, **Waired**, **Waired peer**
+and **Waired public share**, a computer is used only when it is running a
+model with room for a 200,000-token conversation. Most can. A computer serving
+a smaller window, such as one running a `gpt-oss` model (about 131,000
+tokens), is not used for those rows. It still answers **Waired local** on
+itself and its own **Waired peer: &lt;name&gt;** row, and those rows state that
+computer's own window. Which of your computers is chosen is decided by
+`waired worker`. See [Choose which computer answers](/guides/routing/).
 
 The rows are written into your own `~/.claude/settings.json` (on Windows,
 `%USERPROFILE%\.claude\settings.json`) under `modelPicker`. If that file
@@ -78,8 +82,10 @@ row that could reach it appears a second time with the suffix
 `(1M context)`. Picking the twin runs the conversation in a 1M window on a
 computer that has one. If no such computer can answer, the turn fails and
 says why. It never runs in a smaller window without telling you. **Waired
-public share** has no twin, because what someone else's computer holds is
-known only once it answers.
+public share** gets its twin when a public computer you may use declares a
+1M window; public computers publish their window like any other. A computer
+whose owner turned off **Serve main conversation** earns no twin, because the
+twin is what a main conversation is sent on.
 
 ## Long sessions get compacted
 
@@ -97,8 +103,11 @@ is the session continuing, not failing.
 
 <Aside type="note" title="Models with a 131k window">
 	The `gpt-oss` models hold about 131,000 tokens instead of 200,000. Waired
-	never picks one for you, but you can choose one. If you do, have Claude
-	Code compact earlier so it does not compact under pressure:
+	never picks one for you: a computer running one is not used for the
+	**Waired**, **Waired peer** and **Waired public share** rows. To use it,
+	pick **Waired local** on that computer, or its own
+	**Waired peer: &lt;name&gt;** row. If you do, have Claude Code compact earlier
+	so it does not compact under pressure:
 
 	```sh
 	export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
@@ -119,6 +128,14 @@ answer and the two ways out:
 API Error: 400 Waired is not set up to answer on this computer, so this turn has nowhere to run. Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.
 ```
 
+A row whose window no computer of yours meets fails the same way, with the
+window in the message. Here on the **Waired** row, when every computer that
+could take the turn serves less than 200,704 tokens:
+
+```
+API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
 Pick an Anthropic model if you want that turn in the cloud. Run
 `waired doctor` if you want to fix what is missing. When Waired already knows
 that nothing of yours can take the next turn, the footer turns red before you
@@ -128,9 +145,10 @@ send, so the error is rarely the first you hear of it:
 ⚠ waired: Waired cannot answer (local disabled, no peer)
 ```
 
-Waired answers with a 400 rather than a 500 on purpose. Claude Code retries
-5xx errors up to ten times and shows a 400 once, verbatim, which is what you
-want for a message that tells you what to do. The one exception is a pinned
+Waired answers with a 400 rather than a 500 on purpose, for a missed window
+as for the rest. Claude Code retries 5xx errors up to ten times and shows a
+400 once, verbatim, which is what you want for a message that tells you what
+to do. The one exception is a pinned
 computer that is busy, [below](#a-pinned-computer-is-never-substituted): that
 turn is answered with a 503, because a retry is what gets it through.
 
@@ -173,6 +191,21 @@ send the turn to the Anthropic API. The turn fails and names the computer:
 ```
 API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
+
+A pinned computer that is reachable but cannot take this turn fails the same
+way, and the message says why. The pin can come from `waired worker set --pin`
+or from a **Waired peer: &lt;name&gt;** row. Here the row's window:
+
+```
+API Error: 400 The computer this turn is pinned to, sv-mag, cannot take it: its context window is 131072 tokens, and the model you picked needs 200704. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+The same place names the other reasons: `Serve main conversation is turned
+off on it`, `Serve subagents is turned off on it`, `your Public Share settings
+do not let this computer use it`, and, for a **Waired peer: &lt;name&gt;** row
+only, `it is running a model this version of Waired does not know`. A
+`waired worker` pin whose computer runs a model Waired does not know still
+lets another computer take the turn, as before.
 
 A pinned computer that is awake but busy with other work is the other case.
 Waired holds the turn for up to a minute waiting for one of its conversations

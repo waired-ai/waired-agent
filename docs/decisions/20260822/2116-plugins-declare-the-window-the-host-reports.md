@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260916/0410-the-window-floor-is-the-same-on-every-client.md
 ---
 
 # コーディングツールのプラグインは、ホストが申告した窓を書く。分からなければ書かない (20260822 21:16)

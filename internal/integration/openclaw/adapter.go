@@ -357,15 +357,17 @@ func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) inte
 			Status: integration.StatusOK, Subject: subject,
 			Detail: fmt.Sprintf("%d tokens", live),
 		}
+	// The live figure is what Waired states for waired/default, which is that
+	// row's 200k floor since waired-agent#1395, not this computer's own window.
 	case declared == 0:
 		return integration.AuditFinding{
 			Status: integration.StatusWarn, Subject: subject,
-			Detail: fmt.Sprintf("the plugin declares no window; this computer now serves %d tokens", live),
+			Detail: fmt.Sprintf("the plugin declares no window for waired/default; Waired now gives it %d tokens", live),
 		}
 	default:
 		return integration.AuditFinding{
 			Status: integration.StatusWarn, Subject: subject,
-			Detail: fmt.Sprintf("the plugin declares %d tokens; this computer now serves %d", declared, live),
+			Detail: fmt.Sprintf("the plugin declares %d tokens for waired/default; Waired now gives it %d", declared, live),
 		}
 	}
 }
