@@ -479,6 +479,671 @@ detect_os() {
 }
 
 # ---------------------------------------------------------------------
+# claude_* — Claude Code settings Waired left behind (waired-agent#1398)
+# ---------------------------------------------------------------------
+#
+# `waired claude disable` is what removes Waired from Claude Code's settings,
+# and until #1398 this script ran nothing else: with the binary already gone
+# (a plain `apt remove`, a hand-deleted /usr/local/bin/waired), refusing to
+# run, or too old to know a newer rule, the settings stayed. The one that
+# matters is the managed settings file: its ANTHROPIC_BASE_URL beats anything
+# a user sets, so Claude Code went on sending every request to a 127.0.0.1
+# port nothing listened on, and failed with "Connection refused".
+#
+# So after the binary has had its turn (or when there is none), the functions
+# below look at the files themselves and take out what is Waired's. The rules
+# are the Go removers', copied: claudemanaged.RemoveWithOptions for the managed
+# file and runClaudeDisable's per-user steps for ~/.claude/settings.json.
+# packaging/install/testdata/claude-leftovers holds the cases every copy is
+# held to: scripts/install runs the Go side, scripts/dev/claude-leftovers-corpus.sh
+# runs these two programs (from installtest-dash.sh and installtest-macos.sh),
+# and uninstall.ps1 carries the PowerShell copy.
+#
+# Two programs because POSIX sh cannot edit JSON: Python on Linux, and
+# JavaScript for Automation on macOS, which every Mac has (python3 there may be
+# the stub that asks to install developer tools). A Linux host without python3
+# gets a warning that names the file instead of a repair.
+
+# claude_leftovers_py prints the Python copy of the rules.
+#   python3 -I -c "$(claude_leftovers_py)" plan|apply managed|user|cache <path>
+# prints "state <unchanged|rewrite|delete|unreadable>", then "removed <key>",
+# "kept <KEY=value>" and "wrapper" lines; apply also makes the change.
+claude_leftovers_py() {
+    cat <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+LOOPBACK = "http://127.0.0.1:"
+STOP_MARKERS = ["waired claude _fallback-hook"]
+REFRESH_MARKERS = ["waired claude _picker write --from-managed",
+                   "waired claude _models-cache write --from-managed"]
+
+
+def waired_id(value):
+    bare = value.strip().lower()
+    while "[1m]" in bare:
+        i = bare.find("[1m]")
+        bare = bare[:i] + bare[i + 4:]
+    return "waired" in bare
+
+
+def refuse_constant(name):
+    raise ValueError("json constant " + name)
+
+
+def is_str(v):
+    return type(v) == str
+
+
+def hook_is_waired(entry, markers):
+    if type(entry) != dict or type(entry.get("hooks")) != list:
+        return False
+    for h in entry["hooks"]:
+        if type(h) == dict and is_str(h.get("command")):
+            for m in markers:
+                if m in h["command"]:
+                    return True
+    return False
+
+
+def picker_kind(picker):
+    if picker is None:
+        return "none"
+    if type(picker) != dict:
+        return "unreadable"
+    if "replaceBuiltInOptions" in picker:
+        r = picker["replaceBuiltInOptions"]
+        if not (r is None or type(r) == bool):
+            return "unreadable"
+    options = picker.get("options")
+    if options is None:
+        return "none"
+    if type(options) != list:
+        return "unreadable"
+    models = []
+    for row in options:
+        if row is None:
+            models.append("")
+            continue
+        if type(row) != dict:
+            return "unreadable"
+        for field in ("model", "label", "description"):
+            if field in row and not (row[field] is None or is_str(row[field])):
+                return "unreadable"
+        models.append(row["model"] if is_str(row.get("model")) else "")
+    if len(models) == 0:
+        return "none"
+    for m in models:
+        if not waired_id(m):
+            return "foreign"
+    return "ours"
+
+
+def edit(kind, text):
+    removed, kept, wrapper = [], [], False
+    if text.startswith("﻿"):
+        text = text[1:]
+    if text.strip() == "":
+        return "unchanged", None, removed, kept, wrapper
+    try:
+        doc = json.loads(text, parse_constant=refuse_constant)
+    except ValueError:
+        return "unreadable", None, removed, kept, wrapper
+    if type(doc) != dict:
+        return ("unchanged" if doc is None else "unreadable"), None, removed, kept, wrapper
+
+    if kind == "managed":
+        env = doc.get("env")
+        if type(env) == dict:
+            env_changed = False
+            url = env.get("ANTHROPIC_BASE_URL")
+            if is_str(url) and url.startswith(LOOPBACK):
+                del env["ANTHROPIC_BASE_URL"]
+                removed.append("ANTHROPIC_BASE_URL")
+                env_changed = True
+                for key, value in (("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1"),
+                                   ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000"),
+                                   ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "250000")):
+                    if is_str(env.get(key)) and env[key] == value:
+                        del env[key]
+                        removed.append(key)
+                if is_str(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS")):
+                    kept.append("CLAUDE_CODE_MAX_CONTEXT_TOKENS=" + env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"])
+            if is_str(env.get("CLAUDE_CODE_SUBAGENT_MODEL")) and env["CLAUDE_CODE_SUBAGENT_MODEL"] == "waired/subagent":
+                del env["CLAUDE_CODE_SUBAGENT_MODEL"]
+                removed.append("CLAUDE_CODE_SUBAGENT_MODEL")
+                env_changed = True
+            if env_changed and len(env) == 0:
+                del doc["env"]
+        hooks = doc.get("hooks")
+        if type(hooks) == dict:
+            for name, markers in (("Stop", STOP_MARKERS), ("SessionStart", REFRESH_MARKERS)):
+                entries = hooks.get(name)
+                if type(entries) != list:
+                    continue
+                keep = [e for e in entries if not hook_is_waired(e, markers)]
+                if len(keep) == len(entries):
+                    continue
+                if keep:
+                    hooks[name] = keep
+                else:
+                    del hooks[name]
+                removed.append("hooks." + name)
+                if len(hooks) == 0 and "hooks" in doc:
+                    del doc["hooks"]
+    elif kind == "user":
+        if "statusLine" in doc:
+            line = doc["statusLine"]
+            cmd = ""
+            shape_ok = line is None or type(line) == dict
+            if type(line) == dict:
+                if "type" in line and not (line["type"] is None or is_str(line["type"])):
+                    shape_ok = False
+                if "command" in line:
+                    if is_str(line["command"]):
+                        cmd = line["command"]
+                    elif line["command"] is None:
+                        pass
+                    else:
+                        shape_ok = False
+            if shape_ok and "waired claude statusline" in cmd:
+                doc.pop("statusLine", None)
+                doc.pop("waired_original_statusLine", None)
+                removed.append("statusLine")
+            elif shape_ok and "waired-statusline" in cmd:
+                if "waired_original_statusLine" in doc:
+                    doc["statusLine"] = doc["waired_original_statusLine"]
+                else:
+                    del doc["statusLine"]
+                doc.pop("waired_original_statusLine", None)
+                removed.append("statusLine")
+                wrapper = True
+        if "modelPicker" in doc and picker_kind(doc["modelPicker"]) == "ours":
+            del doc["modelPicker"]
+            removed.append("modelPicker")
+        if is_str(doc.get("model")) and doc["model"] != "" and waired_id(doc["model"]):
+            del doc["model"]
+            removed.append("model")
+        env = doc.get("env")
+        if type(env) == dict and all(is_str(v) for v in env.values()):
+            cur = env.get("CLAUDE_CODE_SUBAGENT_MODEL", "")
+            if cur == "" or waired_id(cur):
+                env_changed = False
+                for key in ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE"):
+                    if key in env:
+                        del env[key]
+                        removed.append(key)
+                        env_changed = True
+                if env_changed and len(env) == 0:
+                    del doc["env"]
+    elif kind == "cache":
+        base = doc.get("baseUrl")
+        models = doc.get("models")
+        if base is None:
+            base = ""
+        if not is_str(base) or not (models is None or type(models) == list):
+            return "unchanged", None, removed, kept, wrapper
+        if not base.startswith(LOOPBACK) or not models:
+            return "unchanged", None, removed, kept, wrapper
+        for row in models:
+            if type(row) != dict:
+                return "unchanged", None, removed, kept, wrapper
+            ident = row.get("id")
+            if ident is None:
+                ident = ""
+            if not is_str(ident) or not waired_id(ident):
+                return "unchanged", None, removed, kept, wrapper
+        return "delete", None, ["gateway-models.json"], kept, wrapper
+    else:
+        raise SystemExit("unknown kind " + kind)
+
+    if len(removed) == 0:
+        return "unchanged", None, removed, kept, wrapper
+    if len(doc) == 0:
+        return "delete", None, removed, kept, wrapper
+    return "rewrite", doc, removed, kept, wrapper
+
+
+def main():
+    action, kind, path = sys.argv[1], sys.argv[2], sys.argv[3]
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        print("state unreadable")
+        return
+    state, doc, removed, kept, wrapper = edit(kind, text)
+    print("state " + state)
+    for r in removed:
+        print("removed " + r)
+    for k in kept:
+        print("kept " + k)
+    if wrapper:
+        print("wrapper")
+    if action != "apply" or state in ("unchanged", "unreadable"):
+        return
+    if state == "delete":
+        os.remove(path)
+        return
+    mode = os.stat(path).st_mode & 0o7777
+    fd, tmp = tempfile.mkstemp(prefix=".waired-", dir=os.path.dirname(path) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+main()
+PY
+}
+
+# claude_leftovers_jxa prints the JavaScript for Automation copy, with the same
+# command line and output as claude_leftovers_py.
+#   osascript -l JavaScript -e "$(claude_leftovers_jxa)" plan|apply <kind> <path>
+claude_leftovers_jxa() {
+    cat <<'JXA'
+    ObjC.import('Foundation');
+
+    var LOOPBACK = 'http://127.0.0.1:';
+    var STOP_MARKERS = ['waired claude _fallback-hook'];
+    var REFRESH_MARKERS = ['waired claude _picker write --from-managed',
+        'waired claude _models-cache write --from-managed'];
+
+    function isObj(v) { return v !== null && typeof v === 'object' && Array.isArray(v) === false; }
+    function isStr(v) { return typeof v === 'string'; }
+    function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
+    function wairedId(value) {
+        var bare = value.trim().toLowerCase();
+        var i = bare.indexOf('[1m]');
+        while (i >= 0) {
+            bare = bare.slice(0, i) + bare.slice(i + 4);
+            i = bare.indexOf('[1m]');
+        }
+        return bare.indexOf('waired') >= 0;
+    }
+
+    function hookIsWaired(entry, markers) {
+        if (isObj(entry) === false || Array.isArray(entry.hooks) === false) { return false; }
+        for (var i = 0; i < entry.hooks.length; i++) {
+            var h = entry.hooks[i];
+            if (isObj(h) && isStr(h.command)) {
+                for (var j = 0; j < markers.length; j++) {
+                    if (h.command.indexOf(markers[j]) >= 0) { return true; }
+                }
+            }
+        }
+        return false;
+    }
+
+    function pickerKind(picker) {
+        if (picker === null) { return 'none'; }
+        if (isObj(picker) === false) { return 'unreadable'; }
+        if (has(picker, 'replaceBuiltInOptions')) {
+            var r = picker.replaceBuiltInOptions;
+            if ((r === null || typeof r === 'boolean') === false) { return 'unreadable'; }
+        }
+        if (has(picker, 'options') === false || picker.options === null) { return 'none'; }
+        if (Array.isArray(picker.options) === false) { return 'unreadable'; }
+        var models = [];
+        for (var i = 0; i < picker.options.length; i++) {
+            var row = picker.options[i];
+            if (row === null) { models.push(''); continue; }
+            if (isObj(row) === false) { return 'unreadable'; }
+            var fields = ['model', 'label', 'description'];
+            for (var j = 0; j < fields.length; j++) {
+                if (has(row, fields[j]) && (row[fields[j]] === null || isStr(row[fields[j]])) === false) { return 'unreadable'; }
+            }
+            models.push(isStr(row.model) ? row.model : '');
+        }
+        if (models.length === 0) { return 'none'; }
+        for (var k = 0; k < models.length; k++) {
+            if (wairedId(models[k]) === false) { return 'foreign'; }
+        }
+        return 'ours';
+    }
+
+    function edit(kind, text) {
+        var res = { state: 'unchanged', doc: null, removed: [], kept: [], wrapper: false };
+        if (text.charCodeAt(0) === 0xFEFF) { text = text.slice(1); }
+        if (text.trim() === '') { return res; }
+        var doc;
+        try { doc = JSON.parse(text); } catch (e) { res.state = 'unreadable'; return res; }
+        if (isObj(doc) === false) {
+            if (doc !== null) { res.state = 'unreadable'; }
+            return res;
+        }
+        var removed = res.removed;
+        var env, i;
+        if (kind === 'managed') {
+            env = doc.env;
+            if (has(doc, 'env') && isObj(env)) {
+                var envChanged = false;
+                if (isStr(env.ANTHROPIC_BASE_URL) && env.ANTHROPIC_BASE_URL.indexOf(LOOPBACK) === 0) {
+                    delete env.ANTHROPIC_BASE_URL;
+                    removed.push('ANTHROPIC_BASE_URL');
+                    envChanged = true;
+                    var pairs = [['CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY', '1'],
+                        ['CLAUDE_CODE_AUTO_COMPACT_WINDOW', '200000'],
+                        ['CLAUDE_CODE_MAX_CONTEXT_TOKENS', '250000']];
+                    for (i = 0; i < pairs.length; i++) {
+                        if (has(env, pairs[i][0]) && env[pairs[i][0]] === pairs[i][1]) {
+                            delete env[pairs[i][0]];
+                            removed.push(pairs[i][0]);
+                        }
+                    }
+                    if (has(env, 'CLAUDE_CODE_MAX_CONTEXT_TOKENS') && isStr(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) {
+                        res.kept.push('CLAUDE_CODE_MAX_CONTEXT_TOKENS=' + env.CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+                    }
+                }
+                if (has(env, 'CLAUDE_CODE_SUBAGENT_MODEL') && env.CLAUDE_CODE_SUBAGENT_MODEL === 'waired/subagent') {
+                    delete env.CLAUDE_CODE_SUBAGENT_MODEL;
+                    removed.push('CLAUDE_CODE_SUBAGENT_MODEL');
+                    envChanged = true;
+                }
+                if (envChanged && Object.keys(env).length === 0) { delete doc.env; }
+            }
+            var hooks = doc.hooks;
+            if (has(doc, 'hooks') && isObj(hooks)) {
+                var events = [['Stop', STOP_MARKERS], ['SessionStart', REFRESH_MARKERS]];
+                for (i = 0; i < events.length; i++) {
+                    var name = events[i][0];
+                    if (has(hooks, name) === false || Array.isArray(hooks[name]) === false) { continue; }
+                    var markers = events[i][1];
+                    var keep = hooks[name].filter(function (e) { return hookIsWaired(e, markers) === false; });
+                    if (keep.length === hooks[name].length) { continue; }
+                    if (keep.length > 0) { hooks[name] = keep; } else { delete hooks[name]; }
+                    removed.push('hooks.' + name);
+                    if (Object.keys(hooks).length === 0) { delete doc.hooks; }
+                }
+            }
+        } else if (kind === 'user') {
+            if (has(doc, 'statusLine')) {
+                var line = doc.statusLine;
+                var cmd = '';
+                var shapeOk = line === null || isObj(line);
+                if (isObj(line)) {
+                    if (has(line, 'type') && (line.type === null || isStr(line.type)) === false) { shapeOk = false; }
+                    if (has(line, 'command')) {
+                        if (isStr(line.command)) { cmd = line.command; } else if (line.command !== null) { shapeOk = false; }
+                    }
+                }
+                if (shapeOk && cmd.indexOf('waired claude statusline') >= 0) {
+                    delete doc.statusLine;
+                    delete doc.waired_original_statusLine;
+                    removed.push('statusLine');
+                } else if (shapeOk && cmd.indexOf('waired-statusline') >= 0) {
+                    if (has(doc, 'waired_original_statusLine')) {
+                        doc.statusLine = doc.waired_original_statusLine;
+                    } else {
+                        delete doc.statusLine;
+                    }
+                    delete doc.waired_original_statusLine;
+                    removed.push('statusLine');
+                    res.wrapper = true;
+                }
+            }
+            if (has(doc, 'modelPicker') && pickerKind(doc.modelPicker) === 'ours') {
+                delete doc.modelPicker;
+                removed.push('modelPicker');
+            }
+            if (has(doc, 'model') && isStr(doc.model) && doc.model !== '' && wairedId(doc.model)) {
+                delete doc.model;
+                removed.push('model');
+            }
+            env = doc.env;
+            if (has(doc, 'env') && isObj(env) && Object.keys(env).every(function (k) { return isStr(env[k]); })) {
+                var cur = has(env, 'CLAUDE_CODE_SUBAGENT_MODEL') ? env.CLAUDE_CODE_SUBAGENT_MODEL : '';
+                if (cur === '' || wairedId(cur)) {
+                    var changed = false;
+                    ['CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'].forEach(function (k) {
+                        if (has(env, k)) { delete env[k]; removed.push(k); changed = true; }
+                    });
+                    if (changed && Object.keys(env).length === 0) { delete doc.env; }
+                }
+            }
+        } else if (kind === 'cache') {
+            var base = has(doc, 'baseUrl') ? doc.baseUrl : null;
+            var models = has(doc, 'models') ? doc.models : null;
+            if (base === null) { base = ''; }
+            if (isStr(base) === false || (models === null || Array.isArray(models)) === false) { return res; }
+            if (base.indexOf(LOOPBACK) !== 0 || models === null || models.length === 0) { return res; }
+            for (i = 0; i < models.length; i++) {
+                if (isObj(models[i]) === false) { return res; }
+                var ident = has(models[i], 'id') ? models[i].id : null;
+                if (ident === null) { ident = ''; }
+                if (isStr(ident) === false || wairedId(ident) === false) { return res; }
+            }
+            res.state = 'delete';
+            res.removed = ['gateway-models.json'];
+            return res;
+        } else {
+            throw new Error('unknown kind ' + kind);
+        }
+        if (removed.length === 0) { return res; }
+        if (Object.keys(doc).length === 0) {
+            res.state = 'delete';
+        } else {
+            res.state = 'rewrite';
+            res.doc = doc;
+        }
+        return res;
+    }
+
+    function run(argv) {
+        var action = argv[0], kind = argv[1], path = argv[2];
+        var data = $.NSData.dataWithContentsOfFile(path);
+        if (data.isNil()) { throw new Error('read ' + path); }
+        var str = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding);
+        if (str.isNil()) { return 'state unreadable'; }
+        var res = edit(kind, ObjC.unwrap(str));
+        var lines = ['state ' + res.state];
+        res.removed.forEach(function (r) { lines.push('removed ' + r); });
+        res.kept.forEach(function (k) { lines.push('kept ' + k); });
+        if (res.wrapper) { lines.push('wrapper'); }
+        if (action === 'apply' && res.state === 'delete') {
+            if ($.NSFileManager.defaultManager.removeItemAtPathError(path, null) === false) {
+                throw new Error('remove ' + path);
+            }
+        } else if (action === 'apply' && res.state === 'rewrite') {
+            var fm = $.NSFileManager.defaultManager;
+            var attrs = fm.attributesOfItemAtPathError(path, null);
+            var text = $(JSON.stringify(res.doc, null, 2) + '\n');
+            if (text.writeToFileAtomicallyEncodingError(path, true, $.NSUTF8StringEncoding, null) === false) {
+                throw new Error('write ' + path);
+            }
+            if (attrs.isNil() === false) {
+                var perms = attrs.objectForKey($.NSFilePosixPermissions);
+                if (perms.isNil() === false) {
+                    fm.setAttributesOfItemAtPathError($.NSDictionary.dictionaryWithObjectForKey(perms, $.NSFilePosixPermissions), path, null);
+                }
+            }
+        }
+        return lines.join('\n');
+    }
+JXA
+}
+
+# How many steps took out settings Waired left behind, so print_done can tell
+# "Waired removed" from "Waired was already gone, and Claude Code still pointed
+# at it".
+CLAUDE_LEFTOVERS=0
+CLAUDE_WRAPPER=0
+
+# claude_managed_path is claudemanaged's managedSettingsPath for this OS.
+claude_managed_path() {
+    case "$OS_KIND" in
+        darwin) printf '%s\n' '/Library/Application Support/ClaudeCode/managed-settings.json' ;;
+        *)      printf '%s\n' '/etc/claude-code/managed-settings.json' ;;
+    esac
+}
+
+# claude_waired_binary_present — is there a `waired` for the uninstall to run?
+claude_waired_binary_present() {
+    case "$OS_KIND" in
+        darwin) [ -x "$WAIRED_DARWIN_BINDIR/waired" ] ;;
+        *)      command -v waired >/dev/null 2>&1 ;;
+    esac
+}
+
+# claude_json_tool echoes the interpreter the rules run in here, or nothing.
+claude_json_tool() {
+    case "$OS_KIND" in
+        darwin)
+            if command -v osascript >/dev/null 2>&1; then printf 'osascript\n'; fi ;;
+        *)
+            if command -v python3 >/dev/null 2>&1 && python3 -I -c 'import json' >/dev/null 2>&1; then
+                printf 'python3\n'
+            fi ;;
+    esac
+    return 0
+}
+
+# claude_as echoes the command prefix that runs something as root ("root") or
+# as the human running the uninstall ("user"), so a user's own files stay
+# theirs and root never follows a link the user put in their home.
+claude_as() {
+    if [ "$1" = user ]; then
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && [ "$(id -u)" -eq 0 ]; then
+            printf 'sudo -u %s\n' "$SUDO_USER"
+        fi
+    else
+        printf '%s\n' "$SUDO"
+    fi
+}
+
+# claude_leftovers_run is common_run for these steps: it counts the step twice
+# (once for print_done's "did anything happen", once for CLAUDE_LEFTOVERS) and,
+# in dry-run, prints the description rather than a command line that would
+# carry a whole program.
+claude_leftovers_run() {
+    _clr_desc="$1"
+    shift
+    DID_COUNT=$((DID_COUNT + 1))
+    CLAUDE_LEFTOVERS=$((CLAUDE_LEFTOVERS + 1))
+    if [ "$DRY_RUN" = 1 ]; then
+        printf '\033[1;90m[dry-run]\033[0m %s\n' "$_clr_desc"
+        return 0
+    fi
+    "$@"
+}
+
+# claude_leftover_edit <root|user> <managed|user|cache> <path> applies one
+# file's rules. Files with no mention of Waired or 127.0.0.1 are passed over
+# without starting an interpreter, which is every host Waired never touched.
+claude_leftover_edit() {
+    _cle_as="$1"
+    _cle_kind="$2"
+    _cle_path="$3"
+    [ -f "$_cle_path" ] || return 0
+    grep -q -e waired -e '127\.0\.0\.1' "$_cle_path" 2>/dev/null || return 0
+    _cle_tool="$(claude_json_tool)"
+    if [ -z "$_cle_tool" ]; then
+        common_warn "$_cle_path may still send Claude Code to Waired, and there's no python3 here to check it. Remove Waired's settings from it by hand."
+        return 0
+    fi
+    case "$_cle_tool" in
+        osascript) _cle_prog="$(claude_leftovers_jxa)"; set -- osascript -l JavaScript -e "$_cle_prog" ;;
+        *)         _cle_prog="$(claude_leftovers_py)";  set -- python3 -I -c "$_cle_prog" ;;
+    esac
+    _cle_pre="$(claude_as "$_cle_as")"
+    # Reading needs no privilege when the file is readable, and a dry run must
+    # not stop at a sudo password prompt just to look.
+    _cle_look="$_cle_pre"
+    [ -r "$_cle_path" ] && _cle_look=""
+    # shellcheck disable=SC2086  # the prefix is a command and its arguments
+    if ! _cle_out="$($_cle_look "$@" plan "$_cle_kind" "$_cle_path" 2>&1)"; then
+        common_warn "Couldn't check $_cle_path: $_cle_out"
+        return 0
+    fi
+    _cle_state="$(printf '%s\n' "$_cle_out" | sed -n 's/^state //p')"
+    case "$_cle_state" in
+        rewrite|delete) ;;
+        unreadable)
+            common_warn "$_cle_path isn't JSON the uninstaller can read, so it was left as it is. If it still has Waired's settings, remove them by hand."
+            return 0 ;;
+        *) return 0 ;;
+    esac
+    _cle_removed="$(printf '%s\n' "$_cle_out" | awk '/^removed /{ sub(/^removed /, ""); printf "%s%s", (n++ ? ", " : ""), $0 }')"
+    printf '%s\n' "$_cle_out" | grep -q '^wrapper$' && CLAUDE_WRAPPER=1
+    common_log "Removing what Waired left in $_cle_path ($_cle_removed)"
+    # shellcheck disable=SC2086
+    if ! claude_leftovers_run "$_cle_state $_cle_path" $_cle_pre "$@" apply "$_cle_kind" "$_cle_path" >/dev/null; then
+        common_warn "Couldn't change $_cle_path. Remove Waired's settings from it by hand."
+        return 0
+    fi
+    printf '%s\n' "$_cle_out" | sed -n 's/^kept //p' | while IFS= read -r _cle_kept; do
+        common_warn "Left $_cle_kept in $_cle_path. It couldn't be confirmed as Waired's, so remove it by hand if you didn't set it."
+    done
+    return 0
+}
+
+# claude_leftover_rm <path> removes a file or directory only Waired wrote, as
+# the invoking user.
+claude_leftover_rm() {
+    [ -e "$1" ] || [ -L "$1" ] || return 0
+    common_log "Removing $1, which Waired left behind"
+    # shellcheck disable=SC2046
+    claude_leftovers_run "rm -rf $1" $(claude_as user) rm -rf "$1" || true
+}
+
+# claude_rmdir_empty <dir> removes a directory only if nothing is left in it.
+claude_rmdir_empty() {
+    [ "$DRY_RUN" = 1 ] && return 0
+    [ -d "$1" ] || return 0
+    # shellcheck disable=SC2046
+    $(claude_as user) rmdir "$1" 2>/dev/null || true
+}
+
+# claude_repair_managed — the managed settings file (root).
+claude_repair_managed() {
+    # With the binary present, a dry run has already printed the step that
+    # does this; previewing the same removals again would list them twice.
+    if [ "$DRY_RUN" = 1 ] && claude_waired_binary_present; then return 0; fi
+    claude_leftover_edit root managed "$(claude_managed_path)"
+}
+
+# claude_repair_user — this user's ~/.claude settings, skills and retired
+# picker cache, and the retired Stop hook's markers. Under sudo only the
+# invoking user's home is reachable, and CLAUDE_CONFIG_DIR / XDG_CACHE_HOME
+# are root's or unset there: the same known limit
+# linux_remove_tray_autostart records.
+claude_repair_user() {
+    if [ "$DRY_RUN" = 1 ] && claude_waired_binary_present; then return 0; fi
+    _cru_home="$(real_user_home)"
+    [ -n "$_cru_home" ] || return 0
+    _cru_dir="$_cru_home/.claude"
+    CLAUDE_WRAPPER=0
+    claude_leftover_edit user user "$_cru_dir/settings.json"
+    if [ "$CLAUDE_WRAPPER" = 1 ]; then
+        for _cru_f in waired-statusline.sh waired-statusline.ps1 waired-statusline.orig; do
+            claude_leftover_rm "$_cru_dir/$_cru_f"
+        done
+    fi
+    for _cru_s in waired-status waired-doctor waired-route; do
+        claude_leftover_rm "$_cru_dir/skills/$_cru_s/SKILL.md"
+        claude_rmdir_empty "$_cru_dir/skills/$_cru_s"
+    done
+    claude_leftover_edit user cache "${CLAUDE_CONFIG_DIR:-$_cru_dir}/cache/gateway-models.json"
+    case "$OS_KIND" in
+        darwin) _cru_cache="$_cru_home/Library/Caches" ;;
+        *)      _cru_cache="${XDG_CACHE_HOME:-$_cru_home/.cache}" ;;
+    esac
+    claude_leftover_rm "$_cru_cache/waired/claude-fallback"
+    claude_rmdir_empty "$_cru_cache/waired"
+}
+
+# ---------------------------------------------------------------------
 # linux_apt_* — Debian / Ubuntu remover
 # ---------------------------------------------------------------------
 
@@ -520,9 +1185,15 @@ linux_apt_uninstall() {
     if command -v waired >/dev/null 2>&1; then
         common_log "Removing the Claude Code / coding-agent integration"
         # shellcheck disable=SC2086
-        common_run $SUDO waired claude disable || true
+        common_run $SUDO waired claude disable || \
+            common_warn "waired claude disable failed. Checking Claude Code's settings by hand."
         common_run_user waired unlink 2>/dev/null || true
     fi
+    # Whatever the binary did or could not do, look at the files themselves
+    # (waired-agent#1398). Before the purge, so a binary that is still here
+    # has had its turn first.
+    claude_repair_managed
+    claude_repair_user
 
     # Build the package set to act on. For a plain remove only
     # currently-installed packages count; for --clean (purge) we also catch
@@ -751,9 +1422,14 @@ darwin_uninstall() {
     if [ -x "$bindir/waired" ]; then
         common_log "Removing the Claude Code / coding-agent integration"
         # shellcheck disable=SC2086
-        common_run $SUDO "$bindir/waired" claude disable || true
+        common_run $SUDO "$bindir/waired" claude disable || \
+            common_warn "waired claude disable failed. Checking Claude Code's settings by hand."
         common_run_user "$bindir/waired" unlink 2>/dev/null || true
     fi
+    # Whatever the binary did or could not do, look at the files themselves
+    # (waired-agent#1398), while there is still a service it could have asked.
+    claude_repair_managed
+    claude_repair_user
 
     # 2. System LaunchDaemon (com.waired.agent). Prefer the binary's own
     #    uninstall — it boots out the job and removes the plist exactly as it
@@ -865,6 +1541,17 @@ print_done() {
             common_log "${_tag}Nothing would be removed: Waired isn't installed on this computer."
         else
             common_log "Nothing to remove: Waired wasn't installed on this computer."
+        fi
+        return 0
+    fi
+
+    # Everything this run did was Claude Code settings Waired left behind:
+    # Waired itself was already gone (waired-agent#1398).
+    if [ "$DID_COUNT" -eq "$CLAUDE_LEFTOVERS" ]; then
+        if [ "$DRY_RUN" = 1 ]; then
+            common_log "${_tag}Waired isn't installed, but Claude Code still has settings it left behind. They would be removed."
+        else
+            common_log "Waired wasn't installed, but Claude Code still had settings it left behind. They're removed. Restart Claude Code to pick that up."
         fi
         return 0
     fi

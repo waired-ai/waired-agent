@@ -1301,7 +1301,14 @@ ctp "an empty process table yields none"  ""                ""
 #     the dry-run chokepoint.
 u_out() { # u_out <env-assignments...> -- <uninstall args...>
   local envs=() ; while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
-  env "${envs[@]}" sh "$UNINSTALL_SH" "$@" 2>&1 || true
+  # An empty home, not the developer's: since waired-agent#1398 the uninstaller
+  # looks in ~/.claude for settings Waired left behind, so a machine that once
+  # had Waired would answer every case below from its own leftovers -- green on
+  # a clean runner, red on the computer editing the script. A case can still
+  # pass its own HOME; it comes later on the command line and wins.
+  local u_home="$STUBDIR/uninstall-home"
+  mkdir -p "$u_home"
+  env HOME="$u_home" XDG_CACHE_HOME= CLAUDE_CONFIG_DIR= "${envs[@]}" sh "$UNINSTALL_SH" "$@" 2>&1 || true
 }
 out="$(u_out "IT_STUB_PS=$PS_LINUX_TRAY" IT_STUB_INSTALLED= -- --dry-run)"
 if printf '%s' "$out" | grep -qF 'Stopping the Waired app (waired-tray, PID 123)'; then
@@ -1646,6 +1653,131 @@ if printf '%s' "$out" | grep -q 'Reopening the Waired app'; then
   fail "a darwin update reopened an app the user had closed (#1046)"
 else
   ok "a darwin update leaves a closed app closed (#1046)"
+fi
+
+# 11. Claude Code settings Waired left behind (waired-agent#1398)
+#
+# The uninstall used to hand all of this to `waired claude disable`, so a host
+# whose binary was already gone kept a managed ANTHROPIC_BASE_URL pointing at a
+# port nothing listened on, and Claude Code failed every request. uninstall.sh
+# now checks the files itself.
+
+# 11a. The rules: the Python copy against the shared corpus. python3 is on
+#      every CI runner; a developer box without it is told so, not passed.
+if command -v python3 >/dev/null 2>&1; then
+  if corpus_out="$(UNINSTALL_SH="$UNINSTALL_SH" bash "$ROOT/scripts/dev/claude-leftovers-corpus.sh" python3 2>&1)"; then
+    ok "uninstall.sh's Python copy of the rules matches the corpus ($(printf '%s\n' "$corpus_out" | tail -1))"
+  else
+    printf '%s\n' "$corpus_out" | grep -v '^ok' >&2
+    fail "uninstall.sh's Python copy of the rules disagrees with the corpus (#1398)"
+  fi
+elif [ -n "${CI:-}" ]; then
+  fail "python3 is missing on a CI runner, so the corpus did not run (#1398)"
+else
+  log "SKIPPED (not a pass): no python3 here, so the #1398 corpus did not run"
+fi
+
+# The end-to-end cases need a managed settings file somewhere a non-root run
+# can write. The one path is swapped in a copy of the script, after checking
+# the literal is really there, so the swap cannot silently do nothing.
+cl_tmp="$STUBDIR/claude-leftovers"
+mkdir -p "$cl_tmp"
+cl_corpus="$ROOT/packaging/install/testdata/claude-leftovers"
+if grep -qF "'/etc/claude-code/managed-settings.json'" "$UNINSTALL_SH"; then
+  sed "s#'/etc/claude-code/managed-settings.json'#'$cl_tmp/managed/managed-settings.json'#" \
+    "$UNINSTALL_SH" >"$cl_tmp/uninstall.sh"
+else
+  fail "uninstall.sh no longer names /etc/claude-code/managed-settings.json; the #1398 cases below cannot point it elsewhere"
+fi
+cl_plant() { # a host whose binary is gone but whose Claude Code still points at Waired
+  rm -rf "$cl_tmp/home" "$cl_tmp/managed"
+  mkdir -p "$cl_tmp/managed" "$cl_tmp/home/.claude/skills/waired-status" \
+    "$cl_tmp/home/.claude/skills/my-own" "$cl_tmp/home/.claude/cache" "$cl_tmp/home/.cache/waired/claude-fallback"
+  cp "$cl_corpus/managed/02-posix-current-form/input.json" "$cl_tmp/managed/managed-settings.json"
+  cp "$cl_corpus/user-settings/02-everything-waired-wrote/input.json" "$cl_tmp/home/.claude/settings.json"
+  cp "$cl_corpus/retired-cache/01-windows-host-waired-gone/input.json" "$cl_tmp/home/.claude/cache/gateway-models.json"
+  printf 'skill\n' >"$cl_tmp/home/.claude/skills/waired-status/SKILL.md"
+  printf 'mine\n' >"$cl_tmp/home/.claude/skills/my-own/SKILL.md"
+  printf '1' >"$cl_tmp/home/.cache/waired/claude-fallback/sess"
+}
+cl_run() { # cl_run <extra env...> -- <uninstall args...>
+  local envs=() ; while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  env HOME="$cl_tmp/home" XDG_CACHE_HOME= CLAUDE_CONFIG_DIR= IT_STUB_INSTALLED= IT_STUB_PS="$PS_NO_TRAY" \
+    "${envs[@]}" sh "$cl_tmp/uninstall.sh" "$@" 2>&1 || true
+}
+
+if [ -f "$cl_tmp/uninstall.sh" ] && command -v python3 >/dev/null 2>&1; then
+  # 11b. Dry run, no binary: every leftover is named, nothing is touched, and
+  #      the summary says what kind of machine this is instead of "Nothing
+  #      would be removed".
+  cl_plant
+  out="$(cl_run -- --dry-run)"
+  missing=""
+  for want in "managed/managed-settings.json (ANTHROPIC_BASE_URL" \
+              "home/.claude/settings.json (statusLine, modelPicker, model, CLAUDE_CODE_SUBAGENT_MODEL" \
+              "skills/waired-status/SKILL.md, which Waired left behind" \
+              "cache/gateway-models.json (gateway-models.json)" \
+              "waired/claude-fallback, which Waired left behind" \
+              "Claude Code still has settings it left behind"; do
+    printf '%s' "$out" | grep -qF "$want" || missing="$missing [$want]"
+  done
+  if [ -z "$missing" ] && [ -f "$cl_tmp/managed/managed-settings.json" ] && [ -f "$cl_tmp/home/.claude/settings.json" ]; then
+    ok "a dry run on a host without the binary names every Claude Code leftover and touches none (#1398)"
+  else
+    printf '%s\n' "$out" >&2
+    fail "the #1398 dry run is missing:${missing:- nothing, but a file was changed}"
+  fi
+  if printf '%s' "$out" | grep -q 'Nothing would be removed'; then
+    fail "a host with Claude Code leftovers was told nothing would be removed (#1398)"
+  else
+    ok "a host with only Claude Code leftovers isn't told nothing would be removed (#1398)"
+  fi
+
+  # 11c. For real, no binary. The per-user files run as this (non-root) user
+  #      and change; the managed file goes through the sudo stub, which does
+  #      nothing, so it is the root legs (installtest-run.sh, installtest-macos.sh)
+  #      that watch that one change.
+  cl_plant
+  out="$(cl_run -- --yes)"
+  if [ ! -e "$cl_tmp/home/.claude/settings.json" ] \
+     && [ ! -e "$cl_tmp/home/.claude/skills/waired-status" ] \
+     && [ -f "$cl_tmp/home/.claude/skills/my-own/SKILL.md" ] \
+     && [ ! -e "$cl_tmp/home/.claude/cache/gateway-models.json" ] \
+     && [ ! -e "$cl_tmp/home/.cache/waired" ]; then
+    ok "an uninstall without the binary removes this user's Claude Code leftovers and nothing of theirs (#1398)"
+  else
+    printf '%s\n' "$out" >&2
+    find "$cl_tmp/home" >&2
+    fail "an uninstall without the binary left per-user Claude Code settings behind (#1398)"
+  fi
+
+  # 11d. No python3: say which file to fix by hand, rather than nothing.
+  mkdir -p "$cl_tmp/nopython"
+  printf '#!/bin/sh\nexit 1\n' >"$cl_tmp/nopython/python3"
+  chmod +x "$cl_tmp/nopython/python3"
+  cl_plant
+  out="$(cl_run "PATH=$cl_tmp/nopython:$PATH" -- --dry-run)"
+  if printf '%s' "$out" | grep -qF "managed/managed-settings.json may still send Claude Code to Waired"; then
+    ok "without python3 the uninstall names the managed settings file to fix by hand (#1398)"
+  else
+    printf '%s\n' "$out" >&2
+    fail "without python3 the uninstall said nothing about the managed settings file (#1398)"
+  fi
+
+  # 11e. With the binary present, a dry run shows `claude disable` and does not
+  #      preview the same removals a second time.
+  mkdir -p "$cl_tmp/withwaired"
+  printf '#!/bin/sh\nexit 0\n' >"$cl_tmp/withwaired/waired"
+  chmod +x "$cl_tmp/withwaired/waired"
+  cl_plant
+  out="$(cl_run "PATH=$cl_tmp/withwaired:$PATH" -- --dry-run)"
+  if printf '%s' "$out" | grep -qE '\[dry-run\].*waired claude disable' \
+     && ! printf '%s' "$out" | grep -q 'Removing what Waired left'; then
+    ok "with the binary present, a dry run previews claude disable once (#1398)"
+  else
+    printf '%s\n' "$out" >&2
+    fail "with the binary present, a dry run previewed the Claude Code removals twice or not at all (#1398)"
+  fi
 fi
 
 echo
