@@ -545,6 +545,10 @@ func selectionErrorReason(err error) string {
 		// journal said model_not_served, which sends the reader looking
 		// for a model nobody has (waired-agent#1178).
 		return LocalErrorModelTooSmall
+	case errors.Is(err, router.ErrPinnedPeerDeclined):
+		return LocalErrorPinnedPeerDeclined
+	case errors.Is(err, router.ErrNoEndpointForWindow):
+		return LocalErrorNoComputerForWindow
 	case pinnedPeerBusyReason(err) != "":
 		// Above ErrAllPeersOverloaded, which it Unwraps to: the two are
 		// the same status and a different fact, and the journal is where
@@ -610,6 +614,10 @@ func selectionStatus(err error) int {
 		// requester recorded 503 while the client received 404 — the one
 		// thing the doc comment above forbids (waired-agent#1178).
 		return http.StatusNotFound
+	case errors.Is(err, router.ErrPinnedPeerDeclined),
+		errors.Is(err, router.ErrNoEndpointForWindow):
+		// Both responders write 400 (waired-agent#1395).
+		return http.StatusBadRequest
 	case errors.Is(err, router.ErrModelNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, router.ErrCapabilityNotMet):

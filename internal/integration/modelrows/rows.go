@@ -9,10 +9,11 @@
 // directly (waired-agent#1306). The projection from a snapshot to rows is the
 // part that must agree, so it lives here once.
 //
-// What each caller still owns is how a row is RENDERED. Claude Code sizes a
-// session from a "[1m]" suffix in the id, so its writer adds twins; the
-// OpenAI-dialect surface says the same thing in max_input_tokens and adds
-// none.
+// The rows are the same on both surfaces, "[1m]" twins and stated windows
+// included (owner decision 2026-09-16, waired-agent#1395). What each caller
+// still owns is how a row is RENDERED: Claude Code's writer puts the id and
+// the two lines into modelPicker, and the OpenAI-dialect listing adds the
+// window as max_input_tokens.
 package modelrows
 
 import (
@@ -37,15 +38,17 @@ type Facts struct {
 	// LocalWindow is the input window this computer's engine is loaded with,
 	// 0 when it has not said. It is the honest number for the local row.
 	LocalWindow int
-	// LocalWindow1M and PeerWindow1M say whether this computer, and any peer
-	// that could answer, declares a 1M context window. They gate the "[1m]"
-	// twins a caller may add: the tier is a promise about the SERVING node,
-	// so a twin with no node behind it would be a menu entry whose selection
-	// fails.
-	LocalWindow1M bool
-	PeerWindow1M  bool
-	Peers         []claudecode.PeerFact
-	PeerLimit     int
+	// LocalWindow1M, PeerWindow1M and PublicWindow1M say whether this
+	// computer, one of this operator's other computers (a teammate's
+	// included), and a public machine this computer may use declare a 1M
+	// context window. They gate the "[1m]" twins: the tier is a promise about
+	// the SERVING node, so a twin with no node behind it would be a menu
+	// entry whose selection fails.
+	LocalWindow1M  bool
+	PeerWindow1M   bool
+	PublicWindow1M bool
+	Peers          []claudecode.PeerFact
+	PeerLimit      int
 	// PublicShareOn is the consumer's Public Share posture, consent
 	// included — management's EffectiveMode is already "off until a consent
 	// record for the current warning text exists", so one field answers both.
@@ -59,53 +62,74 @@ type Facts struct {
 }
 
 // Row is one row of a model list: the id a turn carries, the two lines the
-// row shows, and the two numbers a renderer may want.
+// row shows, and the window it states.
 type Row struct {
 	claudecode.DirectiveModel
-	// Window1M is whether the side this row names declares a 1M window.
+	// Window1M is whether the side this row names declares a 1M window. A row
+	// with it set is followed by its twin.
 	Window1M bool
-	// ContextWindow is the input window the side this row names is actually
-	// loaded with, or 0 when this computer cannot know it — which is every
-	// row that does not name one machine, because which machine answers is
-	// decided per turn.
+	// Tier1M marks the "[1m]" twin itself.
+	Tier1M bool
+	// ContextWindow is the window the row states, and it is exactly what
+	// routing guarantees for it (gateway.RequiredWindowFor):
+	//
+	//   - a twin: 1M, the floor its id carries;
+	//   - a row where Waired chooses the computer (any, peer, public): 200k,
+	//     the floor those ids carry;
+	//   - a row naming one computer (local, per-computer): that computer's
+	//     declared window, 0 when it declares none — those rows carry no
+	//     floor, so the machine's own figure is the only honest one.
+	//
+	// It used to be 0 on every row not naming one machine, and the
+	// OpenAI-dialect listing filled that 0 with the REQUESTING computer's
+	// window, which nothing enforced (waired-agent#1395).
 	ContextWindow int
 }
 
 // Rows renders the row list from the facts.
 //
 // Order is the fixed table first, in DirectiveModels' order, then the
-// per-peer rows. A caller that adds twins puts each one immediately after its
-// row, so the two spellings of one destination sit together rather than the
-// twins collecting at the bottom of a menu that folds.
+// per-peer rows, and each twin immediately after its row, so the two
+// spellings of one destination sit together rather than the twins collecting
+// at the bottom of a menu that folds.
 func Rows(f Facts) []Row {
-	out := make([]Row, 0, len(claudecode.DirectiveModels())+f.PeerLimit)
-	anywhere1M := f.LocalWindow1M || f.PeerWindow1M
+	out := make([]Row, 0, 2*(len(claudecode.DirectiveModels())+f.PeerLimit))
+	add := func(r Row) {
+		out = append(out, r)
+		if !r.Window1M {
+			return
+		}
+		out = append(out, Row{
+			DirectiveModel: claudecode.Tier1MModel(r.DirectiveModel),
+			Window1M:       true,
+			Tier1M:         true,
+			ContextWindow:  hostfit.ServingWindow1M,
+		})
+	}
 	for _, d := range claudecode.DirectiveModels() {
 		switch d.ID {
 		case claudecode.DirectiveModelLocal:
 			if !f.LocalServes {
 				continue
 			}
-			out = append(out, Row{DirectiveModel: d, Window1M: f.LocalWindow1M, ContextWindow: f.LocalWindow})
+			add(Row{DirectiveModel: d, Window1M: f.LocalWindow1M, ContextWindow: f.LocalWindow})
 		case claudecode.DirectiveModelPeer:
-			out = append(out, Row{DirectiveModel: d, Window1M: f.PeerWindow1M})
+			add(Row{DirectiveModel: d, Window1M: f.PeerWindow1M, ContextWindow: hostfit.ServingWindow200k})
 		case claudecode.DirectiveModelPublic:
 			if !f.PublicShareOn {
 				continue
 			}
-			// A public machine is someone else's, and this host learns its
-			// window only when it answers. Offering a tier we cannot check
-			// would be the menu entry that fails on selection, so the public
-			// row has no twin.
-			out = append(out, Row{DirectiveModel: d})
+			add(Row{DirectiveModel: d, Window1M: f.PublicWindow1M, ContextWindow: hostfit.ServingWindow200k})
 		default:
-			// The any-node row. Waired picks, so a twin is honest as soon as
-			// ANY side declares 1M.
-			out = append(out, Row{DirectiveModel: d, Window1M: anywhere1M})
+			// The any-node row. It routes to this operator's own computers,
+			// and to a public machine only when the Public Share posture's
+			// own comparison admits one, so only this computer and the
+			// operator's other computers can make its twin honest.
+			add(Row{DirectiveModel: d, Window1M: f.LocalWindow1M || f.PeerWindow1M, ContextWindow: hostfit.ServingWindow200k})
 		}
 	}
 	for _, r := range claudecode.PeerDirectiveModels(f.Peers, f.PeerLimit) {
-		out = append(out, Row{DirectiveModel: r.DirectiveModel, Window1M: r.Window1M, ContextWindow: r.ContextWindow})
+		add(Row{DirectiveModel: r.DirectiveModel, Window1M: r.Window1M, ContextWindow: r.ContextWindow})
 	}
 	return out
 }
@@ -122,6 +146,16 @@ func Rows(f Facts) []Row {
 // by its grant pseudonym and never by its real device name (spec §8.5), and
 // one whose pseudonym is missing is left out rather than named some other
 // way.
+//
+// A public machine counts as serving only while Public Share is on. A grant
+// can outlive the posture by its TTL, and a row for it is refused by the
+// Public Share gate — and, before waired-agent#1395, then quietly answered by
+// one of the operator's own computers.
+//
+// A peer counts toward a 1M twin only when it could answer that twin's main
+// conversation: serving, declaring 1M, and not switched off for main
+// conversations by its owner. The listing cannot know which kind of turn will
+// arrive, and a picker row is what the main conversation is sent on.
 //
 // publicShareOn is a separate argument because it is not in the snapshot:
 // both callers read it from management, and neither can derive it here.
@@ -141,14 +175,30 @@ func FactsFromSnapshot(snap *inferencemesh.Snapshot, limit int, publicShareOn bo
 		f.LocalWindow = declaredWindow(snap.Self)
 		f.LocalWindow1M = f.LocalWindow >= hostfit.ServingWindow1M
 	}
-	if limit <= 0 {
-		return f
-	}
-	f.Peers, _ = peerFacts(snap.Peers)
-	for _, p := range f.Peers {
-		if !p.NotServing {
-			f.PeerWindow1M = f.PeerWindow1M || p.Window1M
+	peers, from := peerFacts(snap.Peers)
+	for i := range peers {
+		pv := snap.Peers[from[i]]
+		public := inferencemesh.IsPublicGrant(pv.Grant)
+		if public && !publicShareOn {
+			peers[i].NotServing = true
 		}
+		if pv.InferenceState != nil && pv.InferenceState.ExcludeMain {
+			peers[i].Window1M = false
+		}
+		if peers[i].NotServing || !peers[i].Window1M {
+			continue
+		}
+		if public {
+			f.PublicWindow1M = true
+		} else {
+			f.PeerWindow1M = true
+		}
+	}
+	// The 1M facts above are about every peer, whatever the per-computer row
+	// limit: with the limit at 0 the peer twins used to disappear with the
+	// per-computer rows (waired-agent#1395).
+	if limit > 0 {
+		f.Peers = peers
 	}
 	return f
 }

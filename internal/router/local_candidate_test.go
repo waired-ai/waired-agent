@@ -100,14 +100,22 @@ func TestBuildLocalCandidate(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}})
 		ln := localFor("qwen3:8b-q4_K_M")
 		ln.ContextWindow = 200_704
-		if _, ok, _ := s.buildLocalCandidate(ln, 1_000_000, want(t)); ok {
+		_, ok, drop := s.buildLocalCandidate(ln, 1_000_000, want(t))
+		if ok {
 			t.Error("a host declaring a smaller window than the request needs was offered")
 		}
-		// 0 declares nothing, and must read as unknown rather than as
-		// "serves nothing" — the same rule a peer's 0 has (waired#1031).
+		if !drop.belowWindow {
+			t.Error("the drop did not say the window removed it")
+		}
+		// 0 declares nothing, and falls short of every floor — the same rule
+		// a peer's 0 has (waired-agent#1395).
 		ln.ContextWindow = 0
-		if _, ok, _ := s.buildLocalCandidate(ln, 1_000_000, want(t)); !ok {
-			t.Error("a host declaring nothing was excluded by a window floor")
+		if _, ok, drop := s.buildLocalCandidate(ln, 200_704, want(t)); ok || !drop.belowWindow {
+			t.Errorf("a host declaring nothing: ok=%v drop=%+v, want excluded by the window floor", ok, drop)
+		}
+		// No floor, no filter.
+		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t)); !ok {
+			t.Error("a host declaring nothing was excluded from a request with no floor")
 		}
 	})
 

@@ -23,8 +23,21 @@ func TestRequiredWindowFor(t *testing.T) {
 			"the [1m] suffix outranks everything, including the env var"},
 		{ModelWairedLocal, 0,
 			"pinning is how you reach a device that declares no window at all"},
-		{ModelWairedPeer, 0,
-			"naming a node must not also make demands of it"},
+		{ModelWairedPeer, hostfit.ServingWindow200k,
+			"another of your computers: Waired chooses which, so the row promises " +
+				"the floor the any-node row does (waired-agent#1395)"},
+		{ModelWairedPublic, hostfit.ServingWindow200k,
+			"someone else's computer: same"},
+		{ModelWairedPeerLegacy, hostfit.ServingWindow200k,
+			"the pre-#1185 peer spelling means the same row"},
+		{ModelWairedPublicLegacy, hostfit.ServingWindow200k,
+			"and so does the public one"},
+		{ModelWairedPeerPrefix + "linux-gpu", 0,
+			"a row naming ONE computer must not also make demands of it"},
+		{Tier1M(ModelWairedPeerPrefix + "linux-gpu"), hostfit.ServingWindow1M,
+			"its twin IS the demand"},
+		{Tier1M(ModelWairedPublic), hostfit.ServingWindow1M,
+			"the public row has a twin too (waired-agent#1395)"},
 		{Tier1M(ModelWairedLocal), hostfit.ServingWindow1M,
 			"a 1M twin IS the demand — waired-agent#1185 gives every row that " +
 				"can serve the tier one, and it is only ever offered where a " +
@@ -92,9 +105,12 @@ func TestRequiredWindowForRequest(t *testing.T) {
 		{"local pin with the tier header", ModelWairedLocal, []string{beta},
 			hostfit.ServingWindow1M,
 			"same, for this computer's own 1M twin"},
-		{"node-naming id without it", ModelWairedPeer, nil, 0,
+		{"computer-naming id without it", ModelWairedPeerPrefix + "linux-gpu", nil, 0,
 			"the bare row still demands nothing: it is how you reach a device " +
 				"that declares no window at all"},
+		{"peer row without it", ModelWairedPeer, nil, hostfit.ServingWindow200k,
+			"Waired chooses which of your other computers, so the bare row keeps " +
+				"its own 200k floor (waired-agent#1395)"},
 		{"pre-#1185 named row with the tier header", ModelWairedPeerLegacy,
 			[]string{beta}, hostfit.ServingWindow1M,
 			"a session that picked a twin before the re-spelling carries the " +

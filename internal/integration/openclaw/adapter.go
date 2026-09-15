@@ -313,7 +313,12 @@ func (a *adapter) Uninstall(_ context.Context, opts integration.ApplyOptions) er
 const ContextWindowSubject = "openclaw context window"
 
 // auditContextWindow compares the window the installed plugin declares with
-// the one this host's gateway reports now.
+// the one this host's gateway reports now, and then the rest of what the
+// plugin was written from: the rows, whose windows are per row, and the
+// revision of the template that wrote it (waired-agent#1395). All three are
+// one finding under one subject because they have one fix — `waired doctor
+// --fix` re-links, which rewrites the file — and the subject is what earns
+// the repair prompt.
 //
 // A gateway that cannot answer is not a finding: `waired doctor` runs on
 // hosts with the daemon down, and reporting drift from a number nobody could
@@ -325,6 +330,19 @@ func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) inte
 		return integration.AuditFinding{
 			Status: integration.StatusOK, Subject: subject,
 			Detail: "no plugin to check",
+		}
+	}
+	if declaredRevision(opts.HomeDir) < pluginRevision {
+		return integration.AuditFinding{
+			Status: integration.StatusWarn, Subject: subject,
+			Detail: "the plugin was written by an older version of Waired",
+		}
+	}
+	if fetched := rowsFn(ctx, GatewayBaseURL(opts.GatewayBaseURL)); len(fetched) > 0 &&
+		!sameRows(pluginRows(fetched), declaredRows(opts.HomeDir)) {
+		return integration.AuditFinding{
+			Status: integration.StatusWarn, Subject: subject,
+			Detail: "the plugin's list of Waired models is out of date",
 		}
 	}
 	live := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefPrefix+defaultModelKey)

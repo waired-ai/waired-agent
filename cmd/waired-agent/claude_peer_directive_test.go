@@ -220,6 +220,22 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 		if pref.pref.Mode != state.RoutingModePinned || pref.pref.PinnedPeerDeviceID != "peer-X" {
 			t.Errorf("pref = %+v, want a pin to peer-X", pref)
 		}
+		// "That computer and nothing else": not even decision 1900's
+		// fallthrough for a pin running an unknown model (waired-agent#1395).
+		if !pref.strictPin {
+			t.Error("a row naming one computer did not make a strict pin")
+		}
+	})
+
+	t.Run("the operator's own pin, carried by the peer row, is not strict", func(t *testing.T) {
+		operator := state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"}
+		pref, ok, err := nodeDirectivePref(gateway.ModelWairedPeer, named.Peers, operator)
+		if err != nil || !ok {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if pref.strictPin {
+			t.Error("a `waired worker` pin lost its fallthrough because the peer row carried it")
+		}
 	})
 
 	t.Run("a machine that is gone fails closed", func(t *testing.T) {
@@ -235,6 +251,10 @@ func TestNodeDirectivePref_PerPeer(t *testing.T) {
 		// substitution #325 removed.
 		if !strings.Contains(err.Error(), "retired-box") {
 			t.Errorf("the error does not name the computer that is missing: %v", err)
+		}
+		// OpenCode and OpenClaw read this sentence too.
+		if strings.Contains(err.Error(), "Claude Code") || strings.Contains(err.Error(), "/model") {
+			t.Errorf("the error sends every client to Claude Code's picker: %v", err)
 		}
 	})
 

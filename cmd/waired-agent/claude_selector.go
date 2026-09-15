@@ -211,11 +211,17 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 	// nothing at all (waired#1370 review).
 	if p, ok := modelrows.PeerForDirective(peers, directive); ok {
 		displayID, _ := inferencemesh.PeerDisplayID(p)
-		return nodeSelection{pref: orderingFrom(operator, state.RoutingPreference{
-			Mode:                state.RoutingModePinned,
-			PinnedPeerDeviceID:  p.DeviceID,
-			PinnedPeerDisplayID: displayID,
-		})}, true, nil
+		return nodeSelection{
+			pref: orderingFrom(operator, state.RoutingPreference{
+				Mode:                state.RoutingModePinned,
+				PinnedPeerDeviceID:  p.DeviceID,
+				PinnedPeerDisplayID: displayID,
+			}),
+			// The row says "that computer and nothing else", so even the one
+			// fallthrough a `waired worker` pin keeps is not for it
+			// (router.Inputs.PinnedStrict, waired-agent#1395).
+			strictPin: true,
+		}, true, nil
 	}
 	// The machine this entry named is gone — renamed, powered off, or
 	// dropped out of the mesh since the picker cache was written (which has
@@ -224,8 +230,12 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 	// the user picked, which is the silent substitution waired-agent#325
 	// took out of the pin. ErrModelNotReady so the gateway answers 404 and
 	// the client shows a visible model error.
+	//
+	// The advice fits every coding tool that lists the rows. It used to name
+	// Claude Code's /model, and OpenCode and OpenClaw read the same sentence
+	// from the same Selector (waired-agent#1395).
 	return nodeSelection{}, false, fmt.Errorf(
-		"%w: no computer named in %q is on the mesh right now — reopen /model after restarting Claude Code",
+		"%w: no computer named in %q is on your network right now — restart your coding tool and pick a computer from its model list again",
 		router.ErrModelNotReady, strings.TrimPrefix(directive, gateway.ModelWairedPeerPrefix))
 }
 
@@ -240,6 +250,8 @@ func nodeDirectivePref(directive string, peers []inferencemesh.PeerView,
 type nodeSelection struct {
 	pref       state.RoutingPreference
 	publicOnly bool
+	// strictPin: the pin in pref came from a row naming one computer.
+	strictPin bool
 }
 
 // effectivePref is how one request is selected: the directive's choice when
@@ -281,7 +293,7 @@ func selectWithWorkerPref[T any](ctx context.Context, c *directiveSelector, req 
 		var zero T
 		return zero, err
 	}
-	return run(ctx, c.p.buildSelectorWith(ctx, node.pref, node.publicOnly), req)
+	return run(ctx, c.p.buildSelectorWith(ctx, node), req)
 }
 
 func (c *directiveSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {

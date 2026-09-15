@@ -290,30 +290,17 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 	return out
 }
 
-// RequiredWindowFor is the input-token window a request for modelID
-// obliges the serving endpoint to hold, or 0 when the id makes no such
-// promise (waired#1031).
-//
-// Only the two auto tiers do. The local id routes to this device
-// whatever its window is — that is what pinning means, and it is the
-// only way to reach a device that declares no window at all. The cloud
-// id never touches a Waired endpoint.
-//
-// The legacy auto spelling deliberately returns 0 rather than the 200k
-// tier: it is a non-"claude-" id, so a client that still holds it is in
-// a session sized by CLAUDE_CODE_MAX_CONTEXT_TOKENS, and holding its
-// endpoint to a window its own session was never sized for would refuse
-// turns that used to work.
 // NodeDirectiveFor reports the directive id when modelID names a NODE to
 // serve on, or "" when it does not.
 //
 // Separate from RequiredWindowFor because the two answer different
 // questions about the same id — one is a promise the serving node must
 // keep, the other is which node serves at all — and a directive can be
-// one without being the other. Every id that names a node is: naming a
-// node and then demanding a window of it would refuse turns on the very
-// machine the operator chose, which is why RequiredWindowFor returns 0
-// for all of them.
+// one without being the other. Peer and public are both: they choose a
+// kind of computer AND promise a window, because neither names the one
+// machine that answers (waired-agent#1395). The local and per-computer ids
+// are only the first: naming one machine and then demanding a window of it
+// would refuse turns on the very machine the operator chose.
 //
 // The local pin IS one of these, since waired-agent#1320. It used not to be,
 // on the ground that it "resolves to this device without a routing preference
@@ -372,11 +359,27 @@ func NormalizeModelID(modelID string) string {
 	}
 }
 
-// RequiredWindowFor is the tier a model id promises on its own. Since Claude
-// Code strips "[1m]" on the wire, a 1M spelling reaches us bare and this
-// function cannot see the tier — RequiredWindowForRequest reads it off the
-// beta header instead. Both remain: an id that still carries the marker
-// (another client, a replayed capture) is answered here.
+// RequiredWindowFor is the input-token window a request for modelID obliges
+// the serving computer to hold, or 0 when the id makes no such promise
+// (waired#1031). It is the one table both listeners route by: Claude Code on
+// the Claude listener, and OpenCode and OpenClaw on the OpenAI-dialect one
+// (owner decision 2026-09-16, waired-agent#1395).
+//
+//   - Any "[1m]" spelling: 1M. Picking the twin IS the demand.
+//   - The rows where Waired chooses the computer — any of yours, another of
+//     yours, a public one: 200k. Claude Code sizes their sessions as 200k
+//     conversations, and the OpenAI-dialect listing states 200k for them, so
+//     the computer that answers has to be able to hold one.
+//   - The rows naming one computer — this one, or a peer by name: nothing.
+//     Naming a machine and then demanding a window of it would refuse turns
+//     on the very machine the operator chose, and those rows state that
+//     machine's own window instead.
+//
+// Since Claude Code strips "[1m]" on the wire, a 1M spelling from it reaches
+// us bare and this function cannot see the tier — RequiredWindowForRequest
+// reads it off the beta header instead. Both remain: an id that still carries
+// the marker (the OpenAI-dialect clients, a replayed capture) is answered
+// here.
 func RequiredWindowFor(modelID string) int {
 	if !isWairedDirective(modelID) {
 		return 0
@@ -384,21 +387,20 @@ func RequiredWindowFor(modelID string) int {
 	if strings.Contains(strings.ToLower(modelID), tierMarker1M) {
 		return hostfit.ServingWindow1M
 	}
-	// A BARE id that names a node makes no promise: naming a node and then
-	// demanding a window of it would refuse turns on the very machine the
-	// operator chose. Only the any-node row promises a floor on its own,
-	// because there the operator named no machine and Waired is choosing.
-	if isAnyNodeDirective(modelID) {
+	if isChosenNodeDirective(modelID) {
 		return hostfit.ServingWindow200k
 	}
 	return 0
 }
 
-// isAnyNodeDirective reports whether the id is the any-node row, in any
-// spelling.
-func isAnyNodeDirective(modelID string) bool {
+// isChosenNodeDirective reports whether the id is a row where Waired chooses
+// the computer — the any-node, peer or public row, in any spelling — as
+// opposed to one naming a single machine.
+func isChosenNodeDirective(modelID string) bool {
 	switch NormalizeModelID(modelID) {
-	case ModelWairedAny, ModelWairedAnyLegacy, ModelWairedAnyOldest:
+	case ModelWairedAny, ModelWairedAnyLegacy, ModelWairedAnyOldest,
+		ModelWairedPeer, ModelWairedPeerLegacy,
+		ModelWairedPublic, ModelWairedPublicLegacy:
 		return true
 	}
 	return false

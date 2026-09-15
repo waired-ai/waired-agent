@@ -43,7 +43,9 @@ func TestRenderPlugin(t *testing.T) {
 		"config.provider.waired",
 		`"@ai-sdk/openai-compatible"`,
 		`baseURL: "http://127.0.0.1:9473/v1"`,
-		`id: "waired/default"`,
+		// The any-computer row, sent as the id Claude Code sends
+		// (waired-agent#1395).
+		`default: { id: "waired", name: "Waired" }`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered plugin missing %q:\n%s", want, s)
@@ -91,7 +93,14 @@ func TestRenderPlugin_ReadsTheRowsFromTheGateway(t *testing.T) {
 		// A failed read is "not known": the one row that needs no facts about
 		// a mesh is what this integration offered before.
 		"|| FALLBACK",
-		`id: "waired/default"`,
+		`default: { id: "waired", name: "Waired" }`,
+		// Each row is sent under its wire id, not the listed one: the
+		// any-computer row and its twin are listed as waired/default and
+		// waired/default[1m] but carry their floor only as "waired" and
+		// "waired[1m]" (waired-agent#1395).
+		"id: wire,",
+		`return { key: "default", wire: "waired" }`,
+		`return { key: "default[1m]", wire: "waired[1m]" }`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered plugin missing %q:\n%s", want, s)

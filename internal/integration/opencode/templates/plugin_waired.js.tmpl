@@ -25,15 +25,22 @@
 // the FIRST match in the file, and a comment carrying an example URL is the
 // one it would read.
 const BASE_URL = {{ .BaseURLLiteral }};
-const FALLBACK = { default: { id: "waired/default", name: "Waired Default" } };
+const FALLBACK = { default: { id: "waired", name: "Waired" } };
 const DISCOVERY_TIMEOUT_MS = 2000;
 
 // The picker shows `waired/<key>`, and the model that leaves on the wire is
-// `id`. Keeping the key as the id minus its "waired/" head makes the two
-// spellings the same string, so what a user reads in the picker is what
-// `waired logs` shows for the turn.
-function modelKey(id) {
-  return id.startsWith("waired/") ? id.slice("waired/".length) : id;
+// `id`. The key is the listed id minus its "waired/" head, so what a user
+// reads in the picker is what `waired logs` shows for the turn — with one
+// exception. The row where Waired picks any of your computers is listed as
+// waired/default and waired/default[1m], the refs every config written so far
+// holds, but it is SENT as "waired" and "waired[1m]", the ids Claude Code
+// sends. Those carry the row's window floor; waired/default itself is the
+// daemon's no-floor alias that chat apps send (waired-agent#1395).
+function rowIds(id) {
+  const key = id.startsWith("waired/") ? id.slice("waired/".length) : id;
+  if (key === "default" || key === "waired") return { key: "default", wire: "waired" };
+  if (key === "default[1m]" || key === "waired[1m]") return { key: "default[1m]", wire: "waired[1m]" };
+  return { key, wire: id };
 }
 
 async function discover() {
@@ -47,7 +54,7 @@ async function discover() {
     // Only the rows that name a computer. The rest of that listing is this
     // host's model catalog, which is a different question.
     if (!m || !m.waired_route || !m.id) continue;
-    const key = modelKey(m.id);
+    const { key, wire } = rowIds(m.id);
     if (!key) continue;
     // OpenCode's config schema requires `output` beside `context`, and warns
     // on every start without it (waired-agent#1367). Nothing on this host
@@ -56,7 +63,7 @@ async function discover() {
     // own default cap applies either way. Measured on OpenCode 1.18.30: the
     // same resolved model and the same max_tokens with and without it.
     models[key] = {
-      id: m.id,
+      id: wire,
       name: m.display_name || m.id,
       ...(m.max_input_tokens > 0 ? { limit: { context: m.max_input_tokens, output: 0 } } : {}),
     };

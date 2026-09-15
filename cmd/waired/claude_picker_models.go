@@ -16,11 +16,10 @@ import (
 // serving right now (waired-agent#830), plus a 1M twin wherever a side
 // declares a 1M window (owner ruling 2026-09-06).
 //
-// Which rows those are is internal/integration/modelrows, shared with the
-// daemon's GET /v1/models listing (waired-agent#1306) so the two surfaces
-// cannot come to disagree about who is serving. What stays here is the
-// rendering: the twins are a Claude Code mechanism — it sizes a session from a
-// "[1m]" suffix in the id — and no other client has them.
+// Which rows those are, twins included, is internal/integration/modelrows,
+// shared with the daemon's GET /v1/models listing (waired-agent#1306) so the
+// two surfaces cannot come to disagree about who is serving or which rows
+// have a 1M twin (waired-agent#1395). What stays here is the rendering.
 //
 // It runs in the unprivileged CLI child that owns the file, which has no
 // daemon handle beyond the management API — so the mesh arrives over the same
@@ -36,24 +35,14 @@ import (
 // trade.
 const pickerMeshTimeout = 2 * time.Second
 
-// pickerModels renders the rows from the facts.
-//
-// Each row is followed immediately by its 1M twin where one is offered, so
-// the two spellings of one destination sit together rather than the twins
-// collecting at the bottom of a menu that folds.
+// pickerModels renders the rows from the facts, in modelrows' order: each 1M
+// twin immediately after its row.
 func pickerModels(f modelrows.Facts) []claudecode.PickerRow {
 	rows := modelrows.Rows(f)
-	out := make([]claudecode.PickerRow, 0, 2*len(rows))
+	out := make([]claudecode.PickerRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, claudecode.PickerRow{
 			Model: r.ID, Label: r.DisplayName, Description: r.Description,
-		})
-		if !r.Window1M {
-			continue
-		}
-		t := claudecode.Tier1MModel(r.DirectiveModel)
-		out = append(out, claudecode.PickerRow{
-			Model: t.ID, Label: t.DisplayName, Description: t.Description,
 		})
 	}
 	return out

@@ -1081,9 +1081,6 @@ func errorBody(code, msg string) map[string]string {
 //     compatible with. ErrHardwareInsufficient is read that way on every
 //     side — 422 here, 422 on both wires, and since waired-agent#740 422
 //     in the gateway's record too.
-//   - ErrNoEndpointForWindow is 500 on both sides today. Recorded here as
-//     today's behaviour rather than asserted as intended — see
-//     TestMapRouterStatus_AgreesWithServingSurfaces.
 func mapRouterStatus(err error) int {
 	switch {
 	case router.BelowModelSizeFloor(err):
@@ -1092,6 +1089,12 @@ func mapRouterStatus(err error) int {
 		// responders write 404 for it, and this endpoint dry-runs what
 		// they would really do (waired-agent#1178).
 		return http.StatusNotFound
+	case errors.Is(err, router.ErrPinnedPeerDeclined),
+		errors.Is(err, router.ErrNoEndpointForWindow):
+		// Both responders answer 400: nothing clears either without someone
+		// picking another row or changing a computer. The window refusal was
+		// a 500 on both sides until waired-agent#1395.
+		return http.StatusBadRequest
 	case errors.Is(err, router.ErrModelNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, router.ErrCapabilityNotMet),

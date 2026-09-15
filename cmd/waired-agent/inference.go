@@ -3364,8 +3364,9 @@ func (p *agentInferenceProvider) ServeTuning() (degraded bool, warning string) {
 
 // DeclaredContextWindow reports the window this device is willing to
 // STAND BEHIND for its active model — signer.InferenceState.ContextWindow
-// (waired#1031). 0 means "declares nothing", and every consumer reads that
-// as unknown and falls open.
+// (waired#1031). 0 means "declares nothing": a request carrying a window
+// floor reads it as not meeting the floor, and a reader with no floor to
+// enforce reads it as unknown (waired-agent#1395).
 //
 // It is deliberately NOT ContextWindowFor. That one exists to size a guard
 // and therefore answers optimistically for an untuned engine: no applied
@@ -3380,9 +3381,11 @@ func (p *agentInferenceProvider) ServeTuning() (degraded bool, warning string) {
 // different claims: a routing consumer can act safely on the second and
 // cannot act on the first without also having to decide what a 98k peer
 // means for a 200k session, which is the decision the two-window contract
-// exists to avoid. The engine keeps serving that window for this device's
-// own keyboard through the local /model directive — it just stops being a
-// mesh answer.
+// exists to avoid. Since waired-agent#1395 the second is also a refusal for
+// every row carrying a window floor, on this device and on its peers, so a
+// computer serving a 131k model no longer answers the 200k rows. The engine
+// keeps serving that window through the rows that name this computer —
+// "Waired local", and its per-computer row on a peer's list.
 //
 // SPILL IS NOT A REASON TO WITHHOLD. A host whose weights partly sit in
 // system RAM is serving the window it names — spill costs decode speed,
@@ -5718,7 +5721,7 @@ func (p *agentInferenceProvider) buildSelector(ctx context.Context) *router.Sele
 	}
 	// Public-only is a per-request Claude-surface choice; general inference
 	// has no /model to pick it from.
-	return p.buildSelectorWith(ctx, pref, false)
+	return p.buildSelectorWith(ctx, nodeSelection{pref: pref})
 }
 
 // baseRouterInputs assembles the router Inputs shared by every
@@ -5750,8 +5753,10 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 // routing preference instead of the operator's live worker preference.
 // The Claude surface's directiveSelector uses it to apply a per-class
 // preference (#647) without duplicating the provider's Inputs wiring.
-func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref state.RoutingPreference, publicOnly bool) *router.Selector {
-	return router.NewSelector(p.selectorInputs(ctx, pref, publicOnly))
+func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, node nodeSelection) *router.Selector {
+	in := p.selectorInputs(ctx, node.pref, node.publicOnly)
+	in.PinnedStrict = node.strictPin
+	return router.NewSelector(in)
 }
 
 // selectorInputs is the LOOPBACK posture's Inputs, split out from
