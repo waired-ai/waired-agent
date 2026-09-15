@@ -120,7 +120,7 @@ func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, s
 		return
 	}
 	if len(f.CandidateList) == 0 {
-		s.logger.Debug("call_me_maybe with empty candidate list", "device_id", f.SrcDeviceID)
+		s.logger.Debug("call_me_maybe with empty candidate list", "device_id", s.logIDForDevice(f.SrcDeviceID))
 		return
 	}
 	if len(f.CandidateList) > wireframe.MaxCandidateListLen {
@@ -128,7 +128,7 @@ func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, s
 		// this cap when AEAD opens, but a future codec change shouldn't
 		// open a DoS shape.
 		s.logger.Debug("call_me_maybe candidate list over cap",
-			"device_id", f.SrcDeviceID, "count", len(f.CandidateList))
+			"device_id", s.logIDForDevice(f.SrcDeviceID), "count", len(f.CandidateList))
 		return
 	}
 	s.mu.Lock()

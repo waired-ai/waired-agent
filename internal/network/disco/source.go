@@ -65,3 +65,16 @@ func (s *Service) logNameForDevice(deviceID string) string {
 	}
 	return ""
 }
+
+// logIDForDevice is the device_id log attribute for a frame's claimed
+// sender: its log name when the device is in the current peer set (the
+// Public Share grant pseudonym where there is one, spec §8.5), the raw id
+// otherwise — the same trade inboundSource documents. The early
+// call_me_maybe rejections printed f.SrcDeviceID before any lookup, so a
+// known public peer's real id reached the log (waired-agent#1368).
+func (s *Service) logIDForDevice(deviceID string) string {
+	if name := s.logNameForDevice(deviceID); name != "" {
+		return name
+	}
+	return deviceID
+}

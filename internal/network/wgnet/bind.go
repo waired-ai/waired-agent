@@ -76,6 +76,14 @@ type MultiplexBind struct {
 	// netmap application; nil until the first cross-network peer.
 	peerNets atomic.Pointer[map[string]string]
 
+	// peerLogNames maps deviceID → the identifier to print in logs for a
+	// peer present under a Public Share or Team Share grant: its grant
+	// pseudonym or teammate label. Those peers' device ids belong to
+	// another account and stay out of logs (public share spec §8.5,
+	// waired-agent#1368). Replaced wholesale from the reconciler with
+	// peerNets; own-network peers never appear and are logged by id.
+	peerLogNames atomic.Pointer[map[string]string]
+
 	// discoIn fans out incoming disco frames demultiplexed from either
 	// the WG UDP socket (direct UDP path) or any active relay session
 	// (relay-tunnelled disco). The disco subsystem
@@ -291,6 +299,74 @@ func (b *MultiplexBind) SetPeerNetworks(nets map[string]string) {
 		cp[k] = v
 	}
 	b.peerNets.Store(&cp)
+}
+
+// SetPeerLogNames replaces the deviceID → log name table for grant peers.
+// Called from the reconciler on every netmap application, next to
+// SetPeerNetworks.
+func (b *MultiplexBind) SetPeerLogNames(names map[string]string) {
+	if len(names) == 0 {
+		b.peerLogNames.Store(nil)
+		return
+	}
+	cp := make(map[string]string, len(names))
+	for k, v := range names {
+		cp[k] = v
+	}
+	b.peerLogNames.Store(&cp)
+}
+
+// logIDForDevice is how a log line names a relay sender or destination:
+// its log name when it is a grant peer, the device id otherwise. An id
+// the current map does not carry is printed as it is — the same trade
+// the disco service documents on inboundSource.
+func (b *MultiplexBind) logIDForDevice(deviceID string) string {
+	if m := b.peerLogNames.Load(); m != nil {
+		if name, ok := (*m)[deviceID]; ok && name != "" {
+			return name
+		}
+	}
+	return deviceID
+}
+
+// relaySenderName is how the foreign-key report names a handshake that
+// arrived over a relay session: by the sender's log name, since the relay
+// envelope carries its device id and nothing else.
+func (b *MultiplexBind) relaySenderName(srcDeviceID string) string {
+	if srcDeviceID == "" {
+		return "unidentified sender via relay"
+	}
+	return b.logIDForDevice(srcDeviceID) + " via relay"
+}
+
+// redactRelayEndpoints rewrites the device id in each relay endpoint
+// string in msg ("relay:<url>#dst=<deviceID>&nk=<key>", relayEndpoint's
+// DstToString) to its log name when it is a grant peer. wireguard-go
+// prints that string in a handful of debug lines about invalid
+// handshakes and cookies, and the bridge in wireguardLogger passes
+// every line through here.
+func (b *MultiplexBind) redactRelayEndpoints(msg string) string {
+	const marker = "#dst="
+	if b.peerLogNames.Load() == nil || !strings.Contains(msg, marker) {
+		return msg
+	}
+	var out strings.Builder
+	rest := msg
+	for {
+		i := strings.Index(rest, marker)
+		if i < 0 {
+			out.WriteString(rest)
+			return out.String()
+		}
+		start := i + len(marker)
+		end := start
+		for end < len(rest) && rest[end] != '&' && rest[end] != ' ' {
+			end++
+		}
+		out.WriteString(rest[:start])
+		out.WriteString(b.logIDForDevice(rest[start:end]))
+		rest = rest[end:]
+	}
 }
 
 // peerNetworkFor returns the foreign home network for dstDeviceID, or
@@ -657,10 +733,7 @@ func (b *MultiplexBind) fanInRelay(ctx context.Context, h *relayHandle) {
 				continue
 			}
 			b.noteForeignKeyHandshake(in.Payload, func() string {
-				if in.SrcDeviceID == "" {
-					return "unidentified sender via relay"
-				}
-				return in.SrcDeviceID + " via relay"
+				return b.relaySenderName(in.SrcDeviceID)
 			})
 			ep := b.lookupOrMakeEndpoint(h, in.SrcDeviceID)
 			select {

@@ -29,6 +29,13 @@ type fakeEngine struct {
 	updateCalls    int
 	handshakeByPub map[string]time.Time
 	peerNets       map[string]string
+	peerLogNames   map[string]string
+}
+
+func (f *fakeEngine) SetPeerLogNames(names map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.peerLogNames = names
 }
 
 func (f *fakeEngine) SetPeerNetworks(nets map[string]string) {

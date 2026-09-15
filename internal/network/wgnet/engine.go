@@ -102,6 +102,15 @@ func (e *Engine) SetPeerNetworks(nets map[string]string) {
 	}
 }
 
+// SetPeerLogNames forwards the grant peers' log names to the relay bind,
+// which names relay senders and endpoints in its own log lines and in
+// wireguard-go's. No-op on engines built without relay support.
+func (e *Engine) SetPeerLogNames(names map[string]string) {
+	if e.bind != nil {
+		e.bind.SetPeerLogNames(names)
+	}
+}
+
 // LoadPrivateKey reads a base64-encoded WireGuard private key file.
 func LoadPrivateKey(path string) ([]byte, error) {
 	body, err := os.ReadFile(path)
@@ -150,7 +159,11 @@ func NewEngine(cfg Config) (*Engine, error) {
 	} else {
 		bind = conn.NewStdNetBind()
 	}
-	wgLogger := wireguardLogger(cfg.Logger.With("component", "wireguard", "self", cfg.SelfName))
+	var redact func(string) string
+	if muxBind != nil {
+		redact = muxBind.redactRelayEndpoints
+	}
+	wgLogger := wireguardLogger(cfg.Logger.With("component", "wireguard", "self", cfg.SelfName), redact)
 	dev := device.NewDevice(tunDev, bind, wgLogger)
 
 	peers := make([]UAPIPeer, 0, len(cfg.Peers))
@@ -378,16 +391,28 @@ func (e *Engine) Close() error {
 // fmt.Sprintf is evaluated at the call site whatever slog does with the
 // result afterwards, the whole cost was being paid at info level too, for
 // a string that was then dropped.
-func wireguardLogger(l *slog.Logger) *device.Logger {
+//
+// redact, when non-nil, rewrites each formatted line before it is logged.
+// The engine passes the relay bind's redactRelayEndpoints, because
+// wireguard-go prints a relay endpoint — which carries the peer's device
+// id — in some of its lines.
+func wireguardLogger(l *slog.Logger, redact func(string) string) *device.Logger {
+	render := func(format string, args ...any) string {
+		msg := fmt.Sprintf(format, args...)
+		if redact != nil {
+			msg = redact(msg)
+		}
+		return msg
+	}
 	return &device.Logger{
 		Verbosef: func(format string, args ...any) {
 			if !l.Enabled(context.Background(), slog.LevelDebug) {
 				return
 			}
-			l.Debug(fmt.Sprintf(format, args...))
+			l.Debug(render(format, args...))
 		},
 		Errorf: func(format string, args ...any) {
-			l.Error(fmt.Sprintf(format, args...))
+			l.Error(render(format, args...))
 		},
 	}
 }
