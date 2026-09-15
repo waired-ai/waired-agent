@@ -42,6 +42,13 @@ import (
 // distinction that failed.
 type fakeSetupProvider struct {
 	mu sync.Mutex
+	// buildApplies records every setupApplyModel call as model|variant|kv.
+	buildApplies []string
+	// chosenVariant / chosenKV are the build choice the last apply
+	// published; buildNotServing scripts a switch still in flight
+	// (waired-agent#1348).
+	chosenVariant, chosenKV string
+	buildNotServing         bool
 	// engineStateCalls records every setupEngineState call in order.
 	engineStateCalls []engineStateCall
 	// engineHealthCalls records every setupEngineHealth call, for the same
@@ -363,6 +370,18 @@ func (f *fakeSetupProvider) appliedModels() []string {
 	return append([]string(nil), f.applies...)
 }
 
+func (f *fakeSetupProvider) setupBuildChosen(_ string, variantID, kvType string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chosenVariant == variantID && f.chosenKV == kvType
+}
+
+func (f *fakeSetupProvider) setupBuildServing(string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.buildNotServing
+}
+
 func (f *fakeSetupProvider) setupCanonicalModelID(name string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -376,10 +395,11 @@ func (f *fakeSetupProvider) setupCanonicalModelID(name string) string {
 // split SwapPreferredModel makes. A fake that always pulled would hide
 // the "already on disk, so nothing happened" half of #230; one that
 // never pulled would hide the wizard's progress bar.
-func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model string) (bool, error) {
+func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model, variantID, kvType string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applies = append(f.applies, model)
+	f.buildApplies = append(f.buildApplies, model+"|"+variantID+"|"+kvType)
 	if f.applyErr != nil {
 		if !errors.Is(f.applyErr, errSwapNeedsRestart) {
 			return false, f.applyErr
@@ -390,6 +410,7 @@ func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model string) (bo
 		return true, nil
 	}
 	f.preferred = model
+	f.chosenVariant, f.chosenKV = variantID, kvType
 	if f.modelState == catalog.ModelStateReady {
 		// Weights already local, so the real swap flips Active now
 		// (SwapPreferredModel's requestEngineReconcile arm). Mirrored
@@ -1187,7 +1208,7 @@ func TestSetupApplyModel_RealAdapterPinsAndActivates(t *testing.T) {
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	if _, err := p.setupApplyModel(context.Background(), "light"); err != nil {
+	if _, err := p.setupApplyModel(context.Background(), "light", "", ""); err != nil {
 		t.Fatalf("setupApplyModel: %v", err)
 	}
 

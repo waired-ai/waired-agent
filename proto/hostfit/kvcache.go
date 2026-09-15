@@ -19,20 +19,19 @@ var (
 	vllmKVLadder   = []string{catalog.KVCacheFP8, catalog.KVCacheFP16}
 )
 
-// OllamaDefaultKVCacheType is the KV-cache type the serve tuning exports
-// when nothing pins one. The recommendation and the capacity gate price
-// the cache with it, because the recommendation reads the type the tuning
-// actually serves (decision 1 of
-// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
-// It is q8_0 today; waired-ai/waired-agent#1348 moves the default to q4_0,
-// and that change belongs here and in the tuning together. The build-aware
-// answer the tuning will read, KVCacheChoices and ResolveKVCacheType below,
-// lands first and is not yet what anything prices with.
+// OllamaDefaultKVCacheType is the KV-cache type the ollama serve tuning
+// exports on this host when nothing narrows it: q4_0 wherever there is
+// GPU-addressable memory, f16 on a CPU-only host (waired-ai/waired-agent#29:
+// quantised KV needs flash attention, which buys nothing on the CPU).
 //
-// The host is a parameter although nothing reads it yet: the default
-// ladder (#1348) depends on the hardware, and the signature is published.
-func OllamaDefaultKVCacheType(_ Host) string {
-	return catalog.KVCacheQ8_0
+// It does not know the build. A variant whose kv_cache_types does not
+// allow q4_0 serves the next rung up, so a caller holding a variant asks
+// ResolveKVCacheType instead; this is the host's half of that answer.
+func OllamaDefaultKVCacheType(h Host) string {
+	if !h.HasGPU() {
+		return catalog.KVCacheF16
+	}
+	return catalog.KVCacheQ4_0
 }
 
 // KVCacheChoices lists the KV-cache types a user may choose for variant v

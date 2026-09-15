@@ -225,6 +225,16 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// host's configuration, and a host with local AI off still
 			// consumes from its teammates.
 			signer.CapabilityTeamShareV1,
+			// variant-choice-v1 declares that this BUILD understands the
+			// build-choice fields (waired-agent#1348): the served build and
+			// KV-cache type on peer entries, and on its own entry the
+			// chosen build, the chosen KV-cache type and the stored builds
+			// to remove — all of which it honours. Unconditional for the
+			// byte-identity reason: a host with local AI off still verifies
+			// peer entries that carry the served build. The control plane
+			// injects the desired half only beside the onboarding
+			// capabilities, whose reconciler applies it.
+			signer.CapabilityVariantChoiceV1,
 		}
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2

@@ -58,7 +58,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | `qwen3.5-122b-a10b` | Qwen3.5 122B-A10B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 122B / A10B | ollama | 1 |
 | `qwen3.5-35b-a3b` | Qwen3.5 35B-A3B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 1 |
 | `qwen3.6-35b-a3b` | Qwen3.6 35B-A3B (MoE, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 4 |
-| `qwen3.8-flash-next` | Qwen3.8 Flash Next (180B-A6B, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 180B / A6B | ollama | 1 |
+| `qwen3.8-flash-next` | Qwen3.8 Flash Next (177B-A6B, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 176.9B / A6B | ollama | 1 |
 
 #### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
 
@@ -97,24 +97,24 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.5-4b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 42 | 4 | 3.4 | 8 | — | 4B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:4b-q4_K_M | — |
 | `qwen3.5-9b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 52 | 4 | 6.6 | 12 | — | 9B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:9b-q4_K_M | — |
 | `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 69 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
-| `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 68 | 4 | 16.3 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
+| `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 68 | 4 | 17.4 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
 | `qwen3.8-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 17.7 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.8:27b-mtp-q4_K_M | 0.32.13 |
-| `qwen3.8-27b` | `q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 66 | 3 | 13.2 | 16 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL | 0.33.3 |
-| `qwen3.8-27b` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 65 | 2 | 9.8 | 12 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL | 0.33.3 |
+| `qwen3.8-27b` | `q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 66 | 3 | 14.1 | 16 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL | 0.33.3 |
+| `qwen3.8-27b` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 65 | 2 | 10.8 | 12 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL | 0.33.3 |
 
 **MoE（総 / アクティブ）**
 
 | model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `gpt-oss-120b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 85 | 4 | 62.0 | 96 | — | 116.8B / A5.1B | sliding_window | 36,864 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=E | ollama:gpt-oss:120b | — |
+| `gpt-oss-120b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 85 | 4 | 65.4 | 96 | — | 116.8B / A5.1B | sliding_window | 36,864 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=E | ollama:gpt-oss:120b | — |
 | `gpt-oss-20b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 60 | 4 | 14.0 | 16 | — | 20.9B / A3.6B | sliding_window | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:gpt-oss:20b | — |
 | `qwen3.5-122b-a10b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 83 | 4 | 81.0 | 128 | — | 122B / A10B | hybrid_mamba | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:122b-a10b-q4_K_M | — |
 | `qwen3.5-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 73 | 4 | 24.0 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:35b-a3b-q4_K_M | — |
 | `qwen3.6-35b-a3b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 90 | 4 | 22.6 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 89 | 4 | 23.9 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-q4_K_M | — |
-| `qwen3.6-35b-a3b` | `mtp-q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 87 | 3 | 17.2 | 24 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL | 0.33.3 |
-| `qwen3.6-35b-a3b` | `mtp-q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 86 | 2 | 12.6 | 16 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL | 0.33.3 |
-| `qwen3.8-flash-next` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 91 | 2 | 55.1 | 128 | — | 180B / A6B | hybrid_mamba | 27,648 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL | 0.33.3 |
+| `qwen3.6-35b-a3b` | `mtp-q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 87 | 3 | 18.1 | 24 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL | 0.33.3 |
+| `qwen3.6-35b-a3b` | `mtp-q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 86 | 2 | 13.5 | 16 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL | 0.33.3 |
+| `qwen3.8-flash-next` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 91 | 2 | 79.8 | 128 | — | 176.9B / A6B | hybrid_mamba | 27,648 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL | 0.33.3 |
 
 #### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
 

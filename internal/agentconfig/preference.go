@@ -25,6 +25,16 @@ type Preference struct {
 	ModelID string    `json:"model_id"`
 	SetAt   time.Time `json:"set_at,omitempty"`
 
+	// VariantID and KVCacheType are the build of ModelID and the KV-cache
+	// type that were chosen with it (waired-agent#1348): today only a
+	// control-plane instruction names them. Empty is "no instruction" —
+	// the model's default build where this host is recommended it, the
+	// build it can hold where not, and the default KV-cache type
+	// (router.FamilyDefaultBuild, hostfit.ResolveKVCacheType). Both are
+	// meaningful only beside ModelID and are cleared with it.
+	VariantID   string `json:"variant_id,omitempty"`
+	KVCacheType string `json:"kv_cache_type,omitempty"`
+
 	// None records that the operator chose to run WITHOUT a local model
 	// (install-flow "don't download a model now", waired-agent#586;
 	// owner-ruled 2026-08-08, waired-ai/waired#1067). Mutually exclusive
@@ -166,4 +176,6 @@ func ApplyPreferenceOverride(c *InferenceConfig, p Preference) {
 		return
 	}
 	c.PreferredModelID = p.ModelID
+	c.PreferredVariantID = p.VariantID
+	c.PreferredKVCacheType = p.KVCacheType
 }

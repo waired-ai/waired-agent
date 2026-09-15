@@ -69,16 +69,20 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		// is now what the host installs, not what it is refused.
 		{8, "qwen3.5-2b", "q4-gguf", 27,
 			"#448: the 4b's real KV (32768) leaves ~120k on the 6144 MB budget, below the ~200k floor — 2b is the best fit that holds its window, and since #522 it is what this host installs"},
-		// MOVED from qwen3.5-4b (q42) by waired-agent#1337: on a 16 GB Mac
-		// the engine's own fit projected 7,697 MiB for the 4b at 200,704
-		// with q8_0 KV plus a 2,622 MiB target, over a 9,216 MB budget.
-		{12, "qwen3.5-2b", "q4-gguf", 27,
-			"#1337: the 4b needs ~10.3 GB for the ~200k window with q8_0 KV (fit log on a 16 GB Mac), over the 9216 MB budget — 2b holds its window"},
-		// MOVED from qwen3.5-9b (q52) by waired-agent#1337: the 9b's window
-		// figure on Metal is ~13.4 GB at q8_0 (the 4b's fit log scaled by
-		// its weights and projector), over the 12,288 MB budget; the 9b
-		// returns here with q4_0 KV (waired-agent#1348).
-		{16, "qwen3.5-4b", "q4-gguf", 42, "#1337: the 9b's ~200k window needs ~13.4 GB with q8_0 KV here; the 4b's 10.3 GB fits (measured on a real Apple M4, 16 GB)"},
+		// MOVED from qwen3.5-4b (q42) to the 2b by waired-agent#1337: on a
+		// 16 GB Mac the engine's own fit projected 7,697 MiB for the 4b at
+		// 200,704 with q8_0 KV plus a 2,622 MiB target, over a 9,216 MB
+		// budget. BACK to the 4b with the q4_0 cache (waired-agent#1348):
+		// the estimate's KV term for the 4b at that window drops by
+		// 1,568 MiB, which brings the ~10.3 GB to ~8.7 GB.
+		{12, "qwen3.5-4b", "q4-gguf", 42,
+			"#1348: with q4_0 KV the 4b's ~200k window needs ~8.7 GB (the #1337 fit log less 1.5 GB of KV), under the 9216 MB budget"},
+		// MOVED from qwen3.5-9b (q52) to the 4b by waired-agent#1337: the
+		// 9b's window figure on Metal is ~13.4 GB at q8_0 (the 4b's fit log
+		// scaled by its weights and projector), over the 12,288 MB budget.
+		// BACK to the 9b with the q4_0 cache (waired-agent#1348), as that
+		// note foresaw: the KV term drops by the same 1,568 MiB, ~11.9 GB.
+		{16, "qwen3.5-9b", "q4-gguf", 52, "#1348: with q4_0 KV the 9b's ~200k window needs ~11.9 GB here, under the 12288 MB budget"},
 		// PROMOTED from qwen3.5-9b (q52) by waired-agent#1265, which is
 		// the point of that lane: the ladder's own flagship now ships a
 		// build this machine can hold. The Q4 builds of qwen3.6-35b-a3b

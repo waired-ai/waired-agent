@@ -38,10 +38,6 @@ var capabilityNotDeclared = map[string]string{
 	"CapabilityOnboardingV2": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV3": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV4": "conditional: appended when OnboardingCapable",
-	// The wire for a user-chosen build and KV-cache type landed ahead of
-	// the agent that honours it; declaring it before then would report a
-	// switch the device does not perform (waired-ai/waired-agent#1348).
-	"CapabilityVariantChoiceV1": "not declared until the agent serves DesiredVariantID / DesiredKVCacheType (#1348)",
 }
 
 // unconditionalCapabilities returns the names in the `caps := []string{…}`

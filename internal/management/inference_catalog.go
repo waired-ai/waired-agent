@@ -330,6 +330,12 @@ type CatalogFamily struct {
 	// catalog poll. nil only when no variant supports the host's engine.
 	Recommended *CatalogSpec `json:"recommended,omitempty"`
 
+	// ServedQuantization is the quantization of the build this host is
+	// serving, set on the active row only when that build is not the one
+	// the model would be served as without a choice — a user chose it
+	// (waired-agent#1348). The row's specs then describe the served build.
+	ServedQuantization string `json:"served_quantization,omitempty"`
+
 	// ServingWarning is what the RUNNING engine recorded about this model
 	// on this computer, verbatim (RuntimeStatus.TuningWarning). Present
 	// only on the active row: one engine serves one model, so it is the
@@ -476,19 +482,37 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	})
 
 	for _, m := range manifests {
-		fit := router.FamilyBestFit(m, engine, engineVersion, hw)
+		// The build a model named without one is served as: the owner's
+		// default where this host is recommended it, the build it can
+		// hold where not (waired-agent#1348).
+		fit := router.FamilyDefaultBuild(m, engine, engineVersion, hw)
+		// The row of the model this host is serving describes the build it
+		// is serving, which a user's choice can make a different one
+		// (decision 5 of
+		// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
+		servedQuantization := ""
+		if status.Active != nil && m.ModelID == activeModelID && status.Active.VariantID != "" &&
+			status.Active.VariantID != fit.Variant.VariantID {
+			for _, v := range m.Variants {
+				if v.VariantID == status.Active.VariantID {
+					fit = router.FamilyBuildFit(m, v, engine, engineVersion, hw)
+					servedQuantization = v.Quantization
+				}
+			}
+		}
 		presentation := fit.Fit
 		f := CatalogFamily{
-			ModelID:         m.ModelID,
-			DisplayName:     m.DisplayName,
-			ModelSize:       hostfit.ModelSize(m),
-			Fits:            fit.Fits,
-			Active:          m.ModelID == activeModelID,
-			Preferred:       pref.ModelID != "" && m.ModelID == pref.ModelID,
-			Downloaded:      downloaded[m.ModelID],
-			Downloading:     downloading[m.ModelID],
-			Fit:             &presentation,
-			RecommendedPick: recommendedID != "" && m.ModelID == recommendedID,
+			ModelID:            m.ModelID,
+			DisplayName:        m.DisplayName,
+			ModelSize:          hostfit.ModelSize(m),
+			Fits:               fit.Fits,
+			Active:             m.ModelID == activeModelID,
+			Preferred:          pref.ModelID != "" && m.ModelID == pref.ModelID,
+			Downloaded:         downloaded[m.ModelID],
+			Downloading:        downloading[m.ModelID],
+			Fit:                &presentation,
+			RecommendedPick:    recommendedID != "" && m.ModelID == recommendedID,
+			ServedQuantization: servedQuantization,
 		}
 		// Read from the ledger rather than off a Pick: the ranking
 		// REPLACES its candidate set at each rung, so a model excluded

@@ -8,11 +8,19 @@
   ],
   "license": "apache-2.0",
   "context_length": 262144,
+  "default_variant": {
+    "ollama": "mtp-q4-gguf"
+  },
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "ollama", "fallback": []},
   "variants": [
     {
       "variant_id": "mtp-q4-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
@@ -47,6 +55,11 @@
     },
     {
       "variant_id": "q4-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
@@ -78,10 +91,15 @@
     },
     {
       "variant_id": "mtp-q3-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "UD-Q3_K_XL",
       "runtime_support": ["ollama"],
-      "estimated_weight_gb": 17.23,
+      "estimated_weight_gb": 18.13,
       "min_ram_gb": 24,
       "min_engine_version": "0.33.3",
       "quality_tier": 87,
@@ -109,14 +127,19 @@
         "repeating_bytes": 15835048448,
         "expert_bytes": 14237564928
       },
-      "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL"}
+      "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL", "digest": "sha256:a40a7c335eab9f3b02d45f49759bfab063e6000bd9e8d13b1df3ef3adf2a0c1d"}
     },
     {
       "variant_id": "mtp-q2-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "UD-Q2_K_XL",
       "runtime_support": ["ollama"],
-      "estimated_weight_gb": 12.57,
+      "estimated_weight_gb": 13.48,
       "min_ram_gb": 16,
       "min_engine_version": "0.33.3",
       "quality_tier": 86,
@@ -144,7 +167,7 @@
         "repeating_bytes": 11604593152,
         "expert_bytes": 10487857152
       },
-      "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL"}
+      "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL", "digest": "sha256:16c1a50b12582a7bc5b689c7053224351537f4c7cadf294fcc720f474fcd0a83"}
     }
   ],
   "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}

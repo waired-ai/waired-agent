@@ -60,6 +60,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityMeshShareV1,
 				signer.CapabilityTeamShareV1,
+				signer.CapabilityVariantChoiceV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
 				signer.CapabilityOnboardingV3,
@@ -90,6 +91,9 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				// team-share-v1 in both rows: a host with local AI off still
 				// consumes from its teammates (waired#1374).
 				signer.CapabilityTeamShareV1,
+				// variant-choice-v1 in both rows: peer entries carry the
+				// served build whatever this host serves (#1348).
+				signer.CapabilityVariantChoiceV1,
 			},
 			absent: []string{
 				signer.CapabilityOnboardingV1,

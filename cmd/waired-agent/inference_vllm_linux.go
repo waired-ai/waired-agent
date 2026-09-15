@@ -128,8 +128,19 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 	// adds more, so the first row would have been served to hosts it does
 	// not fit. The ollama side asked the same question and was moved onto
 	// FamilyBestFit in waired-agent#1265; this is the vLLM half of it.
-	if v, ok := p.bestVariantForHost(ctx, m, catalog.RuntimeVLLM, engineVersion); ok {
-		return m, v, true, nil
+	//
+	// A build the user chose is served as chosen when this engine can load
+	// it, and with no choice the owner's default build is served wherever
+	// this host is recommended it (waired-agent#1348).
+	if want := p.chosenVariantFor(m.ModelID); want != "" {
+		if v, ok := variantByID(m, want); ok && router.VariantLoadable(v, catalog.RuntimeVLLM, engineVersion) {
+			return m, v, true, nil
+		}
+	}
+	if p.profiler != nil {
+		if best := router.FamilyDefaultBuild(m, catalog.RuntimeVLLM, engineVersion, p.Hardware(ctx)); best.Fits {
+			return m, best.Variant, true, nil
+		}
 	}
 	// No variant FITS. Falling back to the loadable-at-all answer keeps
 	// today's behaviour rather than adding a refusal: min_vram_mb is a
@@ -508,7 +519,11 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// The serve-time KV factor must match what the engine will actually
 	// use so the #675 clamp sizes correctly (an fp8 host with an f16-sized
 	// window would leave capacity on the table; the reverse would abort).
-	kvCacheDType, kvFactor := resolveVLLMKVCache(hwProfile, p.cfg.VLLMDisableFP8KV)
+	// A user who chose fp16 is served fp16 exactly as the operator opt-out
+	// is (waired-agent#1348): the choice and the setting are the same
+	// instruction from two places.
+	kvCacheDType, kvFactor := resolveVLLMKVCache(hwProfile,
+		p.cfg.VLLMDisableFP8KV || p.effectiveBuildChoice().KVCacheType == catalog.KVCacheFP16)
 	// #675: clamp --max-model-len to what the utilization budget fits
 	// instead of forwarding the manifest window verbatim (an unfittable
 	// window aborts vLLM startup — no spill-style degradation exists).

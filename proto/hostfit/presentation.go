@@ -265,10 +265,10 @@ type Presentation struct {
 	VariantID    string `json:"variant_id,omitempty"`
 	Quantization string `json:"quantization,omitempty"`
 
-	// KVCacheType is the KV-cache type the ollama figures above were priced
-	// with (catalog.KVCache*). A console offering the type as a choice
-	// projects one row per type (ModelProjection.KVCacheType). Empty on
-	// the vLLM path.
+	// KVCacheType is the KV-cache type this row was decided for
+	// (catalog.KVCache*): f16 / q8_0 / q4_0 on ollama, fp16 / fp8 on vLLM.
+	// A console offering the type as a choice projects one row per
+	// hostfit.KVCacheChoices entry (ModelProjection.KVCacheType).
 	KVCacheType string `json:"kv_cache_type,omitempty"`
 
 	// GPULayers / TotalLayers predict llama.cpp's "offloaded N/M layers"
@@ -408,9 +408,10 @@ type ModelProjection struct {
 	// tensor-parallel and fp8-KV rules. Empty is permissive.
 	GPUs []signer.HardwareGPUSummary
 
-	// KVCacheType prices the ollama row with this KV-cache type
-	// (catalog.KVCache*). Empty is the type the serve tuning exports by
-	// default (OllamaDefaultKVCacheType).
+	// KVCacheType prices the row with this KV-cache type (catalog.KVCache*).
+	// A type this host and build cannot serve, and an empty one, resolve
+	// to the default the serve tuning exports (ResolveKVCacheType), so the
+	// row always names the type it was actually priced with.
 	KVCacheType string `json:"-"`
 }
 
@@ -423,10 +424,11 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 		QualityTier: v.QualityTier, ModelSize: ModelSize(m),
 		VariantID: v.VariantID, Quantization: v.Quantization,
 	}
-	kvType := in.KVCacheType
-	if kvType == "" {
-		kvType = OllamaDefaultKVCacheType(h)
-	}
+	// The type the row is priced and labelled with: the one asked for when
+	// the host and the build allow it, the default otherwise
+	// (ResolveKVCacheType), so a build that does not list q4_0 is priced at
+	// the q8_0 it would actually be served with.
+	kvType := ResolveKVCacheType(engine, v, h, in.GPUs, in.KVCacheType)
 	var got Verdict
 	switch engine {
 	case catalog.RuntimeOllama:
@@ -457,7 +459,7 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 	case catalog.RuntimeVLLM:
 		got = VLLMFit(v, budgetMB)
 		out.RequiredResidentMB = v.MinVRAMMB
-		out.KVCacheType = VLLMKVCacheType(in.GPUs, in.KVCacheType)
+		out.KVCacheType = kvType
 	default:
 		return Presentation{QualityTier: v.QualityTier, ModelSize: ModelSize(m)}
 	}

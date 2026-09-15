@@ -49,6 +49,23 @@ type State struct {
 	Endpoints         map[string]EndpointState  `json:"endpoints"`
 	ExternalManifests []ExternalManifestRef     `json:"external_manifests,omitempty"`
 
+	// StagedVariants holds, per model, a build that is not the one the
+	// model's Models row serves: one being downloaded, or downloaded and
+	// waiting for the switch that serves it (waired-agent#1348). A switch
+	// between builds of the same model must not write the new build into
+	// Models before the engine is moved onto it — Models and Active are
+	// read together, and a row naming a tag the engine does not run left
+	// the engine with no advertised model (#656). The switch moves the
+	// staged row into Models in the same update that moves Active.
+	StagedVariants map[string]ModelState `json:"staged_variants,omitempty"`
+
+	// RetainedVariants holds, per model, builds still on disk that a
+	// switch to another build of the same model left behind. They are
+	// reported to the control plane so the user can be offered their
+	// removal, switching back to one needs no download, and deleting the
+	// model deletes them too (waired-agent#1348).
+	RetainedVariants map[string][]ModelState `json:"retained_variants,omitempty"`
+
 	// DismissedRecommendations records benchmark step-down suggestions
 	// (issue #133) the user declined, so a re-benchmark of the same
 	// pairing does not re-nag. Keyed by DismissalKey(activeVariantSHA,

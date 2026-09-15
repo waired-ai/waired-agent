@@ -211,6 +211,13 @@ func engineSupports(v catalog.Variant, engine string) bool {
 // engineVersion >= floor — unknown ("") fails closed, because serving
 // a variant the engine cannot load fails server-side with no useful
 // indication (the qwen3.6 mtp incident).
+// VariantLoadable reports whether engine at engineVersion can load v: it
+// is one of the build's runtimes, and any version floor is met by a known
+// version. FirstPullableVariant's test for a single build.
+func VariantLoadable(v catalog.Variant, engine, engineVersion string) bool {
+	return engineSupports(v, engine) && engineVersionSatisfies(v, engineVersion)
+}
+
 func engineVersionSatisfies(v catalog.Variant, engineVersion string) bool {
 	if v.MinEngineVersion == "" {
 		return true

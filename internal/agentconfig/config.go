@@ -383,6 +383,13 @@ type InferenceConfig struct {
 	// the chosen engine and host VRAM/RAM).
 	PreferredModelID string `json:"preferred_model_id"`
 
+	// PreferredVariantID / PreferredKVCacheType are the build and KV-cache
+	// type chosen with PreferredModelID. Never read from agent.json: they
+	// come only from preferred-model.json (ApplyPreferenceOverride), which
+	// is where a choice is recorded (waired-agent#1348).
+	PreferredVariantID   string `json:"-"`
+	PreferredKVCacheType string `json:"-"`
+
 	// InteractiveFloorTokps is RETIRED (waired-ai/waired-agent#1341;
 	// decision 3 of docs/decisions/20260913/2245). It was the decode rate
 	// below which the agent recommended a lighter model; the verdict is now

@@ -92,3 +92,16 @@ func TestResolveKVCacheType(t *testing.T) {
 		})
 	}
 }
+
+// TestOllamaDefaultKVCacheType pins the host half of the default.
+func TestOllamaDefaultKVCacheType(t *testing.T) {
+	if got := hostfit.OllamaDefaultKVCacheType(hostfit.Host{GPUCount: 1, VRAM0MB: 8000}); got != catalog.KVCacheQ4_0 {
+		t.Errorf("GPU host default = %q, want q4_0", got)
+	}
+	if got := hostfit.OllamaDefaultKVCacheType(hostfit.Host{UnifiedMemory: true, RAMTotalGB: 32}); got != catalog.KVCacheQ4_0 {
+		t.Errorf("unified-memory host default = %q, want q4_0", got)
+	}
+	if got := hostfit.OllamaDefaultKVCacheType(hostfit.Host{RAMTotalGB: 32}); got != catalog.KVCacheF16 {
+		t.Errorf("CPU-only host default = %q, want f16", got)
+	}
+}

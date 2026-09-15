@@ -303,12 +303,14 @@ func TestComputeOllamaTuning(t *testing.T) {
 		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
 			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
 		}
-		// PRODUCT CONTRACT: a genuinely tight CPU host KEEPS the quantized KV
-		// cache. f16 here affords only ~341k tokens, short of 2 x 262144, so
-		// quantizing is buying real context. This pins that waired-agent#29's
-		// fix is "only when it buys context", not "CPU means f16".
-		if got.KVCacheType != "q8_0" || !got.FlashAttention {
-			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on a tight CPU host",
+		// PRODUCT CONTRACT (decision 1 of
+		// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md):
+		// a CPU-only host serves f16 even where quantizing would buy window.
+		// It used to keep q8_0 here ("only when it buys context"); the owner
+		// decision fixes CPU-only at f16, off the path waired-agent#29's
+		// segfault lives on.
+		if got.KVCacheType != "f16" || got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want f16/false on a CPU-only host",
 				got.KVCacheType, got.FlashAttention)
 		}
 	})
@@ -377,12 +379,13 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	// PRODUCT CONTRACT: never change behaviour on a host we cannot size.
-	t.Run("unknown-sizing-keeps-quantized-kv", func(t *testing.T) {
+	// PRODUCT CONTRACT: never guess a window on a host we cannot size. The
+	// cache type on a CPU-only host is f16 whether or not it can be sized.
+	t.Run("unknown-sizing-keeps-the-engine-window", func(t *testing.T) {
 		v := catalog.Variant{VariantID: "unknown", RuntimeSupport: []string{catalog.RuntimeOllama}}
 		got := computeOllamaTuning(m, v, hardware.Profile{RAMTotalGB: 32}, ollamaKVAuto, ollamaObservedServe{})
-		if got.KVCacheType != "q8_0" || !got.FlashAttention {
-			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true when the sizing inputs are unknown",
+		if got.KVCacheType != "f16" || got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want f16/false on a CPU-only host",
 				got.KVCacheType, got.FlashAttention)
 		}
 		if got.ContextLength != 0 {
@@ -576,8 +579,15 @@ func TestPlanOllamaKV(t *testing.T) {
 		{"pin-f16", tm, tv, ciRunner16GB(), "f16", ollamaKVPlan{Type: "f16"}},
 		{"auto-cpu-roomy", tm, tv, ciRunner16GB(), ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
 		{"auto-cpu-at-boundary", tm, tv, atBoundary, ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
-		{"auto-cpu-below-boundary", tm, tv, belowBoundary, ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		// CPU-only is f16 whatever the budget (decision 1 of
+		// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md,
+		// #29): a tight host no longer trades the CPU + flash-attention +
+		// quantized-KV path for window.
+		{"auto-cpu-below-boundary", tm, tv, belowBoundary, ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
+		// A build that does not list q4_0 serves the next rung up.
 		{"auto-gpu-via-gpus", m, m.Variants[1], discrete24GB(), ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		// The default where the build lists it (#1348).
+		{"auto-gpu-q4_0-listed", m, withKVTypes(m.Variants[1], "q4_0", "q8_0", "f16"), discrete24GB(), ollamaKVAuto, ollamaKVPlan{Type: "q4_0", FlashAttention: true}},
 		{
 			"auto-gpu-via-usable-vram", m, m.Variants[0],
 			hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304},
@@ -586,7 +596,7 @@ func TestPlanOllamaKV(t *testing.T) {
 		{
 			"auto-unsizable-host", tm, catalog.Variant{VariantID: "no-kv"},
 			hardware.Profile{RAMTotalGB: 16}, ollamaKVAuto,
-			ollamaKVPlan{Type: "q8_0", FlashAttention: true},
+			ollamaKVPlan{Type: "f16"},
 		},
 	}
 	for _, c := range cases {
@@ -832,4 +842,10 @@ func TestApplyModelDecisionReasonsJoins(t *testing.T) {
 	if !strings.Contains(got.Warning, "best-effort serving") {
 		t.Errorf("the decision warning did not land: %q", got.Warning)
 	}
+}
+
+// withKVTypes is v with its kv_cache_types list set.
+func withKVTypes(v catalog.Variant, types ...string) catalog.Variant {
+	v.KVCacheTypes = types
+	return v
 }

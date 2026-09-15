@@ -662,7 +662,7 @@ func OllamaDeclaresWindow(m catalog.Manifest, v catalog.Variant, h Host, window 
 	if DeclarableNativeWindow(m) < window {
 		return false
 	}
-	return OllamaDeclaresWindowFor(m, v, h, OllamaDefaultKVCacheType(h), window)
+	return OllamaDeclaresWindowFor(m, v, h, ResolveKVCacheType(catalog.RuntimeOllama, v, h, nil, ""), window)
 }
 
 // OllamaDeclaresWindowFor is OllamaDeclaresWindow for a named KV-cache
@@ -732,7 +732,7 @@ func OllamaDeclaresWindowFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 // MEASURED (waired-ai/waired-agent#466); the boot benchmark already
 // measures the real rate once a model is on disk.
 func OllamaRecommendModel(m catalog.Manifest, v catalog.Variant, h Host) Verdict {
-	return OllamaRecommendModelFor(m, v, h, OllamaDefaultKVCacheType(h))
+	return OllamaRecommendModelFor(m, v, h, ResolveKVCacheType(catalog.RuntimeOllama, v, h, nil, ""))
 }
 
 // OllamaRecommendModelFor is OllamaRecommendModel with the KV-cache type

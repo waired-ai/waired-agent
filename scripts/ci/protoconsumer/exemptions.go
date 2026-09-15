@@ -59,8 +59,6 @@ var receiveOnly = []exemption{
 		"withholds a shipped model from every offer surface; authored in the manifest, read by BundledManifests"},
 	{reflect.TypeFor[catalog.Manifest](), "ManualOnly",
 		"withholds a shipped model from automatic choice while leaving it in the catalog; authored in the manifest, read by the pickers"},
-	{reflect.TypeFor[catalog.Manifest](), "DefaultVariant",
-		"the owner's hand-picked build per engine; authored in the manifest (#1349), read by the pickers"},
 	{reflect.TypeFor[catalog.Variant](), "KVCacheTypes",
 		"KV-cache types a build may be served with; authored in the manifest (#1349), read by the tuning"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "LlamaCPP",
@@ -388,17 +386,6 @@ var producerPending = []exemption{
 	// name-matching reason above — Presentation.Speed and
 	// Pick.MeasuredTurnSeconds now share their names with fields that
 	// management and /healthz write.
-
-	// waired-ai/waired-agent#1348. The served build's KV-cache type and the
-	// stored leftovers are reported by the agent once it honours the
-	// variant choice; the wire lands first so the control plane
-	// (waired-ai/waired#1387) can be written against it.
-	{reflect.TypeFor[signer.InferenceState](), "ActiveVariantID",
-		"agent reports the build it serves (#1348)"},
-	{reflect.TypeFor[signer.InferenceState](), "ActiveKVCacheType",
-		"agent reports the KV-cache type it serves with (#1348)"},
-	{reflect.TypeFor[signer.InferenceState](), "StoredVariants",
-		"agent reports builds a switch left on disk (#1348)"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or

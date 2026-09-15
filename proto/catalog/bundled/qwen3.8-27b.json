@@ -7,6 +7,10 @@
   ],
   "license": "apache-2.0",
   "context_length": 262144,
+  "default_variant": {
+    "ollama": "mtp-q4-gguf",
+    "vllm": "fp8"
+  },
   "capabilities": [
     "chat",
     "tool_use",
@@ -21,6 +25,11 @@
   "variants": [
     {
       "variant_id": "mtp-q4-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "Q4_K_M",
       "runtime_support": [
@@ -68,12 +77,17 @@
     },
     {
       "variant_id": "q3-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "UD-Q3_K_XL",
       "runtime_support": [
         "ollama"
       ],
-      "estimated_weight_gb": 13.15,
+      "estimated_weight_gb": 14.08,
       "min_ram_gb": 16,
       "quality_tier": 66,
       "param_count": 27000000000,
@@ -91,7 +105,8 @@
       },
       "source": {
         "type": "ollama",
-        "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL"
+        "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL",
+        "digest": "sha256:da1cab12ae5c31691fdb8e3fbd349c132c23e147c15a3faef32d160fb42e02e8"
       },
       "active_params": 27000000000,
       "kv_bytes_per_token_fp16": 65536,
@@ -113,12 +128,17 @@
     },
     {
       "variant_id": "q2-gguf",
+      "kv_cache_types": [
+        "q4_0",
+        "q8_0",
+        "f16"
+      ],
       "format": "ollama-tag",
       "quantization": "UD-Q2_K_XL",
       "runtime_support": [
         "ollama"
       ],
-      "estimated_weight_gb": 9.83,
+      "estimated_weight_gb": 10.76,
       "min_ram_gb": 12,
       "quality_tier": 65,
       "param_count": 27000000000,
@@ -136,7 +156,8 @@
       },
       "source": {
         "type": "ollama",
-        "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL"
+        "tag": "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL",
+        "digest": "sha256:f9d19123d15b889ecf0e389c573ef2b063665b18f739cdf68e3ab24b268ca33d"
       },
       "active_params": 27000000000,
       "kv_bytes_per_token_fp16": 65536,
@@ -158,6 +179,10 @@
     },
     {
       "variant_id": "fp8",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
       "format": "safetensors",
       "quantization": "FP8",
       "runtime_support": [

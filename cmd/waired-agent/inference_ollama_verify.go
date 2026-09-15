@@ -37,7 +37,8 @@ const (
 	// the size signal is too small to discriminate. Never acted on.
 	tuningInconclusive
 	// tuningF16Fallback: the KV cache came out ~f16-sized despite a
-	// q8_0 request — the engine fell back (no flash attention).
+	// quantized (q8_0 / q4_0) request — the engine fell back (no flash
+	// attention).
 	tuningF16Fallback
 	// tuningSpill: the loaded model reports size_vram < size on a
 	// discrete GPU: layers spilled to system RAM beyond what the
@@ -356,20 +357,24 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// with sliding-window / linear layers, which biases this check
 	// toward false NEGATIVES (missed fallback) — never toward a
 	// needless restart.
-	if psm.Name == tag && (t.KVCacheType == "q8_0" || t.KVCacheType == "q4_0") && t.ContextLength > 0 {
+	//
+	// Any quantized cache type, not only q8_0: the default is q4_0 since
+	// waired-agent#1348, and a q4_0 request falls back to f16 the same way
+	// on a model without flash attention.
+	if quant := t.KVCacheType == catalog.KVCacheQ8_0 || t.KVCacheType == catalog.KVCacheQ4_0; psm.Name == tag && quant && t.ContextLength > 0 {
 		if weight, err := ollamaTagSize(ctx, client, baseURL, tag); err == nil && weight > 0 {
 			ctxTotal := psm.ContextLength
 			if ctxTotal <= 0 {
 				ctxTotal = t.ContextLength * t.NumParallel
 			}
 			kvBpt := float64(t.kvBytesPerTokFP16)
-			expQ8 := kvBpt * kvFactorFor(t.KVCacheType) * float64(ctxTotal)
+			expQ := kvBpt * kvFactorFor(t.KVCacheType) * float64(ctxTotal)
 			expF16 := kvBpt * float64(ctxTotal)
-			if expF16-expQ8 >= f16DetectMinMarginBytes {
-				if excess := float64(psm.Size - weight); excess > (expQ8+expF16)/2 {
+			if expF16-expQ >= f16DetectMinMarginBytes {
+				if excess := float64(psm.Size - weight); excess > (expQ+expF16)/2 {
 					return tuningF16Fallback, fmt.Sprintf(
 						"KV cache looks f16-sized despite %s (live %.1f GB − weights %.1f GB = %.1f GB, expected ~%.1f GB at %s)",
-						t.KVCacheType, float64(psm.Size)/1e9, float64(weight)/1e9, excess/1e9, expQ8/1e9, t.KVCacheType)
+						t.KVCacheType, float64(psm.Size)/1e9, float64(weight)/1e9, excess/1e9, expQ/1e9, t.KVCacheType)
 				}
 			}
 		}
@@ -900,8 +905,8 @@ func degradeStep(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardw
 		// reject it anyway (waired-ai/waired-agent#846).
 		next := computeOllamaTuningOpts(m, v, hw, "f16", t.ContextLength, 0, ollamaObservedServe{})
 		return next, fmt.Sprintf(
-			"this model runs its KV cache at f16 (q8_0 needs flash attention, which it doesn't support); context window sized accordingly at %d tokens",
-			next.ContextLength), stepEnv
+			"this model runs its KV cache at f16 (%s needs flash attention, which it doesn't support); context window sized accordingly at %d tokens",
+			t.KVCacheType, next.ContextLength), stepEnv
 
 	case tuningSpill, tuningVRAMExhausted:
 		below := rungBelow(m, t.ContextLength)
