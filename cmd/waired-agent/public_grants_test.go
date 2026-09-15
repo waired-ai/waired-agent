@@ -23,6 +23,7 @@ type fakeGrantAPI struct {
 	acquireRes   controlclient.AcquirePublicGrantsResponse
 	acquireErr   error
 	renewRes     controlclient.RenewPublicGrantsResponse
+	renewErr     error
 }
 
 func (f *fakeGrantAPI) AcquirePublicGrants(_ context.Context, req controlclient.AcquirePublicGrantsRequest) (controlclient.AcquirePublicGrantsResponse, error) {
@@ -43,7 +44,7 @@ func (f *fakeGrantAPI) RenewPublicGrants(_ context.Context, ids []string) (contr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.renewCalls = append(f.renewCalls, append([]string(nil), ids...))
-	return f.renewRes, nil
+	return f.renewRes, f.renewErr
 }
 
 func (f *fakeGrantAPI) ReleasePublicGrants(_ context.Context, ids []string) (controlclient.ReleasePublicGrantsResponse, error) {
@@ -327,6 +328,70 @@ func TestPublicGrantLoopDropsMapAbsentAndRenews(t *testing.T) {
 		for _, id := range batch {
 			if id == "grant_gone" {
 				t.Fatalf("map-absent grant was renewed: %v", renews)
+			}
+		}
+	}
+}
+
+// TestPublicGrantLoop_RenewRefusedAsNotEligibleIsNotRetried: a renew the
+// CP refuses as not eligible renews none of the batch, so those grants
+// lapse at their TTL. The loop must stop renewing them rather than re-send
+// the same refused renew on every tick until they expire
+// (waired-agent#1380).
+func TestPublicGrantLoop_RenewRefusedAsNotEligibleIsNotRetried(t *testing.T) {
+	now := time.Now()
+	api := &fakeGrantAPI{
+		acquireRes: controlclient.AcquirePublicGrantsResponse{
+			Status: "ok",
+			Grants: []controlclient.PublicGrant{
+				// Expiring soon → renew due immediately.
+				{GrantID: "grant_a", ProviderDeviceID: "dev_p1", ExpiresAt: now.Add(30 * time.Millisecond).UTC().Format(time.RFC3339Nano)},
+			},
+		},
+		renewErr: controlclient.ErrPublicShareNotEligible,
+	}
+	mesh := &fakeMesh{}
+	mesh.setGrantPeers("grant_a")
+	path := writePublicUse(t, t.TempDir(), "auto", 1)
+
+	deps := grantLoopDeps(api, mesh, path)
+	demand := make(chan struct{}, 1)
+	deps.Demand = demand
+	var clockMu sync.Mutex
+	offset := time.Duration(0)
+	deps.Now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now.Add(offset)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	// Past the map grace, so the grant is renew-due and not map-dropped.
+	clockMu.Lock()
+	offset = publicGrantMapGrace + time.Minute
+	clockMu.Unlock()
+	waitUntil(t, "the refused renew", func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 1 })
+
+	// Many more ticks (Tick is 5ms) while the grant is still in the map:
+	// none of them may renew it again.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	_, renews, releases := api.snapshot()
+	if len(renews) != 1 {
+		t.Fatalf("renew sent %d times after a not-eligible refusal, want 1: %v", len(renews), renews)
+	}
+	// Shutdown releases only what is still held; the lapsing grant is not.
+	for _, batch := range releases {
+		for _, id := range batch {
+			if id == "grant_a" {
+				t.Fatalf("a grant the CP refused to renew was still held at shutdown: %v", releases)
 			}
 		}
 	}

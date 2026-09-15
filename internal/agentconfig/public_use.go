@@ -51,9 +51,15 @@ type PublicUse struct {
 	// the other rule excludes.
 	MinModelSize string `json:"min_model_size,omitempty"`
 
-	// MinQualityTier is the retired numeric floor. Read on load and
-	// migrated into MinModelSize (see migrateMinQualityTier), then
-	// dropped on the next write — it is not consulted anywhere else.
+	// MinQualityTier is the retired numeric floor. Loading does not
+	// migrate it: the file keeps the value until the operator sets a
+	// size floor or consents again, and the management API clears it then
+	// (internal/management/public_use.go). Until that happens it is still
+	// read in three places: the router maps it to a size floor on every
+	// selection (Selector.resolveMinModelSize, via
+	// PublicPolicy.LegacyMinQualityTier), the grant loop sends it on
+	// acquire (cmd/waired-agent/public_grants.go), and `waired public`
+	// shows it as a retired setting.
 	MinQualityTier int `json:"min_quality_tier,omitempty"`
 	// Main / Sub toggle whether main-class and sub-class requests may
 	// use public candidates.

@@ -502,6 +502,95 @@ func probeMiss(r router.ProbeResult) string {
 	}
 }
 
+// notReadyMeshError is the answer for a round in which peers answered
+// their probe and none could take the request.
+//
+// It is the bare ErrAllPeersOverloaded when every peer that answered was
+// full, because that is what the sentinel says. Otherwise the peers were
+// not ready for some other reason, and the sentinel's sentence, "every
+// matching mesh peer is at capacity", would be false: a Public Share
+// consumer whose only candidate was running its benchmark was told to
+// wait for a slot, while the probe had already said what it was waiting
+// for (waired-agent#1369). A stranger's machine gives the consumer no
+// other way to learn its state, so the wrong sentence became the wrong
+// belief.
+//
+// The error names each peer and what its probe said, and Unwraps to
+// ErrAllPeersOverloaded, so the status, the OpenAI code, the Anthropic
+// error type, Retry-After and the observability reason all stay what
+// they were: the brief queue already waits these out the same way, and
+// only the sentence was wrong. Never chained with ErrPeersDidNotAnswer,
+// for the reason unansweredMeshError gives.
+//
+// Peer names go through candidateDisplayID: the string is written
+// verbatim into the 503 body (spec §8.5, #739).
+func notReadyMeshError(g probedSelection) error {
+	onlyFull := true
+	tried := make([]string, 0, len(g.probeResults))
+	for i, r := range g.probeResults {
+		if i >= len(g.cands) {
+			break
+		}
+		if g.cands[i].PeerID == "" {
+			continue // this computer's own engine; the round is about peers
+		}
+		reason := r.FailureReason()
+		answered := r.Outcome == router.ProbeOK || r.Outcome == router.ProbeLegacyPeer
+		// A peer that probed ready and still did not commit lost its slot
+		// between the probe and the commit: that is being full too.
+		if answered && reason != "" && reason != probeReasonCapacityFull {
+			onlyFull = false
+		}
+		tried = append(tried, fmt.Sprintf("%q: %s",
+			candidateDisplayID(g.cands[i]), probeNotReady(r, reason)))
+	}
+	if onlyFull || len(tried) == 0 {
+		return router.ErrAllPeersOverloaded
+	}
+	return &peersNotReadyError{tried: tried}
+}
+
+// peersNotReadyError is notReadyMeshError's error. A type rather than a
+// wrapped fmt.Errorf so the message does not open with the sentinel's
+// "at capacity", which is the claim it exists to stop making. Peers are
+// separated by "; " so a comma inside a reason is not read as the next
+// peer. Wording approved by the owner (2026-09-16, waired-agent#1369).
+type peersNotReadyError struct{ tried []string }
+
+func (e *peersNotReadyError) Error() string {
+	return "router: no matching mesh peer is ready (tried " + strings.Join(e.tried, "; ") + ")"
+}
+
+func (e *peersNotReadyError) Unwrap() error { return router.ErrAllPeersOverloaded }
+
+// probeNotReady phrases one probe's answer for a person reading a 503.
+// reason is r.FailureReason(). The words follow the tray's Recent
+// activity labels (fallbackReasonLabel) where it has one, and
+// TRANSLATION.md's "benchmark" for the measurement.
+func probeNotReady(r router.ProbeResult, reason string) string {
+	switch r.Outcome {
+	case router.ProbeOK, router.ProbeLegacyPeer:
+	default:
+		return probeMiss(r)
+	}
+	switch reason {
+	case "", probeReasonCapacityFull:
+		return "at capacity"
+	case "engine_not_ready":
+		return "engine not ready"
+	case "paused":
+		return "paused"
+	case "share_off":
+		return "sharing off"
+	case "measuring":
+		return "running its benchmark (takes a few minutes)"
+	case "model_loading":
+		return "loading the model into memory"
+	default:
+		return "not ready"
+	}
+}
+
 // logUnansweredRound is the only place a probe's error text survives.
 //
 // ParallelProbe records an outcome tag and a latency per probe, and the
@@ -536,7 +625,10 @@ func logUnansweredRound(g probedSelection) {
 //     instead: retrying those only delays the same answer.
 //  5. When every round fails, report which failure it was —
 //     ErrPeersDidNotAnswer when no probe came back at all,
-//     ErrAllPeersOverloaded when peers answered and were full.
+//     ErrAllPeersOverloaded when peers answered and were full, and
+//     the same sentinel wrapped with each peer's reason when they
+//     answered but were not ready for another reason
+//     (notReadyMeshError).
 //
 // capacityWait is the ceiling from capacityQueueBudget: 0 keeps the
 // historical bounded shape (probeAttempts rounds and no more).
@@ -615,7 +707,7 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request, cap
 			if e := h.pinnedCapacityFailure(got); e != nil {
 				return probedSelection{queuedFor: elapsed}, e
 			}
-			return probedSelection{queuedFor: elapsed}, router.ErrAllPeersOverloaded
+			return probedSelection{queuedFor: elapsed}, notReadyMeshError(got)
 		}
 		// Brief queue: a short sleep that often coincides with another
 		// request completing on a peer (in-flight count drops below

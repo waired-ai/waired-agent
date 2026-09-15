@@ -277,7 +277,19 @@ func TestRoundWasCapacityFull(t *testing.T) {
 		}, false},
 		{"a peer answered and was full", []router.ProbeResult{
 			{Outcome: router.ProbeTransportError},
-			{Outcome: router.ProbeOK},
+			{Outcome: router.ProbeOK, Status: router.HealthStatus{
+				EngineReady: true, ShareEnabled: true, CapacityTotal: 1, CapacityUsed: 1,
+			}},
+		}, true},
+		// Not full, and still waited out: the brief queue treats every
+		// answered not-ready round alike, and only the final sentence
+		// tells them apart (notReadyMeshError, waired-agent#1369). This
+		// row used to be the "full" one above with an empty Status, which
+		// is really an engine that is not ready.
+		{"a peer answered and was running its benchmark", []router.ProbeResult{
+			{Outcome: router.ProbeOK, Status: router.HealthStatus{
+				EngineReady: true, ShareEnabled: true, CapacityTotal: 1, Measuring: true,
+			}},
 		}, true},
 		// #849: a 401/403 means the path is usually up and the identity
 		// was turned away. It says nothing about load, so a round of them

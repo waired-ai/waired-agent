@@ -329,8 +329,19 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			res, err := deps.API.RenewPublicGrants(ctx, due)
 			switch {
 			case errors.Is(err, controlclient.ErrPublicShareNotEligible):
-				// §7.2 mutuality lost — grants will lapse CP-side too.
-				logger.Warn("public grants: renew rejected (not eligible); backing off")
+				// §7.2 mutuality lost — the CP renews none of these, so
+				// they lapse at their TTL. Stop tracking them: kept in
+				// `held` they stay due, and every tick re-sent the same
+				// refused renew until the CP expired them
+				// (waired-agent#1380). If eligibility comes back while
+				// they are still active, the next acquire returns them in
+				// the full active set and they are held again.
+				logger.Warn("public grants: renew rejected (not eligible); letting the grants lapse and backing off",
+					"grants", len(due))
+				for _, id := range due {
+					delete(held, id)
+					forgetUsage(id)
+				}
 				backOff(tnow.Add(publicGrantBackoff), true)
 			case err != nil:
 				logger.Warn("public grants: renew failed", "err", err) // transport/5xx: next tick retries
