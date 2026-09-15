@@ -104,7 +104,7 @@ Two limits worth knowing:
 - 断定形・体言止めのコンソール調で書く。soft-assistant 的な語尾は使わない
   （「何もしなくて大丈夫です」→「対応不要」、「〜しましょう」禁止、
   見出しを質問形にしない）。
-- 「お使いの」「ご自身の」→「自分の」「このパソコン」。
+- 「お使いの」「ご自身の」→「自分の」「このコンピュータ」。
 - CLI / アプリの出力を引用するときは**逐語**で写す（`Mesh` ステータス行、
   `Worker:` メニューラベル、`waired phase` の出力など）。訳したい場合は
   引用の外に補足を添える。出力の引用を「修正」しない。
@@ -131,8 +131,13 @@ LINE Developers / SmartHR Design System / JTF 日本語標準スタイルガイ�
   見出しにする。SmartHR の「よくある質問」の型に合わせた意図的な例外で、
   ほかのページには広げない。
 - **カタカナ**: ウィンドウ（ウインドウ不可）、ブラウザ、フォルダ、ユーザー、
-  サーバー、パソコン（「PC」は使わない。NAVI の逐語引用に出る「コンピュータ」は
-  そのまま写す）。
+  サーバー、コンピュータ（「PC」「パソコン」は使わない。Waired を動かすのは
+  デスクトップやノートに限らずサーバーのこともあるので、物理機は NAVI と同じ
+  「コンピュータ」で呼ぶ）。2026-09-16 のオーナー裁定
+  （waired-ai/waired-agent#1390）で「パソコン」から改めた。既存のページと下の
+  表の説明欄に残る「パソコン」は #1390 で置き換える途中で、新しく書く文は
+  「コンピュータ」。ページの題名を引くリンク文字列は、そのページの題名が
+  変わるまで題名のとおりに写す。
 - **ダッシュ**: 地の文で「—」を使わない。補足は文を分けるか括弧にする。
 - **ja の段落は 1 行に書く（折り返さない）**。ブラウザは日本語と日本語の間の
   改行は消すが、英数字と日本語の間の改行は半角スペースとして描画する
@@ -157,7 +162,8 @@ Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloud
   **device** = コンソールの登録エンティティ（Devices ページ、`Add device`）/
   **node** = ルーティング・プロトコルの出力だけ（`Waired node`）。`machine` は
   使わない（`machine-wide` は設定スコープの語として残す）。ja は「コンピュータ」
-  「デバイス」の 2 層（NAVI）。docs の「パソコン」は上の Register のまま。
+  「デバイス」の 2 層で、NAVI も docs も同じ語を使う（docs の「パソコン」は
+  上の Register のとおり「コンピュータ」に改めた; waired-ai/waired-agent#1390）。
 - 画面の呼び名: NAVI は製品内で **the Waired console**（アプリの行は
   `Open Waired console…`）。
 - アプリの `Quit` は `Quit` のまま。
@@ -215,6 +221,7 @@ Primer / Heroku の規約と、Tailscale / gh / Docker / Ollama / Vercel / Cloud
 | Your other computers / People outside your account (共有の配分名) | **逐語・訳さない** | `waired share status` の行名と Waired コンソールのトグル名。どちらも同じ 2 つの配分を指す — 自分のアカウントの他のパソコン、アカウント外の人。「メッシュ共有」「公開共有」は説明の地の文でのみ使い、行名としては使わない | waired-ai/waired#1297 オーナー裁定(20260830) → 出荷 waired-ai/waired-agent#1164 |
 | Your team / Share with team (チームへの配分名) | **逐語・訳さない** | 上の行の 3 つ目の配分。`Your team:` は `waired share status` の行名、`Share with team` は Waired コンソールの［Sharing］カードのトグル名(チーム所属時のみ)。地の文では「チーム共有」「チームメイト」を使う | チーム共有仕様 §7.2(waired-ai/waired#1370 の裁定) → waired-ai/waired#1374 |
 | Team Share / teammate | チーム共有 / チームメイト | 機能名と相手の呼び方。「チームシェア」「チームメンバー」としない(仕様の表題が「Team Share（チーム共有）」)。役割名 owner / admin / member は地の文でオーナー / 管理者 / メンバー | チーム共有仕様(waired-ai/waired#1370) → オーナー裁定(20260913、waired#1370 の文言確認) |
+| public computer (Public Share で他の人が共有しているコンピュータ。旧 docs の public node) | 公開コンピュータ | 製品の文字列に合わせる: 同意文 `Public computers belong to other people.`、Waired アプリの［Public computers］、`waired public status` の行 `Use public computers:`。**node** はルーティングの出力だけの語（上の Product copy conventions）なので、地の文で「public node」「公開ノード」と呼ばない。アプリのラベル［Public computers］は逐語 | waired-ai/waired-agent#1364; オーナー裁定(20260916; waired-ai/waired-agent#1390) |
 | owner (a computer's) | 所有者 | パソコンを持っている人。「持ち主」としない。チームの役割の owner は上の行のとおり「オーナー」で、別の語 | オーナー裁定(20260913、waired#1370 の文言確認) |
 | worker | 初出「ワーカーマシン」→ 以降「ワーカー」 | 〃（`Worker:` ラベルは逐語） | #473 §3 |
 | control plane | コントロールプレーン（= コーディネーションサービス） | glossary で相互リンク。`waired status` と `waired init` のサインイン行が出す **`Control Plane:` ラベルは逐語**（製品出力）。`waired status` は #800 まで `Control:` と短縮していたが、サインイン行と語を揃えて正式名に統一した | #473 §3 → #800 |
