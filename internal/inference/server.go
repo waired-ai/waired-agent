@@ -65,7 +65,6 @@ type Server struct {
 	isPausedFn      func() bool
 	isShareDeniedFn func() bool
 	isMeasuringFn   func() bool
-	prefillRateFn   func() *PrefillRate
 	speedFn         func() *SpeedReading
 	inflight        *inflightCounter
 	public          *publicAdmission
@@ -599,12 +598,6 @@ type Config struct {
 	// gate, which is the pre-#1127 behaviour.
 	IsMeasuringSpeed func() bool
 
-	// PrefillRate returns this host's measured prefill speed for the
-	// model it serves, or nil when there is nothing to report. It rides
-	// /healthz rather than the signed NetworkMap for the same reason
-	// live residency does — see HealthSnapshot.PrefillRate.
-	PrefillRate func() *PrefillRate
-
 	// Speed returns this host's served-model speed measurement for
 	// /healthz (HealthSnapshot.Speed). nil = never reported.
 	Speed func() *SpeedReading
@@ -727,7 +720,6 @@ func NewServerWithConfig(cfg Config) *Server {
 		isPausedFn:      cfg.IsPaused,
 		isShareDeniedFn: cfg.IsShareDenied,
 		isMeasuringFn:   cfg.IsMeasuringSpeed,
-		prefillRateFn:   cfg.PrefillRate,
 		speedFn:         cfg.Speed,
 		engineReadyFn:   cfg.EngineReadyFn,
 		modelResidentFn: cfg.ModelResidentFn,

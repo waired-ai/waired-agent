@@ -20,7 +20,7 @@ import (
 // waired-agent#1302 is that ruling reaching the arm it was made for.
 //
 // One value struct behind one closure rather than a field per fact: the tag,
-// the variant, the measured rate and the occupancy all have to describe the
+// the variant, the measured speed and the occupancy all have to describe the
 // SAME model, and reading them independently lets a model switch land between
 // two of them and describe a host that does not exist.
 type LocalNode struct {
@@ -60,16 +60,10 @@ type LocalNode struct {
 	// counter that answers its /healthz.
 	Capacity     int
 	CapacityUsed int
-	// Prefill is this host's own published prefill measurement, or nil when
-	// it has none. nil is "unmeasured", and the ordering must read it as no
-	// information rather than as slow (docs/decisions/20260822/0218).
-	Prefill *PrefillRate
 	// Speed is this host's own seconds-per-request reading — the same
 	// object its /healthz publishes as `speed` (waired-agent#1341) — or nil
-	// when it has none. The daemon fills it beside Prefill; a round ranks
-	// on seconds only when every candidate with a reading has one
-	// (assignSpeedRanks), so a device that fills only Prefill is ordered
-	// exactly as before.
+	// when it has none. nil is "unmeasured", and the ordering must read it
+	// as no information rather than as slow (docs/decisions/20260822/0218).
 	Speed *PeerSpeedReading
 }
 
@@ -183,13 +177,13 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 // everything above it.
 //
 // But it is NOT honest on a COLD round, and that case is a starvation loop
-// rather than a mis-ordering. With no prefill reading anywhere, the nil rule
+// rather than a mis-ordering. With no speed reading anywhere, the nil rule
 // gives every candidate the same best speed bucket
 // (docs/decisions/20260822/0218), identical models tie on score, and rtt
 // decides — for this device, every time. ParallelProbe then fast-paths a
 // local winner at index 0 without probing anybody
 // (internal/gateway/probe.go), OnPeerProbe never fires, PrefillWindow never
-// learns a peer's rate, and this device wins the next round for the same
+// learns a peer's speed, and this device wins the next round for the same
 // reason. Peer speeds are only ever learned on the request path: the
 // measurements are stripped from the served network map
 // (proto/signer/inference_state.go).
@@ -199,7 +193,7 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 // the deviceID — where the tie-break of shuffleWithinTiers spreads the first
 // few rounds and the readings start arriving.
 func localRTT(ln LocalNode) uint32 {
-	if ln.Prefill == nil && !ln.Speed.usable() {
+	if !ln.Speed.usable() {
 		return RTTUnknown
 	}
 	return 0
@@ -219,17 +213,6 @@ func roundSpeeds(peers map[string]PeerSpeed, ln LocalNode) map[string]PeerSpeed 
 	for k, v := range peers {
 		out[k] = v
 	}
-	rungs := map[int]PrefillRung{}
-	if ln.Prefill != nil {
-		for _, r := range ln.Prefill.Rungs {
-			if r.Depth > 0 && r.Tokps > 0 {
-				rungs[r.Depth] = r
-			}
-		}
-	}
-	if len(rungs) == 0 {
-		rungs = nil
-	}
 	var turn *PeerTurn
 	if r := ln.Speed; r.usable() {
 		turn = &PeerTurn{MeasuredAt: parseMeasuredAt(r.MeasuredAt, time.Time{})}
@@ -241,7 +224,6 @@ func roundSpeeds(peers map[string]PeerSpeed, ln LocalNode) map[string]PeerSpeed 
 	}
 	out[ln.DeviceID] = PeerSpeed{
 		VariantID: ln.VariantID,
-		Rungs:     rungs,
 		Turn:      turn,
 		// The congestion divisor, and the same population a peer's
 		// capacity_used counts: this machine's own work as well as the

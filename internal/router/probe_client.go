@@ -61,31 +61,22 @@ type HealthStatus struct {
 	ModelLoading        bool  `json:"model_loading,omitempty"`
 	ModelLoadingSeconds int64 `json:"model_loading_seconds,omitempty"`
 
-	// PrefillRate is what the peer measured for the model it serves, as
-	// prefill tokens per second at fixed depths — the form every agent
-	// before waired-agent#1341 publishes, and the one a round falls back
-	// to when not every candidate publishes Speed below.
-	// nil = it published nothing. Never read as "slow": an unmeasured
-	// endpoint is not punished, which is the nil rule
-	// docs/decisions/20260822/0218-residency-breaks-ties-only.md sets.
-	PrefillRate *PrefillRate `json:"prefill_rate,omitempty"`
-
 	// Speed is what the peer measured for the model it serves, in
 	// seconds per request: one 32,768-token request judged as
 	// hostfit.TurnSecondsAt (waired-agent#1341; decision 9 of
 	// docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md).
-	// nil = it published none — an agent predating the field, which still
-	// publishes PrefillRate, or a host that has measured nothing yet.
-	//
-	// The same nil rule as PrefillRate: absent is never read as slow. A
-	// peer that publishes Speed also keeps publishing PrefillRate (one
-	// rung at its measured depth) so an older requester can still order
-	// it; which of the two a round ranks on is assignSpeedRanks' decision.
+	// nil = it published none: a host that has measured nothing yet. Never
+	// read as "slow": an unmeasured endpoint is not punished, which is the
+	// nil rule docs/decisions/20260822/0218-residency-breaks-ties-only.md
+	// sets.
 	Speed *PeerSpeedReading `json:"speed,omitempty"`
 }
 
 // PeerSpeedReading mirrors the /healthz `speed` object on the requester
-// side. Separate type, identical JSON tags, for the reason PrefillRate is.
+// side. Separate type, identical JSON tags, for the same reason HealthStatus
+// is separate from inference.HealthSnapshot: the router does not import the
+// serving package. The contract test in probe_client_test.go round-trips
+// between the two definitions.
 type PeerSpeedReading struct {
 	VariantID    string  `json:"variant_id,omitempty"`
 	DepthTokens  int     `json:"depth_tokens,omitempty"`
@@ -105,69 +96,6 @@ type PeerSpeedReading struct {
 // usable reports whether the reading makes any claim at all.
 func (r *PeerSpeedReading) usable() bool {
 	return r != nil && (r.TurnSeconds > 0 || r.TurnFloorSeconds > 0)
-}
-
-// PrefillRate mirrors inference.PrefillRate on the requester side —
-// prompt tokens per second for the model that peer is serving, the term
-// that decides a coding agent's first turn (waired-agent#1127).
-//
-// Separate type, identical JSON tags, for the same reason HealthStatus is
-// separate from inference.HealthSnapshot: the router does not import the
-// serving package. The contract test in probe_client_test.go round-trips
-// between the two definitions.
-type PrefillRate struct {
-	// Rungs are shallowest first. A rate is only meaningful with the depth
-	// it was taken at, so two peers are compared at the deepest rung both
-	// reached — see RungAt.
-	Rungs     []PrefillRung `json:"rungs"`
-	VariantID string        `json:"variant_id,omitempty"`
-}
-
-// PrefillRung is one peer's reading at one fixed depth.
-type PrefillRung struct {
-	Depth int     `json:"depth_tokens"`
-	Tokps float64 `json:"tokps"`
-	// Bound: an UPPER bound rather than a measurement. A bound still
-	// orders a peer — it is a fact about what the host could not do —
-	// where an absent rung means nothing is known and the ordering must
-	// not punish it.
-	Bound     bool    `json:"bound,omitempty"`
-	Samples   int     `json:"samples,omitempty"`
-	SpreadPct float64 `json:"spread_pct,omitempty"`
-}
-
-// RungAt returns this peer's reading at the given depth, if it reached it.
-func (p *PrefillRate) RungAt(depth int) (PrefillRung, bool) {
-	if p == nil {
-		return PrefillRung{}, false
-	}
-	for _, r := range p.Rungs {
-		if r.Depth == depth && r.Tokps > 0 {
-			return r, true
-		}
-	}
-	return PrefillRung{}, false
-}
-
-// DeepestCommonRung is the depth at which two peers may be compared: the
-// deepest one they both reached. ok=false means they share none, and a
-// caller must then treat their speeds as not comparable rather than
-// comparing readings taken at different depths — prefill throughput falls
-// with depth, so that comparison would be decided by the depths rather
-// than by the hosts.
-func DeepestCommonRung(a, b *PrefillRate) (aRung, bRung PrefillRung, ok bool) {
-	if a == nil || b == nil {
-		return PrefillRung{}, PrefillRung{}, false
-	}
-	best := -1
-	for _, ra := range a.Rungs {
-		rb, found := b.RungAt(ra.Depth)
-		if !found || ra.Tokps <= 0 || ra.Depth <= best {
-			continue
-		}
-		best, aRung, bRung = ra.Depth, ra, rb
-	}
-	return aRung, bRung, best > 0
 }
 
 // ProbeOutcome is the discriminated result returned by ProbeHealth.

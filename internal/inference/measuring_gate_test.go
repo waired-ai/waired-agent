@@ -61,21 +61,18 @@ func TestMeasuringGateAdapter(t *testing.T) {
 	})
 }
 
-// TestHealthz_ReportsMeasuringAndThePrefillRate: the gate is enforced on
-// the serving path, but a probe must still be able to SEE why — the
-// healthz surface deliberately bypasses every operator gate so the body
-// can carry the state.
-func TestHealthz_ReportsMeasuringAndThePrefillRate(t *testing.T) {
-	rate := &PrefillRate{
-		VariantID: "q4-gguf",
-		Rungs: []PrefillRung{
-			{Depth: 4096, Tokps: 830.5, Samples: 3, SpreadPct: 1.9},
-			{Depth: 8192, Tokps: 690.5, Samples: 2, SpreadPct: 4.2},
-		},
+// TestHealthz_ReportsMeasuringAndTheSpeed: the gate is enforced on the
+// serving path, but a probe must still be able to SEE why — the healthz
+// surface deliberately bypasses every operator gate so the body can carry
+// the state.
+func TestHealthz_ReportsMeasuringAndTheSpeed(t *testing.T) {
+	speed := &SpeedReading{
+		VariantID: "q4-gguf", DepthTokens: 32768, PrefillTokps: 252.9, DecodeTokps: 15.8,
+		TurnSeconds: 228.3, MeasuredAt: "2026-09-14T01:02:03.456Z",
 	}
 	s := &Server{
 		isMeasuringFn: func() bool { return true },
-		prefillRateFn: func() *PrefillRate { return rate },
+		speedFn:       func() *SpeedReading { return speed },
 		engineReadyFn: func() (bool, string) { return true, "qwen3:8b" },
 	}
 	rec := httptest.NewRecorder()
@@ -88,23 +85,23 @@ func TestHealthz_ReportsMeasuringAndThePrefillRate(t *testing.T) {
 	if !snap.Measuring {
 		t.Error("measuring must reach the probe; a peer that cannot see it cannot route around it")
 	}
-	if snap.PrefillRate == nil || len(snap.PrefillRate.Rungs) != 2 {
-		t.Fatalf("PrefillRate = %+v, want two rungs", snap.PrefillRate)
-	}
-	if snap.PrefillRate.Rungs[0].Depth != 4096 || snap.PrefillRate.Rungs[1].Depth != 8192 {
-		t.Errorf("rungs = %+v, want shallowest first", snap.PrefillRate.Rungs)
+	if snap.Speed == nil || *snap.Speed != *speed {
+		t.Fatalf("Speed = %+v, want %+v", snap.Speed, speed)
 	}
 }
 
-// TestHealthz_UnmeasuredHostOmitsTheRate keeps "nothing measured" off the
+// TestHealthz_UnmeasuredHostOmitsTheSpeed keeps "nothing measured" off the
 // wire entirely rather than as a zero, which would read as a host of no
 // speed at all.
-func TestHealthz_UnmeasuredHostOmitsTheRate(t *testing.T) {
-	s := &Server{engineReadyFn: func() (bool, string) { return true, "qwen3:8b" }}
+func TestHealthz_UnmeasuredHostOmitsTheSpeed(t *testing.T) {
+	s := &Server{
+		engineReadyFn: func() (bool, string) { return true, "qwen3:8b" },
+		speedFn:       func() *SpeedReading { return nil },
+	}
 	rec := httptest.NewRecorder()
 	s.handleHealthz(rec, httptest.NewRequest(http.MethodGet, "/waired/v1/inference/healthz", nil))
-	if body := rec.Body.String(); jsonHasKey(t, body, "prefill_rate") {
-		t.Errorf("body carries prefill_rate with nothing measured: %s", body)
+	if body := rec.Body.String(); jsonHasKey(t, body, "speed") {
+		t.Errorf("body carries speed with nothing measured: %s", body)
 	}
 	if body := rec.Body.String(); jsonHasKey(t, body, "measuring") {
 		t.Errorf("body carries measuring when it is false: %s", body)

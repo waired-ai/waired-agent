@@ -28,16 +28,16 @@ func rc4Mesh() []meshCandidate {
 	}
 }
 
-// rc4Speeds are the measured prefill rates, as this requester would hold
-// them: every host at the same rung, which is what makes them comparable.
+// rc4Speeds are the hosts' seconds per request, as this requester would hold
+// them. apu and m5 are the first turns the review timed (9 min 10 s and
+// 43 s); m4's is its measured prefill rate (117 tok/s, against 54 and 690)
+// put on the same scale.
 func rc4Speeds() map[string]PeerSpeed {
-	rung := func(tokps float64) map[int]PrefillRung {
-		return map[int]PrefillRung{4096: {Depth: 4096, Tokps: tokps}}
-	}
+	turn := func(seconds float64) *PeerTurn { return &PeerTurn{TurnSeconds: seconds} }
 	return map[string]PeerSpeed{
-		"apu": {VariantID: "v", Rungs: rung(54)},
-		"m5":  {VariantID: "v", Rungs: rung(690)},
-		"m4":  {VariantID: "v", Rungs: rung(117)},
+		"apu": {VariantID: "v", Turn: turn(550)},
+		"m5":  {VariantID: "v", Turn: turn(43)},
+		"m4":  {VariantID: "v", Turn: turn(254)},
 	}
 }
 
@@ -71,7 +71,7 @@ func TestSortMeshCandidates_PreferSpeedPicksTheFastPeer(t *testing.T) {
 	assignSpeedRanks(cands, rc4Speeds())
 	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); !eq(got, "m5", "m4", "apu") {
-		t.Errorf("order = %v, want m5 (690 tok/s) first and apu (54) last", got)
+		t.Errorf("order = %v, want m5 (43 s) first and apu (550 s) last", got)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestSortMeshCandidates_NoSpeedReadingsLeavesTodaysOrder(t *testing.T) {
 // TestAssignSpeedRanks_UnmeasuredPeerIsRankedOptimistically: ranking it
 // last would punish an endpoint nobody has measured, which the nil rule
 // forbids — and it is the probe round that fetches a peer's published
-// rate, so a peer ranked last is a peer that never gets measured.
+// figure, so a peer ranked last is a peer that never gets measured.
 func TestAssignSpeedRanks_UnmeasuredPeerIsRankedOptimistically(t *testing.T) {
 	cands := rc4Mesh()
 	speeds := rc4Speeds()
@@ -138,52 +138,18 @@ func TestAssignSpeedRanks_UnmeasuredPeerIsRankedOptimistically(t *testing.T) {
 	}
 }
 
-// TestAssignSpeedRanks_ScoresTheWholeRoundAtOneDepth. Prefill throughput
-// falls with depth, so comparing a reading at 4,096 against one at 32,768
-// would be decided by the depths. One depth for the round is also what
-// keeps the key a total order: a per-pair "deepest common rung" is not
-// one, and sort.SliceStable given a non-transitive comparison answers
-// arbitrarily.
-func TestAssignSpeedRanks_ScoresTheWholeRoundAtOneDepth(t *testing.T) {
-	cands := []meshCandidate{{deviceID: "deep"}, {deviceID: "shallow"}}
-	speeds := map[string]PeerSpeed{
-		// "deep" is genuinely faster, and at 32,768 it reads 400. The
-		// round can only be compared at 4,096, where it reads 900.
-		"deep": {Rungs: map[int]PrefillRung{
-			4096: {Depth: 4096, Tokps: 900}, 32768: {Depth: 32768, Tokps: 400},
-		}},
-		"shallow": {Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 100}}},
-	}
-	assignSpeedRanks(cands, speeds)
-	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
-	if got := order(cands); !eq(got, "deep", "shallow") {
-		t.Errorf("order = %v, want deep first — both scored at 4,096", got)
-	}
-
-	// And with no shared depth, the key says nothing at all.
-	cands2 := []meshCandidate{{deviceID: "a", score: 1}, {deviceID: "b", score: 2}}
-	assignSpeedRanks(cands2, map[string]PeerSpeed{
-		"a": {Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 100}}},
-		"b": {Rungs: map[int]PrefillRung{32768: {Depth: 32768, Tokps: 900}}},
-	})
-	for _, c := range cands2 {
-		if c.speedBucket != 0 {
-			t.Errorf("%s got bucket %d; with no shared depth the key must be silent", c.deviceID, c.speedBucket)
-		}
-	}
-}
-
-// TestAssignSpeedRanks_CongestionDividesTheRate is the owner's formula:
-// 素のprefill速度 / (既存セッション数 + 1). The peer's own in-flight count
-// includes its owner's work, which is exactly right — a machine busy with
-// its owner's turn is busy.
-func TestAssignSpeedRanks_CongestionDividesTheRate(t *testing.T) {
+// TestAssignSpeedRanks_CongestionMultipliesTheSeconds is the owner's
+// formula, 素のprefill速度 / (既存セッション数 + 1), carried over to seconds as
+// a multiplier by decision 9. The peer's own in-flight count includes its
+// owner's work, which is exactly right — a machine busy with its owner's turn
+// is busy.
+func TestAssignSpeedRanks_CongestionMultipliesTheSeconds(t *testing.T) {
 	cands := []meshCandidate{{deviceID: "idle"}, {deviceID: "busy"}}
 	assignSpeedRanks(cands, map[string]PeerSpeed{
-		// The busy peer is nominally faster and still loses: 400/1 = 400
-		// against 900/3 = 300.
-		"idle": {Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 400}}},
-		"busy": {CapacityUsed: 2, Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 900}}},
+		// The busy peer is nominally faster and still loses: 100 s × 1 =
+		// 100 s against 50 s × 3 = 150 s.
+		"idle": {Turn: &PeerTurn{TurnSeconds: 100}},
+		"busy": {CapacityUsed: 2, Turn: &PeerTurn{TurnSeconds: 50}},
 	})
 	sortMeshCandidates(cands, state.RoutingPreferSpeed, nil)
 	if got := order(cands); !eq(got, "idle", "busy") {

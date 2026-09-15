@@ -135,7 +135,7 @@ func TestBuildLocalCandidate(t *testing.T) {
 // reason, forever.
 func TestLocalRTT(t *testing.T) {
 	measured := localFor("qwen3:8b-q4_K_M")
-	measured.Prefill = &PrefillRate{VariantID: "q4-gguf", Rungs: []PrefillRung{{Depth: 4096, Tokps: 900}}}
+	measured.Speed = &PeerSpeedReading{VariantID: "q4-gguf", TurnSeconds: 70}
 	if got := localRTT(measured); got != 0 {
 		t.Errorf("localRTT with a reading = %d, want 0 (there is no network leg)", got)
 	}
@@ -149,11 +149,11 @@ func TestLocalRTT(t *testing.T) {
 // the congestion divisor travels.
 func TestRoundSpeeds(t *testing.T) {
 	peers := map[string]PeerSpeed{
-		"peer-A": {VariantID: "q4-gguf", Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 500}}},
+		"peer-A": {VariantID: "q4-gguf", Turn: &PeerTurn{TurnSeconds: 120}},
 	}
 	ln := localFor("qwen3:8b-q4_K_M")
 	ln.CapacityUsed = 2
-	ln.Prefill = &PrefillRate{VariantID: "q4-gguf", Rungs: []PrefillRung{{Depth: 4096, Tokps: 900}}}
+	ln.Speed = &PeerSpeedReading{VariantID: "q4-gguf", TurnSeconds: 70}
 
 	got := roundSpeeds(peers, ln)
 	if len(peers) != 1 {
@@ -166,20 +166,19 @@ func TestRoundSpeeds(t *testing.T) {
 	if self.CapacityUsed != 2 {
 		t.Errorf("CapacityUsed = %d, want 2 — the congestion divisor", self.CapacityUsed)
 	}
-	if r, ok := self.Rungs[4096]; !ok || r.Tokps != 900 {
-		t.Errorf("rungs = %+v, want the published reading", self.Rungs)
+	if self.Turn == nil || self.Turn.TurnSeconds != 70 {
+		t.Errorf("turn = %+v, want the published reading", self.Turn)
 	}
 	if _, ok := got["peer-A"]; !ok {
 		t.Error("the peer entries did not survive the copy")
 	}
 
-	t.Run("an unmeasured device carries no rungs", func(t *testing.T) {
-		// nil rungs, not an empty map: RoundRung skips entries with no
-		// readings, and an empty map would make it think this device had
-		// been measured at no depth at all.
+	t.Run("an unmeasured device carries no reading", func(t *testing.T) {
+		// nil, not a zero reading: assignSpeedRanks reads a nil Turn as
+		// unmeasured and gives it the best known bucket.
 		got := roundSpeeds(peers, localFor("qwen3:8b-q4_K_M"))
-		if got["self"].Rungs != nil {
-			t.Errorf("rungs = %+v, want nil", got["self"].Rungs)
+		if got["self"].Turn != nil {
+			t.Errorf("turn = %+v, want nil", got["self"].Turn)
 		}
 	})
 
@@ -285,15 +284,15 @@ func TestSelectK_LocalRanksWithTheMesh(t *testing.T) {
 			RoutingMode:    state.RoutingModeAuto,
 		}
 	}
-	fast := func(tokps float64) *PrefillRate {
-		return &PrefillRate{VariantID: "q4-gguf", Rungs: []PrefillRung{{Depth: 4096, Tokps: tokps}}}
+	measured := func(seconds float64) *PeerSpeedReading {
+		return &PeerSpeedReading{VariantID: "q4-gguf", TurnSeconds: seconds}
 	}
 
 	t.Run("an idle local engine still wins, and the mesh was consulted", func(t *testing.T) {
 		ln := localFor(peerTag)
-		ln.Capacity, ln.CapacityUsed, ln.Prefill = 2, 0, fast(900)
+		ln.Capacity, ln.CapacityUsed, ln.Speed = 2, 0, measured(70)
 		s := NewSelector(base(ln, map[string]PeerSpeed{
-			"peer-B": {VariantID: "q4-gguf", Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 900}}},
+			"peer-B": {VariantID: "q4-gguf", Turn: &PeerTurn{TurnSeconds: 70}},
 		}))
 		cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
 		if err != nil {
@@ -325,9 +324,9 @@ func TestSelectK_LocalRanksWithTheMesh(t *testing.T) {
 		// That is the half of the ruling that stops the owner's own turn
 		// from co-occupying an engine peers are already on.
 		ln := localFor(peerTag)
-		ln.Capacity, ln.CapacityUsed, ln.Prefill = 2, 2, fast(900)
+		ln.Capacity, ln.CapacityUsed, ln.Speed = 2, 2, measured(70)
 		s := NewSelector(base(ln, map[string]PeerSpeed{
-			"peer-B": {VariantID: "q4-gguf", CapacityUsed: 0, Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 900}}},
+			"peer-B": {VariantID: "q4-gguf", CapacityUsed: 0, Turn: &PeerTurn{TurnSeconds: 70}},
 		}))
 		cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
 		if err != nil {
@@ -356,7 +355,7 @@ func TestSelectK_LocalRanksWithTheMesh(t *testing.T) {
 		// while peers were being served the old one by this very host.
 		ln := localFor(peerTag)
 		ln.PendingModelID = "qwen3.5-4b"
-		ln.Capacity, ln.CapacityUsed, ln.Prefill = 2, 0, fast(900)
+		ln.Capacity, ln.CapacityUsed, ln.Speed = 2, 0, measured(70)
 		in := base(ln, nil)
 		in.LocalState = emptyState() // the NEW model is not on disk
 		s := NewSelector(in)
@@ -384,7 +383,7 @@ func TestSelectK_LocalRanksWithTheMesh(t *testing.T) {
 		ln := localFor(peerTag)
 		ln.Capacity = 2
 		s := NewSelector(base(ln, map[string]PeerSpeed{
-			"peer-B": {VariantID: "q4-gguf", Rungs: map[int]PrefillRung{4096: {Depth: 4096, Tokps: 900}}},
+			"peer-B": {VariantID: "q4-gguf", Turn: &PeerTurn{TurnSeconds: 70}},
 		}))
 		cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
 		if err != nil {
