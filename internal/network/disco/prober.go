@@ -101,7 +101,7 @@ func (s *Service) probeAllPeers(ctx context.Context) {
 			}
 			seen[addr] = struct{}{}
 			if err := s.sendProbeDirect(addr, nodePub, p.deviceID, p.nodePub, roundID); err != nil {
-				s.logger.Debug("disco probe send (direct)", "device_id", p.deviceID, "addr", addr, "err", err)
+				s.logger.Debug("disco probe send (direct)", "device_id", p.logName, "addr", addr, "err", err)
 				continue
 			}
 			sent++
@@ -119,7 +119,7 @@ func (s *Service) probeAllPeers(ctx context.Context) {
 			}
 			seen[addr] = struct{}{}
 			if err := s.sendProbeDirect(addr, nodePub, p.deviceID, p.nodePub, roundID); err != nil {
-				s.logger.Debug("disco probe send (cmm hint)", "device_id", p.deviceID, "addr", addr, "err", err)
+				s.logger.Debug("disco probe send (cmm hint)", "device_id", p.logName, "addr", addr, "err", err)
 				continue
 			}
 			sent++
@@ -127,7 +127,7 @@ func (s *Service) probeAllPeers(ctx context.Context) {
 		}
 		if p.relayURL != "" {
 			if err := s.sendProbeViaRelay(nodePub, p.deviceID, p.nodeKey, p.nodePub, p.relayURL); err != nil {
-				s.logger.Debug("disco probe send (relay)", "device_id", p.deviceID, "url", p.relayURL, "err", err)
+				s.logger.Debug("disco probe send (relay)", "device_id", p.logName, "url", p.relayURL, "err", err)
 			} else {
 				sent++
 			}

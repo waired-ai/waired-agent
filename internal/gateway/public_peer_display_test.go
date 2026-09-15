@@ -342,3 +342,38 @@ func (p probeableAdapter) Health(_ context.Context) runtime.Health {
 func (p probeableAdapter) Stop(_ context.Context) error { return nil }
 func (p probeableAdapter) BaseURL() string              { return p.baseURL }
 func (p probeableAdapter) Transport() http.RoundTripper { return http.DefaultTransport }
+
+// The unanswered-round warning names each candidate by its display id and
+// used to add the probe's error text. The peer adapter factory formats
+// the real DeviceID into that text when a peer has left the snapshot, the
+// routine teardown race for a grant peer, so a grant candidate gets its
+// outcome tag instead (waired-agent#1368). Own-network candidates keep
+// the error text: the identifiers in it are the operator's own.
+func TestLogUnansweredRound_GrantPeerErrorTextStaysOut(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	logUnansweredRound(probedSelection{
+		cands: []router.Candidate{
+			{PeerID: foreignDeviceID, PeerDisplayID: foreignAlias},
+			{PeerID: "dev_own00000001", PeerDisplayID: "dev_own00000001"},
+		},
+		probeResults: []router.ProbeResult{
+			{Outcome: router.ProbeTransportError, Err: fmt.Errorf("peer %q not in current mesh snapshot", foreignDeviceID)},
+			{Outcome: router.ProbeTransportError, Err: fmt.Errorf("peer %q not in current mesh snapshot", "dev_own00000001")},
+		},
+	})
+
+	out := buf.String()
+	if strings.Contains(out, foreignDeviceID) {
+		t.Errorf("warning leaks the foreign device id: %s", out)
+	}
+	if !strings.Contains(out, foreignAlias+"="+router.ProbeTransportError.String()) {
+		t.Errorf("grant candidate not reported by display id and outcome: %s", out)
+	}
+	if !strings.Contains(out, "not in current mesh snapshot") {
+		t.Errorf("own-network candidate lost its error text: %s", out)
+	}
+}

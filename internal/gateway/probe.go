@@ -598,6 +598,14 @@ func probeNotReady(r router.ProbeResult, reason string) string {
 // not be reached existed nowhere at all. One line per round rather than
 // one per probe: a five-peer mesh that is off would otherwise write five
 // lines for every request that arrives.
+//
+// A grant peer's error text is not logged, only its outcome tag. The
+// peer adapter factory formats the real DeviceID into its errors ("peer
+// %q not in current mesh snapshot"), and a transport error carries the
+// overlay address — the same reason adapterErrorForClient withholds them
+// from a client (public share spec §8.5, waired-agent#1368). A grant peer
+// dropping out of the snapshot between selection and probe is the
+// ordinary teardown race, so this line was where the id surfaced.
 func logUnansweredRound(g probedSelection) {
 	attrs := make([]any, 0, 2*len(g.probeResults)+1)
 	attrs = append(attrs, "candidates", len(g.cands))
@@ -605,7 +613,12 @@ func logUnansweredRound(g probedSelection) {
 		if i >= len(g.cands) || r.Err == nil {
 			continue
 		}
-		attrs = append(attrs, candidateDisplayID(g.cands[i]), r.Err.Error())
+		c := g.cands[i]
+		reason := r.Err.Error()
+		if isGrantCandidate(c) {
+			reason = r.Outcome.String()
+		}
+		attrs = append(attrs, candidateDisplayID(c), reason)
 	}
 	slog.Warn("no mesh peer answered its readiness probe", attrs...)
 }
@@ -1257,6 +1270,13 @@ func candidateDisplayID(c router.Candidate) string {
 		return c.PeerDisplayID
 	}
 	return c.PeerID
+}
+
+// isGrantCandidate reports whether c is a peer present under a Public
+// Share or Team Share grant: its display identifier is not its device id.
+// The same test adapterErrorForClient makes on a Selection.
+func isGrantCandidate(c router.Candidate) bool {
+	return c.PeerDisplayID != "" && c.PeerDisplayID != c.PeerID
 }
 
 // displayRuntime renders Selection.Runtime for a human: the functional

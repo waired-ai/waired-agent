@@ -13,6 +13,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"cloud.google.com/go/logging"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
@@ -100,10 +101,18 @@ func runStatsPublisher(ctx context.Context, p management.StatusProvider, interva
 // This is what INFO keeps now that the periodic record no longer carries
 // the peer list (#692). Membership only — a path switch is already
 // logged where it happens, by the reconciler, with the evidence for it.
+//
+// Peers are keyed by peerLogID, so a Public Share or Team Share peer
+// joins and leaves under its display identifier (waired-agent#1368). A
+// row with no identifier at all is not counted: it names nobody, and it
+// was how path state for a peer that had left the map read as a peer
+// joining (waired-agent#1372).
 func logPeerSetChange(prev map[string]struct{}, st management.Status) map[string]struct{} {
 	cur := make(map[string]struct{}, len(st.Peers))
 	for _, p := range st.Peers {
-		cur[p.DeviceID] = struct{}{}
+		if id := peerLogID(p); id != "" {
+			cur[id] = struct{}{}
+		}
 	}
 	if prev == nil {
 		return cur
@@ -178,7 +187,7 @@ func emitStatsRecord(st management.Status, cl *cloudLogger) {
 	// --observability`.
 	slog.Debug("waired_agent_stats_peers",
 		"peer_count", st.PeerCount,
-		"peers", st.Peers,
+		"peers", peersForLog(st.Peers),
 	)
 	if cl != nil {
 		cl.publish(st)
@@ -345,8 +354,51 @@ func buildPayload(msg string, st management.Status) map[string]any {
 		"peer_count":             st.PeerCount,
 		"phase":                  st.Phase,
 		"desired_phase":          st.DesiredPhase,
-		"peers":                  st.Peers,
+		"peers":                  peersForLog(st.Peers),
 	}
+}
+
+// peerLogID is the identifier a log record uses for a peer row: the
+// display identifier for a peer present under a Public Share or Team
+// Share grant, the device id for one of this account's own computers.
+//
+// A grant peer's device id belongs to another account, and public share
+// spec §8.5 says logs and events name a public peer by its pseudonym and
+// never keep the real device id. Both sides of a grant logged each
+// other's real id through the stats records until waired-agent#1368.
+// Status fills DisplayID for every grant row; the labels below only
+// guard a row built somewhere that did not.
+func peerLogID(p management.PeerStatus) string {
+	switch {
+	case !p.Public && !p.Team:
+		return p.DeviceID
+	case p.DisplayID != "":
+		return p.DisplayID
+	case p.Team:
+		return inferencemesh.TeamPeerFallbackLabel
+	default:
+		return inferencemesh.PublicPeerLabel
+	}
+}
+
+// peersForLog returns a copy of peers whose device_id is peerLogID, for
+// the DEBUG stats record and the Cloud Logging payload.
+//
+// Rows for this account's own computers are unchanged. The testnet
+// fallback runner reads the Cloud Logging payload and finds the other VM
+// of the same network by its device_id (waired
+// scripts/dev/testnet-fallback-runner.sh, lib/testnet_path_verdict.py),
+// so the own-network id is what that record is for.
+func peersForLog(peers []management.PeerStatus) []management.PeerStatus {
+	if peers == nil {
+		return nil
+	}
+	out := make([]management.PeerStatus, len(peers))
+	copy(out, peers)
+	for i := range out {
+		out[i].DeviceID = peerLogID(out[i])
+	}
+	return out
 }
 
 // publishScenario records a test-scenario state-change: it caches the

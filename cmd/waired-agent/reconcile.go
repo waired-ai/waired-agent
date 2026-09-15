@@ -47,6 +47,10 @@ type peerEngine interface {
 	// SetPeerNetworks replaces the deviceID → foreign-home-network table
 	// used to stamp DstNetworkID on relay frames (public share spec §10).
 	SetPeerNetworks(map[string]string)
+	// SetPeerLogNames replaces the deviceID → log name table for grant
+	// peers, so the relay bind can name them without their device ids
+	// (public share spec §8.5).
+	SetPeerLogNames(map[string]string)
 }
 
 // reconcilerConfig is the bag of probe-driven-fallback knobs. All
@@ -199,17 +203,21 @@ type reconciler struct {
 // peerLogName returns the identifier to print in logs for a map peer:
 // the grant pseudonym for Public Share peers, "<device> (<owner>)" for a
 // teammate's computer, the DeviceID otherwise.
+//
+// A grant peer is never named by its DeviceID, including a public peer
+// whose grant carries no pseudonym: that case used to fall back to the
+// DeviceID, the leak public share spec §8.5 forbids (waired-agent#1368).
+// inferencemesh.PeerDisplayLabel is the rule every display surface
+// already uses for it.
 func peerLogName(p signer.NetworkMapPeer) string {
-	if inferencemesh.IsTeamGrant(p.Grant) {
-		if label, ok := inferencemesh.TeamPeerLabel(p.DeviceName, p.Grant.DisplayName); ok {
-			return label
-		}
-		return inferencemesh.TeamPeerFallbackLabel
+	if p.Grant == nil {
+		return p.DeviceID
 	}
-	if p.Grant != nil && p.Grant.Pseudonym != "" {
-		return p.Grant.Pseudonym
-	}
-	return p.DeviceID
+	return inferencemesh.PeerDisplayLabel(inferencemesh.PeerView{
+		DeviceID:   p.DeviceID,
+		DeviceName: p.DeviceName,
+		Grant:      p.Grant,
+	})
 }
 
 // logNameLocked resolves a peer NodePublicKey to its log display name.
@@ -220,6 +228,35 @@ func (r *reconciler) logNameLocked(nodePub, fallback string) string {
 		return n
 	}
 	return fallback
+}
+
+// pathStateForEventLocked returns the path state a disco event about
+// nodePub updates, creating it if needed — or nil when the current
+// network map no longer carries that peer. Caller holds r.mu.
+//
+// The disco service can still report on a peer after it has left the
+// map: probes sent before the map update time out afterwards and emit
+// EventProbeMissed / EventProbeRoundFinalized for the removed key. Apply
+// had already deleted that peer's state, and recreating it here left a
+// row that Snapshot reported with an empty device id for as long as the
+// process lived — the `joined:[""]` in waired_agent_peers_changed and the
+// phantom peer beside peer_count 0 (waired-agent#1372). Grant peers come
+// and go every few minutes, so this happened on every Public Share host.
+//
+// Before the first map (r.nm == nil) there is nothing to compare against,
+// and the event is kept as it always was.
+func (r *reconciler) pathStateForEventLocked(nodePub string, at time.Time) *peerPathState {
+	if st, ok := r.state[nodePub]; ok {
+		return st
+	}
+	if r.nm != nil {
+		if _, live := r.logNames[nodePub]; !live {
+			return nil
+		}
+	}
+	st := &peerPathState{lastEvalAt: at}
+	r.state[nodePub] = st
+	return st
 }
 
 // peerPathState is the per-peer book-keeping the reconciler keeps for
@@ -364,10 +401,10 @@ func (r *reconciler) OnDiscoEvent(ev disco.Event) {
 // probe-driven path-selection will pick up the resulting RTT samples.
 func (r *reconciler) handleCallMeMaybeReceived(e disco.EventCallMeMaybeReceived) {
 	r.mu.Lock()
-	st, ok := r.state[e.PeerNodePub]
-	if !ok {
-		st = &peerPathState{lastEvalAt: e.At}
-		r.state[e.PeerNodePub] = st
+	st := r.pathStateForEventLocked(e.PeerNodePub, e.At)
+	if st == nil {
+		r.mu.Unlock()
+		return
 	}
 	st.callMeMaybeRecvAt = e.At
 	st.callMeMaybeRecvCount++
@@ -383,10 +420,10 @@ func (r *reconciler) handleCallMeMaybeReceived(e disco.EventCallMeMaybeReceived)
 // event triggered a recompute as a side effect.
 func (r *reconciler) handlePongFromPeer(e disco.EventPongFromPeer) {
 	r.mu.Lock()
-	st, ok := r.state[e.PeerNodePub]
-	if !ok {
-		st = &peerPathState{lastEvalAt: e.ReceivedAt}
-		r.state[e.PeerNodePub] = st
+	st := r.pathStateForEventLocked(e.PeerNodePub, e.ReceivedAt)
+	if st == nil {
+		r.mu.Unlock()
+		return
 	}
 	changed := st.observedAddr != e.DirectSrc || !st.directHinted
 	st.observedAddr = e.DirectSrc
@@ -413,10 +450,10 @@ func (r *reconciler) handlePongFromPeer(e disco.EventPongFromPeer) {
 // EventProbeRoundFinalized doc.
 func (r *reconciler) handleRTTSample(e disco.EventProbeRTTSampled) {
 	r.mu.Lock()
-	st, ok := r.state[e.PeerNodePub]
-	if !ok {
-		st = &peerPathState{lastEvalAt: e.At}
-		r.state[e.PeerNodePub] = st
+	st := r.pathStateForEventLocked(e.PeerNodePub, e.At)
+	if st == nil {
+		r.mu.Unlock()
+		return
 	}
 	if e.Path == pathRelay {
 		st.relayRTTEWMA = applyEWMA(st.relayRTTEWMA, e.RTT, r.cfg.EWMAAlpha)
@@ -449,10 +486,10 @@ func (r *reconciler) handleRTTSample(e disco.EventProbeRTTSampled) {
 // triggers should fire on, not a state to wait through).
 func (r *reconciler) handleProbeMissed(e disco.EventProbeMissed) {
 	r.mu.Lock()
-	st, ok := r.state[e.PeerNodePub]
-	if !ok {
-		st = &peerPathState{lastEvalAt: e.At}
-		r.state[e.PeerNodePub] = st
+	st := r.pathStateForEventLocked(e.PeerNodePub, e.At)
+	if st == nil {
+		r.mu.Unlock()
+		return
 	}
 	switched, reason := r.evaluateSwitchLocked(st, e.At, r.logNameLocked(e.PeerNodePub, e.PeerDeviceID))
 	r.mu.Unlock()
@@ -478,10 +515,10 @@ func (r *reconciler) handleRoundFinalized(e disco.EventProbeRoundFinalized) {
 		return
 	}
 	r.mu.Lock()
-	st, ok := r.state[e.PeerNodePub]
-	if !ok {
-		st = &peerPathState{lastEvalAt: e.At}
-		r.state[e.PeerNodePub] = st
+	st := r.pathStateForEventLocked(e.PeerNodePub, e.At)
+	if st == nil {
+		r.mu.Unlock()
+		return
 	}
 	appendPongRing(st, e.AnySuccess, r.cfg.UpgradePongStreak)
 	if e.AnySuccess {
@@ -744,12 +781,17 @@ func (r *reconciler) Apply(nm *signer.NetworkMap) error {
 	// it as DstNetworkID on frames to them. Fed BEFORE peers/disco so
 	// the registry exists before anything can trigger a send.
 	nets := map[string]string{}
+	logNames := map[string]string{}
 	for _, p := range nm.Peers {
 		if p.NetworkID != "" && p.NetworkID != nm.NetworkID {
 			nets[p.DeviceID] = p.NetworkID
 		}
+		if p.Grant != nil {
+			logNames[p.DeviceID] = peerLogName(p)
+		}
 	}
 	r.engine.SetPeerNetworks(nets)
+	r.engine.SetPeerLogNames(logNames)
 
 	r.provider.replacePeers(nm)
 	if d != nil {
@@ -1177,8 +1219,25 @@ func (r *reconciler) Snapshot() map[string]PathSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]PathSnapshot, len(r.state))
+	var deviceByNodePub map[string]string
+	if r.nm != nil {
+		deviceByNodePub = make(map[string]string, len(r.nm.Peers))
+		for _, p := range r.nm.Peers {
+			deviceByNodePub[p.NodePublicKey] = p.DeviceID
+		}
+	}
 	for nodePub, st := range r.state {
+		deviceID, inMap := deviceByNodePub[nodePub]
+		if r.nm != nil && !inMap {
+			// Path state for a peer the map no longer carries has no device
+			// id to report it under, and is not a peer of this device any
+			// more (waired-agent#1372). pathStateForEventLocked keeps such
+			// state from being created; this keeps it from being reported
+			// if it ever is.
+			continue
+		}
 		ps := PathSnapshot{
+			DeviceID:                deviceID,
 			CurrentPath:             st.currentPath,
 			LastSwitchAt:            st.lastSwitchAt,
 			LastSwitchReason:        st.lastSwitchReason,
@@ -1201,14 +1260,6 @@ func (r *reconciler) Snapshot() map[string]PathSnapshot {
 		}
 		if st.directHinted && st.observedAddr.IsValid() {
 			ps.ObservedAddr = st.observedAddr.String()
-		}
-		if r.nm != nil {
-			for _, p := range r.nm.Peers {
-				if p.NodePublicKey == nodePub {
-					ps.DeviceID = p.DeviceID
-					break
-				}
-			}
 		}
 		if ps.CurrentPath == "" {
 			ps.CurrentPath = pathDirect

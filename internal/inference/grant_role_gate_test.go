@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -231,5 +232,31 @@ func TestGrantRoleGate_MeshAndConsumerPeersUnaffected(t *testing.T) {
 	}
 	if rec := do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, at)); rec.Code != http.StatusOK {
 		t.Fatalf("public consumer: got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// DisplayName is what the overlay auth log and the gate refusals print
+// for a peer. PRODUCT CONTRACT: public share spec §8.5 — a public peer is
+// logged by its pseudonym, never its real device id — and team share
+// spec §10.2. A grant peer whose grant names no pseudonym fell back to
+// the device id until waired-agent#1368.
+func TestPeerIdentityDisplayName(t *testing.T) {
+	cases := []struct {
+		name string
+		id   PeerIdentity
+		want string
+	}{
+		{"own", PeerIdentity{DeviceID: "dev_own_a"}, "dev_own_a"},
+		{"public with a pseudonym", PeerIdentity{DeviceID: "dev_guest_real_id", Pseudonym: "guest-0001",
+			Grant: &signer.PeerGrant{ID: "grant_1", Kind: signer.GrantKindPublic}}, "guest-0001"},
+		{"public without a pseudonym", PeerIdentity{DeviceID: "dev_guest_real_id",
+			Grant: &signer.PeerGrant{ID: "grant_1", Kind: signer.GrantKindPublic}}, inferencemesh.PublicPeerLabelFor("grant_1")},
+		{"team without a label", PeerIdentity{DeviceID: "dev_team_real_id",
+			Grant: &signer.PeerGrant{ID: "grant_2", Kind: signer.GrantKindTeam}}, inferencemesh.TeamPeerFallbackLabel},
+	}
+	for _, c := range cases {
+		if got := c.id.DisplayName(); got != c.want {
+			t.Errorf("%s: DisplayName = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

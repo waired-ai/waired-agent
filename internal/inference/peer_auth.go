@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/proto/signedreq"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
@@ -42,10 +43,22 @@ type PeerIdentity struct {
 }
 
 // DisplayName returns the identifier to use for this peer in logs and
-// events: the grant pseudonym when present, the real DeviceID otherwise.
+// events: the grant pseudonym when present, the real DeviceID for a
+// same-network peer.
+//
+// A grant peer with no pseudonym gets the label the display surfaces use
+// for it, never its DeviceID. That case used to fall through to the
+// DeviceID, which for a Public Share peer is the identifier public share
+// spec §8.5 keeps out of logs (waired-agent#1368).
 func (p PeerIdentity) DisplayName() string {
 	if p.Pseudonym != "" {
 		return p.Pseudonym
+	}
+	if p.Grant != nil {
+		if inferencemesh.IsTeamGrant(p.Grant) {
+			return inferencemesh.TeamPeerFallbackLabel
+		}
+		return inferencemesh.PublicPeerLabelFor(p.Grant.ID)
 	}
 	return p.DeviceID
 }

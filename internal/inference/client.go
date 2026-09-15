@@ -92,6 +92,11 @@ func (c *Client) Ping(ctx context.Context, ip netip.Addr, port uint16) (PingResp
 		return PingResponse{}, 0, err
 	}
 	rtt := time.Since(start)
-	slog.DebugContext(ctx, "overlay ping ok", "device", body.Device, "rtt_ms", rtt.Milliseconds())
+	// Logged by the address this device dialled, not by body.Device: the
+	// remote answers with its own DeviceID, and for a Public Share or
+	// Team Share peer that identifier belongs to another account and is
+	// kept out of logs (public share spec §8.5, waired-agent#1368). The
+	// caller knows who it pinged and names the peer where it reports.
+	slog.DebugContext(ctx, "overlay ping ok", "addr", url, "rtt_ms", rtt.Milliseconds())
 	return body, rtt, nil
 }
