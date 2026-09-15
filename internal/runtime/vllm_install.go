@@ -298,7 +298,20 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 			// way there is nothing here worth keeping.
 			venvArgs = []string{"venv", "--clear", "--python", py, venvDir}
 		}
-		if err := i.runCapturing(ctx, uvBin, venvArgs, uvEnv, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
+		// On a uv-managed interpreter, never a system one. uv otherwise
+		// takes a python3.12 already on PATH, and a distribution's build
+		// ships without Python.h unless its -dev package is installed —
+		// which vLLM's Triton kernels compile against the first time a
+		// model is inspected ("fatal error: Python.h: No such file or
+		// directory", then no engine; Qwen3.5 on 0.28.0 and 0.29.0 under
+		// Ubuntu 24.04). uv's managed builds carry their headers
+		// (waired-ai/waired#588). Only this call carries the switch: pip and
+		// the verify use the venv's own interpreter, and a venv an older
+		// build made on a system interpreter must still converge. An env
+		// var rather than --managed-python so a system uv too old to know
+		// the flag degrades to today's behaviour instead of failing.
+		venvEnv := append(append([]string{}, uvEnv...), "UV_MANAGED_PYTHON=1")
+		if err := i.runCapturing(ctx, uvBin, venvArgs, venvEnv, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
 			i.maybeRollback(versionDir, opts.KeepFailed, ours)
 			return InstallResult{}, fmt.Errorf("vllm install: uv venv: %w", err)
 		}
