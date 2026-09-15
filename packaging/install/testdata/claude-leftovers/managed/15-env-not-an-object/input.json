@@ -1,0 +1,16 @@
+{
+  "env": "not a map",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "waired claude _fallback-hook",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

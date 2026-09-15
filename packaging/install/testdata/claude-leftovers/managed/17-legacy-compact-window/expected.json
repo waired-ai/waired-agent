@@ -1,0 +1,5 @@
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"
+  }
+}

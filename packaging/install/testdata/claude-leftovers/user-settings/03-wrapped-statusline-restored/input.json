@@ -1,0 +1,12 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/home/user/.claude/waired-statusline.sh"
+  },
+  "waired_original_statusLine": {
+    "type": "command",
+    "command": "npx ccusage statusline",
+    "padding": 0
+  },
+  "theme": "light"
+}

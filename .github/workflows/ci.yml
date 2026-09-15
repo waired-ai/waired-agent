@@ -681,9 +681,12 @@ jobs:
           sudo install -m 0755 /tmp/ollama-seed /usr/local/bin/ollama
           /usr/local/bin/ollama --version
 
-      # The exact poison: cmd/waired's fallback hook keys its per-session
-      # marker off os.UserCacheDir(), which reads $HOME on darwin. A test
-      # that does not seal HOME sees this and stays silent.
+      # The retired fallback hook's per-session markers, where it kept them:
+      # os.UserCacheDir(), which reads $HOME on darwin. The hook is gone, but
+      # `waired claude disable` now deletes this directory
+      # (waired-agent#1398), so a test that reaches that step without sealing
+      # HOME would delete the developer's own copy. The check after the run
+      # is what turns that into a failure instead of a silent pass.
       - name: seed the claude fallback cache
         run: |
           set -euo pipefail
@@ -701,6 +704,15 @@ jobs:
         # first wrote. Two of the bugs fixed for #386 survived a green
         # -count=1 and only showed up here.
         run: go test ./... -count=2 -timeout 20m
+
+      - name: the seeded fallback cache survived the tests
+        run: |
+          set -euo pipefail
+          dir="${HOME}/Library/Caches/waired/claude-fallback"
+          test -f "${dir}/sess-A" && test -f "${dir}/sess-B" || {
+            echo "a test deleted ${dir}: something reached the real user cache without sealing HOME" >&2
+            exit 1
+          }
 
       - name: unseed
         if: always()

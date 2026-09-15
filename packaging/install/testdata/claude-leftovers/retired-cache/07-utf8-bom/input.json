@@ -1,0 +1,1 @@
+﻿{"baseUrl": "http://127.0.0.1:9472", "models": [{"id": "claude-waired-auto", "display_name": "Waired auto (local, fallback to Anthropic)"}, {"id": "claude-waired-auto[1m]", "display_name": "Waired auto 1M (local, fallback to Anthropic)"}]}

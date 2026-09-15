@@ -1,0 +1,22 @@
+{
+  "baseUrl": "http://127.0.0.1:9472",
+  "fetchedAt": 1788630987207,
+  "models": [
+    {
+      "id": "claude-waired-auto",
+      "display_name": "Waired auto (local, fallback to Anthropic)"
+    },
+    {
+      "id": "claude-waired-auto[1m]",
+      "display_name": "Waired auto 1M (local, fallback to Anthropic)"
+    },
+    {
+      "id": "anthropic-waired-local",
+      "display_name": "Waired local (this device)"
+    },
+    {
+      "id": "claude-waired-peer-peer-a-local",
+      "display_name": "Waired peer: peer-a.local (qwen3.5-9b)"
+    }
+  ]
+}

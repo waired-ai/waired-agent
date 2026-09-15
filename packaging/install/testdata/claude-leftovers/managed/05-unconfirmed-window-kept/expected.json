@@ -1,0 +1,6 @@
+{
+  "env": {
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32000",
+    "DISABLE_TELEMETRY": "1"
+  }
+}

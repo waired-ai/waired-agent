@@ -1,0 +1,31 @@
+﻿{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "waired/subagent"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "waired claude _models-cache write --from-managed --peer-entries 5",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "waired claude _fallback-hook",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

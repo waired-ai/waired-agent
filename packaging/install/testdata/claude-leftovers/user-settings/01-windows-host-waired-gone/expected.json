@@ -1,0 +1,10 @@
+{
+  "effortLevel": "high",
+  "model": "opus[1m]",
+  "permissions": {
+    "allow": [
+      "mcp__example"
+    ]
+  },
+  "theme": "dark"
+}

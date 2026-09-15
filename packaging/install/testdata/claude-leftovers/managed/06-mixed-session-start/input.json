@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "echo operator-start",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "waired claude _picker write --from-managed --peer-entries 5",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo bundled"
+          },
+          {
+            "type": "command",
+            "command": "waired claude _picker write --from-managed"
+          }
+        ]
+      }
+    ]
+  }
+}

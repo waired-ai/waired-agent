@@ -93,10 +93,7 @@ func newClaudePickerCmd() *cobra.Command {
 				fmt.Fprintf(stdout, "Wrote Claude Code /model rows: %s\n", path)
 				return nil
 			case "remove":
-				if _, err := claudecode.RemoveRetiredCache(
-					claudecode.ClaudeConfigDir(), home, baseURLFromManagedSettings()); err != nil {
-					fmt.Fprintf(stderr, "Warning: %v\n", err)
-				}
+				removeRetiredUserLeftovers(home)
 				_, err := claudecode.RemovePickerLineup(claudecode.SettingsPath(home))
 				return err
 			default:
@@ -225,7 +222,32 @@ func removePickerRowsForInvoker() {
 	if !ok {
 		return
 	}
+	removeRetiredUserLeftovers(home)
 	if _, err := claudecode.RemovePickerLineup(claudecode.SettingsPath(home)); err != nil {
+		fmt.Fprintf(stderr, "Warning: %v\n", err)
+	}
+}
+
+// removeRetiredUserLeftovers takes away the two per-user files earlier builds
+// wrote and nothing else removes: the pre-#1185 picker cache and the retired
+// Stop hook's per-session markers (waired-agent#1398).
+//
+// Both the hop child (`_picker remove`, run as the invoking user) and the
+// no-hop path call it, and both reach it after `claude disable` has already
+// taken ANTHROPIC_BASE_URL out of managed settings. That ordering is why the
+// cache is recognised by its own contents here rather than by comparing its
+// baseUrl with the live one: there is no live one left by then, and the
+// comparison used to make this a silent no-op on every host, the non-hop path
+// included, which never called it at all.
+func removeRetiredUserLeftovers(home string) {
+	if _, err := claudecode.RemoveRetiredCacheOwned(claudecode.ClaudeConfigDir(), home); err != nil {
+		fmt.Fprintf(stderr, "Warning: %v\n", err)
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return
+	}
+	if _, err := claudecode.RemoveRetiredFallbackMarkers(cacheDir); err != nil {
 		fmt.Fprintf(stderr, "Warning: %v\n", err)
 	}
 }
@@ -259,13 +281,4 @@ func invokerPickerHome(action string) (home string, ok bool) {
 		return "", false
 	}
 	return home, true
-}
-
-// baseURLFromManagedSettings is the live ANTHROPIC_BASE_URL, which is what a
-// retired cache has to name to be one of ours. Read here rather than passed
-// in: `_picker remove` runs from `waired claude disable`, which has no base
-// URL to hand it, and the file is the same one the reader compares against.
-func baseURLFromManagedSettings() string {
-	_, _, baseURL := claudemanaged.View()
-	return baseURL
 }

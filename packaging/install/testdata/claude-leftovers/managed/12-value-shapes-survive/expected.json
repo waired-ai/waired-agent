@@ -1,0 +1,19 @@
+{
+  "companyAnnouncements": [
+    "one element"
+  ],
+  "nested": {
+    "empty": {},
+    "emptyList": [],
+    "nothing": null,
+    "yes": true,
+    "no": false,
+    "int": 42,
+    "negative": -7,
+    "float": 1.5,
+    "exp": 1000
+  },
+  "when": "2026-09-16T00:00:00Z",
+  "text": "日本語 \"quoted\" back\\slash tab\t line\nnext é",
+  "cleanupPeriodDays": 30
+}

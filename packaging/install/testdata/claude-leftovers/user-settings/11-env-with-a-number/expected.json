@@ -1,0 +1,7 @@
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-waired-any",
+    "MAX_THINKING": 8000
+  },
+  "theme": "dark"
+}
