@@ -148,10 +148,10 @@ func SuggestMinRAMGB(vramGB float64) int {
 	return int(math.Ceil(vramGB + 2))
 }
 
-// KV-cache quantization factors relative to FP16, matching Ollama's
-// OLLAMA_KV_CACHE_TYPE options (f16 / q8_0 / q4_0). q8_0 is near-lossless
-// and halves the KV footprint; q4_0 quarters it but degrades long-context
-// recall.
+// KV-cache quantization factors relative to FP16. The ollama serve path
+// prices its cache types with hostfit.OllamaKVCacheFactor (ggml's block
+// sizes, waired-agent#1337); KVFactorQ8_0 remains for the older callers
+// that still take a rounded factor.
 //
 // KVFactorFP8 is the vLLM `--kv-cache-dtype fp8` (e4m3) analogue: 1 B/elem
 // vs fp16's 2, so it halves KV just like q8_0. It is numerically equal to
@@ -161,7 +161,6 @@ const (
 	KVFactorF16  = 1.0
 	KVFactorQ8_0 = 0.5
 	KVFactorFP8  = 0.5
-	KVFactorQ4_0 = 0.25
 )
 
 // MaxContextTokens returns the largest context length L such that

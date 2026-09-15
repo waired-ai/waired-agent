@@ -92,6 +92,41 @@ const verifyTag = "verify-model:q4"
 // statement about the tuning, not about a constant.
 var verifyCtx = func() int { _, _, _, t := verifyFixture(); return t.ContextLength }()
 
+// llamaLoadLog renders the lines ParseLlamaPlacement reads from one
+// runner load, in the shape ollama 0.33.3 writes them to engine.log
+// (internal/runtime/testdata/llamacpp holds a captured one). The fixture
+// model has no GGUF layout, so every figure here is chosen by the test.
+func llamaLoadLog(ctx, offloaded, total int, deviceMiB, hostMiB float64, kv string) string {
+	return fmt.Sprintf(`time=2026-09-14T00:00:00.000Z level=INFO source=llama_server.go:433 msg="starting llama-server" cmd="llama-server --model /models/blobs/sha256-aaaa -c %[1]d -np 1"
+llama_model_loader: loaded meta data with 42 key-value pairs and 866 tensors from /models/blobs/sha256-aaaa (version GGUF V3 (latest))
+load_tensors: offloaded %[2]d/%[3]d layers to GPU
+load_tensors:   CPU_Mapped model buffer size = %.2[5]f MiB
+load_tensors:        CUDA0 model buffer size = %.2[4]f MiB
+llama_context: n_ctx                 = %[1]d
+llama_kv_cache: size = 100.00 MiB (%[1]d cells,  16 layers,  1/1 seqs), K (%[6]s): 50.00 MiB, V (%[6]s): 50.00 MiB
+`, ctx, offloaded, total, deviceMiB, hostMiB, kv)
+}
+
+// fakeEngineLog is a mutable engine.log for the placement witness. It
+// records the byte bound it was read with, for the same reason
+// fakeModelEnvSwitcher does.
+type fakeEngineLog struct {
+	mu   sync.Mutex
+	text string
+	asks []int
+}
+
+func (f *fakeEngineLog) set(s string) { f.mu.Lock(); f.text = s; f.mu.Unlock() }
+func (f *fakeEngineLog) tail(maxBytes int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asks = append(f.asks, maxBytes)
+	if len(f.text) > maxBytes {
+		return f.text[len(f.text)-maxBytes:]
+	}
+	return f.text
+}
+
 func TestVerifyOllamaTuning(t *testing.T) {
 	_, _, hw, tn := verifyFixture()
 	if tn.ContextLength != verifyCtx {
@@ -105,6 +140,12 @@ func TestVerifyOllamaTuning(t *testing.T) {
 		srv := f.server(t)
 		defer srv.Close()
 		return verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tun, verifyTag, hw, ollamaVerifyDeps{})
+	}
+	runLog := func(f *fakeOllamaAPI, tun ollamaTuning, hw hardware.Profile, log string) (tuningVerdict, string) {
+		srv := f.server(t)
+		defer srv.Close()
+		el := &fakeEngineLog{text: log}
+		return verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tun, verifyTag, hw, ollamaVerifyDeps{EngineLog: el.tail})
 	}
 
 	t.Run("ok", func(t *testing.T) {
@@ -136,22 +177,110 @@ func TestVerifyOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("spill-discrete", func(t *testing.T) {
-		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize,
-			psVRAM: healthySize * 8 / 10, psCtx: verifyCtx, tagSize: weight}
-		v, detail := run(f, tn, hw)
-		if v != tuningSpill {
-			t.Errorf("= (%v, %q), want tuningSpill", v, detail)
+	// The engine's own placement is the spill witness (waired-agent#1337).
+	// 50 of 66 layers on the GPU with 3 GB of weights in system RAM is a
+	// spill the plan did not predict; the same load with the input layer
+	// alone in system RAM is not.
+	t.Run("spill-discrete-from-engine-log", func(t *testing.T) {
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tn, hw, llamaLoadLog(verifyCtx, 50, 66, 6500, 3000, "q8_0"))
+		if v != tuningSpill || !strings.Contains(detail, "16 of 66 layers") {
+			t.Errorf("= (%v, %q), want tuningSpill naming 16 of 66 layers", v, detail)
 		}
 	})
 
-	t.Run("spill-uma-ignored", func(t *testing.T) {
-		uma := hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}
+	t.Run("fully-offloaded-from-engine-log", func(t *testing.T) {
+		// /api/ps disagrees (a spill-shaped size_vram) and loses: it is
+		// ollama's parse of the buffer lines, which leaves the draft
+		// context and the CPU_Mapped weights out.
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize * 6 / 10,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tn, hw, llamaLoadLog(verifyCtx, 66, 66, 9000, 400, "q8_0"))
+		if v != tuningOK || detail != "" {
+			t.Errorf("= (%v, %q), want (tuningOK, \"\")", v, detail)
+		}
+	})
+
+	t.Run("api-ps-alone-is-no-spill-witness", func(t *testing.T) {
 		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize,
 			psVRAM: healthySize * 8 / 10, psCtx: verifyCtx, tagSize: weight}
-		v, _ := run(f, tn, uma)
+		v, detail := run(f, tn, hw)
 		if v == tuningSpill {
-			t.Error("UMA hosts must not classify size_vram<size as a spill")
+			t.Errorf("= (%v, %q): without the engine's placement a size_vram shortfall must not read as a spill", v, detail)
+		}
+	})
+
+	t.Run("spill-unified-from-engine-log", func(t *testing.T) {
+		// One pool has nowhere to spill to, which is exactly why the
+		// engine's report of layers in system RAM matters there too.
+		uma := hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tn, uma, llamaLoadLog(verifyCtx, 40, 66, 5000, 4500, "q8_0"))
+		if v != tuningSpill {
+			t.Errorf("= (%v, %q), want tuningSpill on unified memory too", v, detail)
+		}
+	})
+
+	// A mixture of experts spills experts, not layers: the log still says
+	// every layer is offloaded and CPU_Mapped reads the whole file, so the
+	// witness is the device buffer's drop from the planned figure
+	// (waired-agent#1337). Within the plan it is not a spill; a drop past
+	// the plan and a layer's tolerance is.
+	t.Run("moe-expert-spill-reads-the-device-side", func(t *testing.T) {
+		tm := tn
+		tm.PlannedDeviceWeightMB, tm.PlannedCPUWeightMB, tm.PlannedLayerWeightMB, tm.HostWeightsMB = 9000, 2400, 300, 400
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tm, hw, llamaLoadLog(verifyCtx, 66, 66, 6600, 9400, "q8_0"))
+		if v == tuningSpill {
+			t.Errorf("= (%v, %q): 2,400 MiB off the device with 2,400 planned is the plan, not a spill", v, detail)
+		}
+		v, detail = runLog(f, tm, hw, llamaLoadLog(verifyCtx, 66, 66, 5000, 9400, "q8_0"))
+		if v != tuningSpill || !strings.Contains(detail, "4000 MiB") {
+			t.Errorf("= (%v, %q), want tuningSpill naming the 4000 MiB the device lost", v, detail)
+		}
+	})
+
+	t.Run("gpu-not-engaged-from-engine-log", func(t *testing.T) {
+		// waired-agent#71: a load with no layer on the GPU is a backend
+		// that did not engage, not a window that was too large.
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: 0,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tn, hw, llamaLoadLog(verifyCtx, 0, 66, 0, 9500, "q8_0"))
+		if v != tuningGPUNotEngaged {
+			t.Errorf("= (%v, %q), want tuningGPUNotEngaged", v, detail)
+		}
+	})
+
+	t.Run("gpu-not-engaged-without-engine-log", func(t *testing.T) {
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: 0,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := run(f, tn, hw)
+		if v != tuningGPUNotEngaged {
+			t.Errorf("= (%v, %q), want tuningGPUNotEngaged from size_vram=0 when the log says nothing", v, detail)
+		}
+	})
+
+	t.Run("foreign-load-in-the-log-is-no-evidence", func(t *testing.T) {
+		// The last load in the log is at another window: an older runner,
+		// or an adopted engine writing elsewhere. It must not be read as
+		// this load's placement.
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tn, hw, llamaLoadLog(32768, 10, 66, 1000, 9000, "q8_0"))
+		if v != tuningOK {
+			t.Errorf("= (%v, %q), want tuningOK: a load at another window is not this one", v, detail)
+		}
+	})
+
+	t.Run("f16-fallback-from-engine-log", func(t *testing.T) {
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
+			psCtx: verifyCtx, tagSize: weight}
+		v, detail := runLog(f, tn, hw, llamaLoadLog(verifyCtx, 66, 66, 9000, 400, "f16"))
+		if v != tuningF16Fallback {
+			t.Errorf("= (%v, %q), want tuningF16Fallback from the engine's own KV line", v, detail)
 		}
 	})
 
@@ -331,13 +460,14 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		// (waired-ai/waired-agent#657). TestDeclaredContextWindow owns
 		// that half; this one owns the latch.
 		size, _ := healthy(262144)
-		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size,
 			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
+		el := &fakeEngineLog{text: llamaLoadLog(verifyCtx, 46, 66, 6500, 3000, "q8_0")}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{EngineLog: el.tail}, testLogger())
 		if sw.stops != 0 || sw.ensures != 0 {
 			t.Fatalf("stops=%d ensures=%d, want no restart at the ladder's only rung", sw.stops, sw.ensures)
 		}
@@ -360,13 +490,14 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		latched := tn
 		latched.Warning = "configured model is below the ~200k coding-agent context floor"
 		size, _ := healthy(262144)
-		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size,
 			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
+		el := &fakeEngineLog{text: llamaLoadLog(verifyCtx, 46, 66, 6500, 3000, "q8_0")}
 		applyOllamaTuningVerification(context.Background(), sw, latched, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{EngineLog: el.tail}, testLogger())
 		got := sw.lastTuning(t)
 		if !strings.Contains(got.Warning, "coding-agent context floor") {
 			t.Errorf("the sizing warning was dropped: %q", got.Warning)
@@ -390,13 +521,21 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 			t.Fatalf("fixture should serve the 1M rung outright: %+v", big.ModelTuning)
 		}
 		size := weight + int64(0.5*20480)*int64(big.ContextLength)
-		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size,
 			psCtx: big.ContextLength, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
-		sw := &fakeModelEnvSwitcher{} // onEnsure absent: the spill persists
+		el := &fakeEngineLog{text: llamaLoadLog(big.ContextLength, 46, 66, 6500, 3000, "q8_0")}
+		sw := &fakeModelEnvSwitcher{}
+		sw.onEnsure = func() {
+			// The restarted engine serves the lower rung and still spills.
+			api.mu.Lock()
+			api.psCtx = 200704
+			api.mu.Unlock()
+			el.set(llamaLoadLog(200704, 48, 66, 6800, 2700, "q8_0"))
+		}
 		applyOllamaTuningVerification(context.Background(), sw, big, mm, v, hw,
-			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{EngineLog: el.tail}, testLogger())
 		if sw.stops != 1 || sw.ensures != 1 {
 			t.Fatalf("stops=%d ensures=%d, want exactly one restart even when still degraded", sw.stops, sw.ensures)
 		}
@@ -416,13 +555,14 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		floored := tn
 		floored.ContextLength = ollamaContextFloor
 		size, _ := healthy(ollamaContextFloor)
-		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size / 2,
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size,
 			psCtx: ollamaContextFloor, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
+		el := &fakeEngineLog{text: llamaLoadLog(ollamaContextFloor, 33, 66, 4800, 4700, "q8_0")}
 		applyOllamaTuningVerification(context.Background(), sw, floored, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{EngineLog: el.tail}, testLogger())
 		if sw.stops != 0 || sw.ensures != 0 {
 			t.Errorf("no restart should happen at the floor (stops=%d ensures=%d)", sw.stops, sw.ensures)
 		}
@@ -447,6 +587,34 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		got := sw.lastTuning(t)
 		if !got.Verified || got.Warning == "" {
 			t.Errorf("failed restart should still record a verified warning: %+v", got)
+		}
+	})
+
+	t.Run("gpu-not-engaged-latches-without-restart-or-step", func(t *testing.T) {
+		// waired-agent#71: stepping the window down cannot make a backend
+		// engage, so the pass neither restarts nor lowers the rung. It says
+		// what happened and keeps serving — and declaring — the window.
+		size, _ := healthy(verifyCtx)
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: 0,
+			psCtx: verifyCtx, tagSize: weight}
+		srv := api.server(t)
+		defer srv.Close()
+		sw := &fakeModelEnvSwitcher{}
+		el := &fakeEngineLog{text: llamaLoadLog(verifyCtx, 0, 66, 0, 9500, "q8_0")}
+		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), ollamaVerifyDeps{EngineLog: el.tail}, testLogger())
+		if sw.stops != 0 || sw.ensures != 0 || len(sw.envs) != 0 {
+			t.Fatalf("stops=%d ensures=%d envs=%d, want the engine left alone", sw.stops, sw.ensures, len(sw.envs))
+		}
+		got := sw.lastTuning(t)
+		if got.ContextLength != tn.ContextLength || !got.WindowFits {
+			t.Errorf("recorded ctx=%d WindowFits=%v, want the planned %d still declared", got.ContextLength, got.WindowFits, tn.ContextLength)
+		}
+		if !got.Degraded || !strings.Contains(got.Warning, "GPU was not used") {
+			t.Errorf("recorded Degraded=%v warning=%q, want a degraded load that says the GPU was not used", got.Degraded, got.Warning)
+		}
+		if len(el.asks) == 0 || el.asks[0] != placementTailBytes {
+			t.Errorf("engine log read with %v, want the placement bound %d", el.asks, placementTailBytes)
 		}
 	})
 
@@ -751,19 +919,19 @@ func TestVerifyOllamaTuning_PlannedSpillWithinBound(t *testing.T) {
 	if tn.ExpectedSpillFraction <= 0 || tn.ContextLength != 200704 {
 		t.Fatalf("fixture should serve the full floor as an intentional spill: %+v", tn.ModelTuning)
 	}
-	// Measured 3.9% in system RAM — under the tolerance 2×expected ≈ 9.4%
-	// at the floor window (the planned figure is the share of the weights
-	// the fit is predicted to move, ~4.7% here; waired-agent#1337).
+	// The engine placed about the weight the plan predicted in system RAM:
+	// more than one layer's tolerance, less than the plan plus one.
 	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
-		psVRAM: 22_200_000_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+		psVRAM: 19_981_500_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
+	el := &fakeEngineLog{text: llamaLoadLog(tn.ContextLength, 39, 42, 19900, 1600, "q8_0")}
 
-	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tn, "anchor:tag", hw, ollamaVerifyDeps{})
+	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tn, "anchor:tag", hw, ollamaVerifyDeps{EngineLog: el.tail})
 	if verdict != tuningOKPlannedSpill {
 		t.Fatalf("verdict = %v (%s), want tuningOKPlannedSpill", verdict, detail)
 	}
-	if !strings.Contains(detail, "within the planned bound") {
+	if !strings.Contains(detail, "within the plan") {
 		t.Errorf("detail should read informationally: %q", detail)
 	}
 	for _, bad := range []string{"fail", "error", "degraded"} {
@@ -781,14 +949,15 @@ func TestVerifyOllamaTuning_PlannedSpillWithinBound(t *testing.T) {
 // no-spill window with one restart; that window no longer exists.
 func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 	m, v, hw, tn := anchorSpillFixture()
-	// 30% measured spill > the 25% absolute tolerance clamp.
+	// Far more weight in system RAM than the plan predicted.
 	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
 		psVRAM: 16_170_000_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
+	el := &fakeEngineLog{text: llamaLoadLog(tn.ContextLength, 30, 42, 14000, 7200, "q8_0")}
 
 	sw := &fakeModelEnvSwitcher{}
-	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), ollamaVerifyDeps{}, testLogger())
+	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), ollamaVerifyDeps{EngineLog: el.tail}, testLogger())
 
 	if sw.stops != 0 || sw.ensures != 0 {
 		t.Fatalf("restarts: stops=%d ensures=%d, want none — no smaller rung exists", sw.stops, sw.ensures)

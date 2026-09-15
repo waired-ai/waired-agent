@@ -51,6 +51,18 @@ GGUF に nextn ブロックがあっても、ollama が draft を動かすのは
 
 compute バッファ（主・draft）とプロセスのデバイスコンテキストはヘッダから導けない。24 GB 級 CUDA で、主 compute は full offload で 1,060 MiB @200,704、full-attention 層の KV が CPU に出ると 1,500〜1,532 MiB に増える。nvidia-smi の空きと fit の free の差は非 MTP で約 395 MiB、MTP でさらに約 600 MiB。別バックエンドの値は waired-agent#1337 の計測を参照。
 
+**compute の土台は ubatch で決まり、ubatch は ollama が選ぶ。** `server/sched.go` の `automaticGenerationBatch`（v0.33.3）は、コンテキストウィンドウが 32,768 を超えると 2048 から始め、ollama 自身の予測（ファイルサイズ + f16 の KV）が空きの 60 % / 75 % 以下のときだけ 2048 / 1024 を保ち、それ以外は 512 に下げる。24 GB 級 CUDA では qwen3.5 の 9b / 4b / 0.8b が `-ub 2048`、gpt-oss が 1024、20 GB を超えるビルドが 512 で動いた。compute の土台は ubatch 512 あたり 80 MiB で、CUDA / Metal / Vulkan とも同じ（512 で 52〜80、1024 で 117、2048 で 96〜233 MiB）。以前 Metal / unified の「大きい土台」（850 / 950 MiB）と読んだものは、ubatch 2048 のロードを 512 として読んだ誤り。大きい ubatch は空きに余裕があるときだけ起きるので、載るかどうかの判定には効かない。
+
+**tied output（`output.weight` の無いビルド）は埋め込みを 2 回持つ。** llama.cpp は出力層を token_embd のコピーで作り、そのコピーはデバイスに置く（4b の CUDA0 model buffer 2,513.56 MiB = ブロック 2,016.2 + 埋め込み 497.3）。入力側の 1 枚はシステム RAM のまま。カタログの `gguf.tied_output_bytes`。
+
+**ollama library の qwen3.5 タグは MTP ヘッドを `mtp.*` テンソルで持つ**（`blk.N.` の末尾ブロックではない）。draft しないので nextn と同じ扱いでロードから除く。
+
+**MoE の部分あふれは `offloaded N/M` に出ない。** 35B-A3B MTP-Q4 @200,704 q8_0 は 2,315 MiB 不足で、fit は 6 層分の expert をシステム RAM に動かすが、ログは `offloaded 42/42 layers` のまま。`CPU_Mapped model buffer size` はファイルのほぼ全体（20,294 MiB）を報告するので、動いた量はデバイス側 buffer の減少（20,428 → 18,079 MiB）で読む。
+
+**fit の余裕 1 GiB は下げられない。** 27B UD-Q3 @200,704 で VRAM を押さえて余裕を正確に 256 MiB にすると、10 万トークンのプロンプトは通り、最初の画像入力で `cudaMalloc failed: out of memory`（469 MiB）となり llama-server が落ちる。既定の 1 GiB でも画像処理のピークで空きは 501 MiB まで減る。1 GiB は llama.cpp 作者が「保守的」と呼ぶ値で実測の根拠は無い（ggml-org/llama.cpp#16653、#23772）が、下げた報告は 12〜16 GB カードで OOM している。
+
+**Metal の projector 分の余裕は projector の 2 倍 + 約 330 MiB。** ollama の pad（projector + 1 GiB）に llama-server 自身の projector 見積り（`[mtmd] estimated worst-case memory usage of mmproj`）が重なる。CUDA / Vulkan では +24 MiB。
+
 ### 5. `/api/ps` は配置の証拠にならない
 
 `size` / `size_vram` は ollama が buffer 行を自前で解析した値で、draft コンテキストと `CPU_Mapped` を数えない。MTP-Q4 で実 GPU 使用 21.2 GB を 14.97 GB と報告し、入力層が 3 分の 1 を占めるモデルを 100% GPU と報告する（`docs/knowledges/20260912/2130-ollama-ps-hides-cpu-mapped-weights.md`）。配置は `load_tensors` の行で読む。
@@ -61,4 +73,5 @@ compute バッファ（主・draft）とプロセスのデバイスコンテキ�
 - `docs/knowledges/20260914/0120-input-layer-tensors-stay-on-the-cpu.md`
 - `docs/knowledges/20260803/1327-hybrid-attention-kv-from-gguf.md`
 - ggml-org/llama.cpp `common/fit.cpp`、`gguf-py/gguf/constants.py`（GGML_QUANT_SIZES）
-- ollama v0.33.3 `llm/llama_server.go`、`server/routes.go`、`api/types.go`
+- ollama v0.33.3 `llm/llama_server.go`、`server/routes.go`、`server/sched.go`、`api/types.go`
+- https://github.com/waired-ai/waired-agent/issues/1375（予算の入力: ディスプレイ駆動 GPU）

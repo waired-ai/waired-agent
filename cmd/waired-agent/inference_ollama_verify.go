@@ -57,18 +57,61 @@ const (
 	// outright and steps the forced generation BATCH first
 	// (waired-agent#1038).
 	tuningVRAMExhausted
+	// tuningGPUNotEngaged: a host with GPU-addressable memory loaded the
+	// model with no layer on it — the engine's own placement says
+	// "offloaded 0/M layers", or, with no engine log to read, /api/ps
+	// reports no bytes in GPU memory. The cause is a backend or driver that
+	// did not engage, not the window, so no smaller rung helps and the pass
+	// neither restarts nor steps down (waired-agent#71).
+	tuningGPUNotEngaged
 )
+
+// placementTailBytes bounds the engine-log read the placement witness
+// parses: one runner's load transcript at --log-verbosity 4 (the fit
+// dry-run, the tensor and buffer lines, the draft context) plus whatever
+// the engine logged between the load and this read.
+const placementTailBytes = 2 << 20
+
+// placementEvidence reads llama.cpp's own record of where it put the model
+// this tuning was verified against (waired-agent#1337). ok=false is "no
+// evidence": no log seam, a log at its cap (the writer keeps the start, so
+// the tail is not this load), no complete load in the tail, or a load that
+// is not this runner's — a different model file than the live runner's
+// --model, or a different context than the tuning asked for.
+func placementEvidence(t ollamaTuning, deps ollamaVerifyDeps) (infruntime.LlamaPlacement, bool) {
+	if deps.EngineLog == nil {
+		return infruntime.LlamaPlacement{}, false
+	}
+	tail := deps.EngineLog(placementTailBytes)
+	if infruntime.EngineLogTailIsStale(tail) {
+		return infruntime.LlamaPlacement{}, false
+	}
+	p, ok := infruntime.ParseLlamaPlacement(tail)
+	if !ok {
+		return infruntime.LlamaPlacement{}, false
+	}
+	if t.ContextLength > 0 && p.ContextCells != t.ContextLength && p.ContextCells != t.ContextLength*max(t.NumParallel, 1) {
+		return infruntime.LlamaPlacement{}, false
+	}
+	if f, ok := observeRunnerFlags(t, deps.ListProcs); ok && f.ModelPath != "" && p.ModelPath != "" &&
+		pathBase(f.ModelPath) != pathBase(p.ModelPath) {
+		return infruntime.LlamaPlacement{}, false
+	}
+	return p, true
+}
+
+// pathBase is the last element of a path written by either OS's engine.
+func pathBase(p string) string {
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
 
 // f16DetectMinMarginBytes is the minimum gap between the expected q8_0
 // and f16 KV sizes for the size heuristic to be meaningful; below it,
 // graph-buffer noise dominates and the check abstains.
 const f16DetectMinMarginBytes = 1_500_000_000
-
-// spillAbsoluteToleranceMax caps the measured spill fraction the verify
-// pass tolerates around an intentional spill, even when 2× the expected
-// fraction would allow more. Above ~25% the decode penalty stops being
-// "some speed traded for window" and the no-spill fallback is better.
-const spillAbsoluteToleranceMax = 0.25
 
 // The free-VRAM reading is EVIDENCE, not a threshold. It is recorded on
 // the tuning (ModelTuning.PostLoadFreeVRAMMB) and degrades nothing on
@@ -121,6 +164,10 @@ type ollamaVerifyDeps struct {
 	Allocate func(ctx context.Context, tag string, promptTokens int) error
 	// ListProcs is the #763 runner-parallelism read.
 	ListProcs runnerProcLister
+	// EngineLog reads the end of the engine's own log, where llama.cpp
+	// records where it placed each load (placementEvidence). nil means no
+	// placement witness.
+	EngineLog func(maxBytes int) string
 }
 
 // verifyOllamaTuning inspects the loaded model and classifies the
@@ -184,15 +231,23 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 			psm.ContextLength, t.ContextLength)
 	}
 
-	// Spill check: on a discrete GPU, size_vram < size means layers live
-	// in system RAM. UMA hosts share one physical pool — the field's
-	// semantics differ and partial "spill" there is not the discrete
-	// decode cliff, so this check only runs off unified memory. An
-	// intentional spill (#624) widens the tolerance to 2× the planned
-	// fraction (capped at spillAbsoluteToleranceMax): the single-point
-	// spill calibration is allowed to be off by that much before the
-	// prediction counts as wrong and the no-spill fallback kicks in.
-	//
+	// Placement: where llama.cpp says it put this load. It is the witness
+	// for everything below — /api/ps's size / size_vram are ollama's own
+	// parse of the same buffer lines, and they leave out both the MTP draft
+	// context and the CPU_Mapped weights (waired-agent#1337, #1330).
+	accelerated := hw.UnifiedMemory || len(hw.GPUs) > 0
+	discrete := !hw.UnifiedMemory && len(hw.GPUs) > 0
+	place, placed := placementEvidence(t, deps)
+	switch {
+	case accelerated && placed && (place.OffloadedLayers == 0 || place.DeviceWeightsMiB == 0):
+		return tuningGPUNotEngaged, fmt.Sprintf(
+			"%s loaded with no layer in VRAM (offloaded %d/%d layers, %.0f MiB of weights in system RAM)",
+			psm.Name, place.OffloadedLayers, place.TotalLayers, place.HostWeightsMiB)
+	case discrete && !placed && psm.Size > 0 && psm.SizeVRAM == 0:
+		return tuningGPUNotEngaged, fmt.Sprintf(
+			"%s loaded with no bytes in VRAM (size_vram=0 of %.1f GB)", psm.Name, float64(psm.Size)/1e9)
+	}
+
 	// waired-agent#1038: the spill FRACTION does not separate a working
 	// configuration from a dead one. On the reproduction host the same
 	// model at the same window measured 21.9 % spilled and served a
@@ -203,7 +258,6 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// along for the record and for the sentence a spilling host shows;
 	// it decides nothing (waired-agent#1079).
 	plannedSpillDetail := ""
-	discrete := !hw.UnifiedMemory && len(hw.GPUs) > 0
 	freeMB := 0
 	if deps.FreeVRAMMB != nil && discrete {
 		freeMB, _ = deps.FreeVRAMMB(ctx)
@@ -239,37 +293,61 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// answer about the request (see the note above the floor's removal).
 	serves := probeServed
 
-	if discrete && psm.Size > 0 {
-		allowed := 0.01
-		if t.ExpectedSpillFraction > 0 {
-			allowed = 2 * t.ExpectedSpillFraction
-			if allowed < 0.01 {
-				allowed = 0.01
-			}
+	// Spill: the weights the fit moved to system RAM, against the weights
+	// the plan predicted it would move, with one layer of tolerance — the
+	// granularity the fit itself works in. The input-layer weights that
+	// live in system RAM on every load are not a spill and are taken off
+	// first. Bytes rather than a layer count, because on a mixture of
+	// experts the fit moves expert tensors and still reports every layer
+	// as offloaded. Without the engine's placement there is no witness:
+	// /api/ps cannot tell a spill from its own omissions, so the check
+	// abstains rather than guess.
+	if accelerated && placed {
+		moved := place.HostWeightsMiB - float64(t.HostWeightsMB)
+		if t.PlannedDeviceWeightMB > 0 && place.DeviceWeightsMiB > 0 {
+			// The device side is the witness where the plan can name it:
+			// a mixture of experts whose experts spilled maps the whole
+			// file into system RAM (CPU_Mapped reads 20,294 MiB for a
+			// 35B-A3B the fit moved 2,349 MiB of), while its device
+			// buffer shrinks by exactly what left.
+			moved = float64(t.PlannedDeviceWeightMB) - place.DeviceWeightsMiB
 		}
-		if allowed > spillAbsoluteToleranceMax {
-			allowed = spillAbsoluteToleranceMax
+		moved = max(moved, 0)
+		tolerance := float64(t.PlannedLayerWeightMB)
+		if tolerance <= 0 {
+			tolerance = 0.05 * (place.DeviceWeightsMiB + place.HostWeightsMiB)
 		}
-		spilled := psm.Size - psm.SizeVRAM
-		frac := float64(spilled) / float64(psm.Size)
-		if frac > allowed && !serves {
+		layers := fmt.Sprintf("%d of %d layers", place.CPULayers(), place.TotalLayers)
+		switch {
+		case moved > float64(t.PlannedCPUWeightMB)+tolerance && !serves:
 			return tuningSpill, fmt.Sprintf(
-				"%s partially CPU-resident: %.1f of %.1f GB (%.1f%%) spilled to system RAM (size_vram=%d, tolerated %.0f%%)",
-				psm.Name, float64(spilled)/1e9, float64(psm.Size)/1e9, frac*100, psm.SizeVRAM, allowed*100)
-		}
-		if frac > allowed {
+				"%s partially CPU-resident: %s and %.0f MiB of weights in system RAM, planned %d MiB",
+				psm.Name, layers, moved, t.PlannedCPUWeightMB)
+		case moved > float64(t.PlannedCPUWeightMB)+tolerance:
 			// The configuration was shown to serve, so this is the planned
 			// trade running hot rather than a broken host. Report it, do
 			// not degrade into it.
 			plannedSpillDetail = fmt.Sprintf(
-				"serving a %d-token window with %.1f%% of the model in system RAM (expected ~%.0f%%), %d MB of GPU memory still free",
-				t.ContextLength, frac*100, t.ExpectedSpillFraction*100, freeMB)
-		}
-		if plannedSpillDetail == "" && t.ExpectedSpillFraction > 0 && frac > 0.01 {
+				"serving a %d-token window with %s and %.0f MiB of weights in system RAM (planned %d MiB), %d MB of GPU memory still free",
+				t.ContextLength, layers, moved, t.PlannedCPUWeightMB, freeMB)
+		case t.ExpectedSpillFraction > 0 && moved > tolerance:
 			plannedSpillDetail = fmt.Sprintf(
-				"serving a %d-token window with %.1f%% of the model in system RAM (expected ~%.0f%%) — within the planned bound",
-				t.ContextLength, frac*100, t.ExpectedSpillFraction*100)
+				"serving a %d-token window with %s and %.0f MiB of weights in system RAM — within the plan",
+				t.ContextLength, layers, moved)
 		}
+	}
+
+	// The engine names the KV cache type it allocated; that is the f16
+	// fallback's witness when the log is there.
+	if placed && place.KVCacheType != "" {
+		if t.KVCacheType != "f16" && t.KVCacheType != "" && place.KVCacheType == "f16" {
+			return tuningF16Fallback, fmt.Sprintf(
+				"engine allocated an f16 KV cache although %s was requested", t.KVCacheType)
+		}
+		if ctxDetail == "" && plannedSpillDetail != "" {
+			return tuningOKPlannedSpill, plannedSpillDetail
+		}
+		return tuningOK, ctxDetail
 	}
 
 	// f16-fallback size heuristic, only meaningful for the model we
@@ -278,20 +356,20 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// with sliding-window / linear layers, which biases this check
 	// toward false NEGATIVES (missed fallback) — never toward a
 	// needless restart.
-	if psm.Name == tag && t.KVCacheType == "q8_0" && t.ContextLength > 0 {
+	if psm.Name == tag && (t.KVCacheType == "q8_0" || t.KVCacheType == "q4_0") && t.ContextLength > 0 {
 		if weight, err := ollamaTagSize(ctx, client, baseURL, tag); err == nil && weight > 0 {
 			ctxTotal := psm.ContextLength
 			if ctxTotal <= 0 {
 				ctxTotal = t.ContextLength * t.NumParallel
 			}
 			kvBpt := float64(t.kvBytesPerTokFP16)
-			expQ8 := kvBpt * 0.5 * float64(ctxTotal)
+			expQ8 := kvBpt * kvFactorFor(t.KVCacheType) * float64(ctxTotal)
 			expF16 := kvBpt * float64(ctxTotal)
 			if expF16-expQ8 >= f16DetectMinMarginBytes {
 				if excess := float64(psm.Size - weight); excess > (expQ8+expF16)/2 {
 					return tuningF16Fallback, fmt.Sprintf(
-						"KV cache looks f16-sized despite q8_0 (live %.1f GB − weights %.1f GB = %.1f GB, expected ~%.1f GB at q8_0)",
-						float64(psm.Size)/1e9, float64(weight)/1e9, excess/1e9, expQ8/1e9)
+						"KV cache looks f16-sized despite %s (live %.1f GB − weights %.1f GB = %.1f GB, expected ~%.1f GB at %s)",
+						t.KVCacheType, float64(psm.Size)/1e9, float64(weight)/1e9, excess/1e9, expQ8/1e9, t.KVCacheType)
 				}
 			}
 		}
@@ -680,6 +758,17 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		logger.Info("ollama tuning verified",
 			"ctx", t.ContextLength, "kv", t.KVCacheType, "parallel", t.NumParallel)
 		record(t, true, "")
+		return
+	case verdict == tuningGPUNotEngaged:
+		// The GPU did not take the model at all. That is a backend or
+		// driver fact, so stepping the window down cannot help and a
+		// restart would load the same way (waired-agent#71). The engine
+		// keeps serving from system RAM, the window stays declared (#657),
+		// and the warning says what happened instead of calling it a spill.
+		logger.Warn("ollama loaded the model without the GPU", "detail", detail)
+		latched := t
+		latched.Degraded = true
+		record(latched, true, "the GPU was not used: every layer of the model is in system RAM, so replies are much slower ("+detail+"); `waired logs` shows the engine's load")
 		return
 	case verdict == tuningOKPlannedSpill:
 		// The planned #624 spill, measured within its bound: a working

@@ -2181,7 +2181,7 @@ func catalogSpillNote(host management.CatalogHost, f management.CatalogFamily) s
 	if mb <= 0 {
 		return ""
 	}
-	return " · " + formatSpillGB(mb) + " of KV cache in system RAM"
+	return " · " + formatSpillGB(mb) + " in system RAM"
 }
 
 // formatSpillGB writes a shortfall in GB, with one decimal below 10 GB

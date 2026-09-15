@@ -261,9 +261,10 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	b.WriteString("SIZE is which class of GPU runs the model at all — small fits an\n" +
 		"8 GB GPU, medium a 32 GB one, large needs more. Unlike NEEDS it says the\n" +
 		"same thing on every computer, so it is the one to quote elsewhere.\n")
-	b.WriteString("\"KV cache in system RAM\" is the part of a full coding session this\n" +
-		"computer's GPU cannot hold. The model still runs; that part is\n" +
-		"read from system RAM, which is slower than reading it from VRAM.\n")
+	b.WriteString("\"in system RAM\" is how much of a full coding session this\n" +
+		"computer's VRAM cannot hold. The model still runs; the engine keeps\n" +
+		"that part — layers of the model with their KV cache — in system RAM,\n" +
+		"which is slower than VRAM.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
 	return b.String()
@@ -408,7 +409,7 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 		}
 	}
 	if mb := contextCacheSpillMB(host, f.Fit); mb > 0 {
-		out += " · " + formatSpillGB(mb) + " of KV cache in system RAM"
+		out += " · " + formatSpillGB(mb) + " in system RAM"
 	}
 	// What this computer actually got, when it has run this model. It
 	// goes last because it outranks everything before it: the rest of

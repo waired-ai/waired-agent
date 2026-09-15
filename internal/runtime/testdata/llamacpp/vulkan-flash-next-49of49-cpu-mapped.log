@@ -1,0 +1,12 @@
+time=2026-09-12T12:00:00.000Z level=INFO source=llama_server.go:433 msg="starting llama-server" cmd="llama-server --model C:\ProgramData\waired\runtimes\ollama\models\blobs\sha256-0000000000000000000000000000000000000000000000000000000000000001 -c 200704 -np 1"
+common_params_fit_impl: projected to use 56538 MiB of device memory vs. 99210 MiB of free device memory
+common_params_fit_impl: will leave 42671 >= 1914 MiB of free device memory, no changes needed
+llama_model_loader: loaded meta data with 51 key-value pairs and 1203 tensors from C:\ProgramData\waired\runtimes\ollama\models\blobs\sha256-0000000000000000000000000000000000000000000000000000000000000001 (version GGUF V3 (latest))
+print_info: file size = 73.44 GiB (3.57 BPW)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 47 repeating layers to GPU
+load_tensors: offloaded 49/49 layers to GPU
+load_tensors:      Vulkan0 model buffer size = 47322.20 MiB
+load_tensors:  Vulkan_Host model buffer size =   416.80 MiB
+load_tensors:   CPU_Mapped model buffer size = 27465.95 MiB
+time=2026-09-12T12:02:28.500Z level=INFO source=llama_server.go:1362 msg="llama-server started in 148.50 seconds"

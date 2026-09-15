@@ -149,22 +149,36 @@ type ollamaTuning struct {
 	kvBytesPerTokFP16 int
 	// ExpectedSpillFraction is non-zero when the ContextLength was set
 	// to the #624 coding floor DELIBERATELY overshooting the no-spill
-	// window (bounded-spill gate passed): the predicted /api/ps spill
-	// fraction. The verify pass widens its spill tolerance around it
-	// instead of treating the planned spill as a failure.
+	// window (bounded-spill gate passed): the predicted share of the
+	// weights llama.cpp's fit puts in system RAM
+	// (hostfit.OllamaPredictPlacement, waired-agent#1337). The verify pass
+	// compares the engine's own placement with it instead of treating the
+	// planned spill as a failure.
 	ExpectedSpillFraction float64
+
+	// PlannedGPULayers / PlannedTotalLayers are the predicted llama.cpp
+	// "offloaded N/M layers" at ContextLength; PlannedCPUWeightMB is the
+	// predicted weight the fit moves to system RAM, and HostWeightsMB the
+	// input-layer weights that live there regardless. PlannedLayerWeightMB
+	// is one repeating layer's weight, the verify pass's tolerance.
+	// PlannedDeviceWeightMB is the model buffer the engine is predicted to
+	// place in GPU-addressable memory when nothing spills (the projector
+	// blob, which loads outside load_tensors, excluded) — the figure the
+	// verify pass subtracts the logged device buffer from. All 0 when the
+	// variant carries no GGUF layout or the host no accelerator.
+	PlannedGPULayers      int
+	PlannedTotalLayers    int
+	PlannedCPUWeightMB    int
+	PlannedDeviceWeightMB int
+	HostWeightsMB         int
+	PlannedLayerWeightMB  int
 }
 
-// kvFactorFor maps an OLLAMA_KV_CACHE_TYPE value to its scoring factor.
+// kvFactorFor maps an OLLAMA_KV_CACHE_TYPE value to the KV-cache size it
+// allocates relative to f16, from ggml's block layout (q8_0 is 34/64, not a
+// half — waired-agent#1337).
 func kvFactorFor(kvType string) float64 {
-	switch kvType {
-	case "q8_0":
-		return scoring.KVFactorQ8_0
-	case "q4_0":
-		return scoring.KVFactorQ4_0
-	default:
-		return scoring.KVFactorF16
-	}
+	return hostfit.OllamaKVCacheFactor(kvType)
 }
 
 // ollamaTuningBudgetGB returns the decimal-GB memory budget available for
@@ -308,7 +322,8 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// (waired-ai/waired#1056 decision 3). This function's job is the
 	// engine-facing consequences: which ubatch, how many slots, and what
 	// to tell the user.
-	plan := hostfit.OllamaPlannedRung(m, v, hw.HostFit(), t.KVFactor, ceilingCtx)
+	hf := hw.HostFit()
+	plan := hostfit.OllamaPlannedRungFor(m, v, hf, kv.Type, ceilingCtx)
 	if plan.ContextLength <= 0 {
 		// Unknown sizing: recommend a single slot (we cannot prove more fit).
 		t.RecommendedMaxParallel = 1
@@ -318,11 +333,22 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	t.ContextLength = ctx
 	t.WindowFits = plan.Fits
 	t.ExpectedSpillFraction = plan.ExpectedSpillFraction
+	if hf.HasGPU() && hf.OllamaVRAMBudgetMB() > 0 {
+		place := hostfit.OllamaPredictPlacement(v, hf, kv.Type, ctx, 1)
+		t.PlannedGPULayers, t.PlannedTotalLayers = place.GPULayers, place.TotalLayers
+		t.PlannedCPUWeightMB = place.CPUWeightMB
+		est := hostfit.OllamaEstimateMemory(v, hf, kv.Type, ctx, 1)
+		t.HostWeightsMB = est.HostWeightsMB
+		if g := v.GGUF; g != nil && g.BlockCount > g.NextNLayers {
+			t.PlannedLayerWeightMB = int(g.RepeatingBytes / int64(g.BlockCount-g.NextNLayers) >> 20)
+			t.PlannedDeviceWeightMB = est.DeviceWeightsMB - int(g.ProjectorBytes>>20)
+		}
+	}
 
 	if plan.ExpectedSpillFraction > 0 {
 		t.Warning = fmt.Sprintf(
-			"context window set to %d tokens for coding-agent workloads; about %.0f%% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
-			ctx, plan.ExpectedSpillFraction*100)
+			"context window set to %d tokens for coding-agent workloads; %s expected to sit in system RAM (larger window traded for some decode speed)",
+			ctx, plannedSpillAmount(t))
 		// Already spilling to reach the window: a single slot only (adding
 		// parallel slots would multiply the spill).
 		t.RecommendedMaxParallel = 1
@@ -349,7 +375,7 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// 262144-native model and would silently withdraw the second slot
 	// from every host that has one.
 	if ceiling := hostfit.OllamaCeilingWindow(m); ceiling > 0 &&
-		ctx == ceiling && maxCtx >= ollamaMaxAutoParallel*ctx {
+		ctx == ceiling && ollamaSlotsFit(v, hf, kv.Type, ctx, ollamaMaxAutoParallel, maxCtx) {
 		t.NumParallel = ollamaMaxAutoParallel
 	}
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:
@@ -372,6 +398,27 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 		t.RecommendedMaxParallel = min(t.RecommendedMaxParallel, granted)
 	}
 	return t
+}
+
+// ollamaSlotsFit reports whether slots full-window request slots fit the
+// accelerator outright. With a GGUF layout the whole load is priced at that
+// slot count — every slot keeps its own KV cache and recurrent state — and
+// without one the older rule stands: the no-spill capacity holds the windows.
+func ollamaSlotsFit(v catalog.Variant, h hostfit.Host, kvType string, ctx, slots, maxCtx int) bool {
+	if v.GGUF != nil && h.HasGPU() && h.OllamaVRAMBudgetMB() > 0 {
+		return hostfit.OllamaEstimateMemory(v, h, kvType, ctx, slots).DeviceMB() <= h.OllamaVRAMBudgetMB()
+	}
+	return maxCtx >= slots*ctx
+}
+
+// plannedSpillAmount words the predicted placement of a spilling plan: in
+// layers where the variant's layout is known, as a share of the model
+// otherwise.
+func plannedSpillAmount(t ollamaTuning) string {
+	if t.PlannedTotalLayers > 0 {
+		return fmt.Sprintf("%d of %d layers", t.PlannedTotalLayers-t.PlannedGPULayers, t.PlannedTotalLayers)
+	}
+	return fmt.Sprintf("about %.0f%% of the model", t.ExpectedSpillFraction*100)
 }
 
 // Env renders the OLLAMA_* variables for OllamaAdapter.SetModelEnv.
@@ -482,8 +529,8 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 	switch {
 	case t.ExpectedSpillFraction > 0:
 		reasons = append(reasons, fmt.Sprintf(
-			"%s serves a ~%dk coding window with ~%.0f%% of the model expected in system RAM",
-			m.ModelID, t.ContextLength/1024, t.ExpectedSpillFraction*100))
+			"%s serves a ~%dk coding window with %s expected in system RAM",
+			m.ModelID, t.ContextLength/1024, plannedSpillAmount(t)))
 	case !router.MeetsNativeContextFloor(m):
 		if cfg.PreferredModelID != "" {
 			extraWarning = fmt.Sprintf(
@@ -496,9 +543,24 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 		}
 		reasons = append(reasons, extraWarning)
 	case t.ContextLength >= router.CodingAgentContextFloorTokens && t.WindowFits:
-		reasons = append(reasons, fmt.Sprintf(
-			"%s serves the ~200k coding window fully GPU-resident (ctx %d)",
-			m.ModelID, t.ContextLength))
+		// A prediction, and worded as one: whether the layers really landed
+		// in GPU memory is the engine's to report, and the verify pass logs
+		// what it reported (waired-agent#1330). A host with no accelerator
+		// makes no GPU claim at all.
+		switch {
+		case t.PlannedTotalLayers > 0:
+			reason := fmt.Sprintf(
+				"%s is sized for the ~200k coding window (ctx %d), predicted to hold %d of %d layers in VRAM",
+				m.ModelID, t.ContextLength, t.PlannedGPULayers, t.PlannedTotalLayers)
+			if t.HostWeightsMB > 0 {
+				reason += fmt.Sprintf("; %.1f GB of input embedding weights stay in system RAM", float64(t.HostWeightsMB)*(1<<20)/1e9)
+			}
+			reasons = append(reasons, reason)
+		default:
+			reasons = append(reasons, fmt.Sprintf(
+				"%s is sized for the ~200k coding window (ctx %d)",
+				m.ModelID, t.ContextLength))
+		}
 	case t.ContextLength > 0:
 		// A rung this host's memory was not shown to hold (WindowFits
 		// false — the forced lowest rung, waired-agent#587). Served, and

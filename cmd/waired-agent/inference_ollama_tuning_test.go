@@ -171,19 +171,20 @@ func TestComputeOllamaTuning(t *testing.T) {
 	})
 
 	t.Run("spill-past-speed-cap-is-forced-to-the-rung", func(t *testing.T) {
-		// 28 GB of weights on the 24 GiB card, 28 GB of RAM: the fit is
-		// predicted to move ~22% of the weights to system RAM at the rung
-		// (hostfit.OllamaPredictPlacement), over the bounded-spill cap,
-		// and the card-less machine cannot reach the rung from RAM either
-		// — no rung passes. Before waired-agent#587 the tuner served a
+		// 29 GB weights on the 24 GiB card, 32 GB of RAM: the share of the
+		// weights the fit is predicted to put in system RAM exceeds the
+		// bounded-spill cap, and the card-less machine cannot reach the
+		// rung from RAM either — no rung passes. (It was 23.7 GB against a
+		// calibrated /api/ps figure; the prediction is a byte share of the
+		// weights since waired-agent#1337.) Before waired-agent#587 the tuner served a
 		// speed-capped window between the rungs; a window between the
 		// rungs is not one this product serves, so the host now gets the
 		// rung with WindowFits=false, the honest over-cap spill figure,
 		// and no mesh declaration.
 		v := m.Variants[0]
-		v.EstimatedWeightGB = 28.0
+		v.EstimatedWeightGB = 29
 		hw := discrete24GB()
-		hw.RAMTotalGB = 28
+		hw.RAMTotalGB = 32
 		got := computeOllamaTuning(m, v, hw, "q8_0", ollamaObservedServe{})
 		if got.ContextLength != 200704 || got.WindowFits {
 			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
@@ -751,11 +752,29 @@ func TestModelDecisionReasons(t *testing.T) {
 		}
 	})
 
+	// waired-agent#1330: the decision line used to assert "fully
+	// GPU-resident" from the sizing alone, on a unified-memory host whose
+	// engine had a third of the weights in system RAM. It states the
+	// prediction as a prediction now, in layers where the build's layout is
+	// known; the verify pass logs what the engine actually did.
 	t.Run("full-window", func(t *testing.T) {
 		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{}) // 262144 granted
 		reasons, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
-		if extra != "" || len(reasons) != 1 || !strings.Contains(reasons[0], "fully GPU-resident") {
+		if extra != "" || len(reasons) != 1 || !strings.Contains(reasons[0], "sized for the ~200k coding window") {
 			t.Errorf("reasons=%v extra=%q", reasons, extra)
+		}
+		if len(reasons) == 1 && strings.Contains(reasons[0], "GPU-resident") {
+			t.Errorf("the decision line asserts residency it cannot observe: %q", reasons[0])
+		}
+	})
+
+	t.Run("full-window-with-a-layout-names-the-predicted-layers", func(t *testing.T) {
+		tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{})
+		tn.PlannedGPULayers, tn.PlannedTotalLayers, tn.HostWeightsMB = 41, 41, 260
+		reasons, _ := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
+		if len(reasons) != 1 || !strings.Contains(reasons[0], "predicted to hold 41 of 41 layers in VRAM") ||
+			!strings.Contains(reasons[0], "input embedding weights stay in system RAM") {
+			t.Errorf("reasons = %v", reasons)
 		}
 	})
 
