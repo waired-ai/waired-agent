@@ -289,6 +289,12 @@ func TestVLLMStartupDiagnosis(t *testing.T) {
 		{"unrecognised flag points at the venv",
 			"usage: api_server [-h]\napi_server: error: unrecognized arguments: --kv-offloading-size 8\n",
 			"runtimes install vllm"},
+		// The same failure through `vllm serve` (the entry point since the
+		// 0.29.0 pin), verbatim from a 0.29.0 venv: argparse names the
+		// program main.py rather than api_server.
+		{"unrecognised flag through vllm serve points at the venv",
+			"usage: main.py [-h] [-v]\n               {chat,complete,serve,launch,bench,collect-env,run-batch} ...\nmain.py: error: unrecognized arguments: --nope\n",
+			"runtimes install vllm"},
 		{"no room for cache blocks points at the chunk first",
 			"ValueError: No available memory for the cache blocks. Try increasing gpu_memory_utilization\n",
 			"vllm_max_num_batched_tokens"},

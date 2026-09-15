@@ -43,8 +43,8 @@ const (
 // setting:
 //   - ollama serves many models from one process, so it is an env var
 //     (OllamaAdapter.processEnv).
-//   - vLLM already satisfies this: the api_server is launched with a single
-//     --model and holds exactly one per process (VLLMAdapter.commandArgs),
+//   - vLLM already satisfies this: `vllm serve` is launched with a single
+//     model and holds exactly one per process (VLLMAdapter.commandArgs),
 //     so there is nothing to set.
 const MaxResidentModels = 1
 
