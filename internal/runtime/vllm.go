@@ -720,9 +720,22 @@ func (a *VLLMAdapter) processEnv() []string {
 	// No HOME fallback: vLLM is linux-only and runs under systemd's User=
 	// (HOME already set), so "" tells ChildBaseEnv never to fabricate one.
 	out := ChildBaseEnv(runtime.GOOS, os.Environ(), "", string(os.PathListSeparator), venvBin, cudaBin)
+	// Under WSL2 vLLM leaves pinned host memory off unless told otherwise,
+	// and from 0.29.0 its default model runner cannot start without it:
+	// it raises "UVA is not available" rather than falling back to the V1
+	// runner (measured on an RTX 5080 under WSL2). vLLM reads the variable
+	// only when it detects WSL, so native Linux is unaffected. A value the
+	// operator already exported is kept.
+	if _, set := os.LookupEnv(vllmWSL2PinMemoryEnv); !set {
+		out = append(out, vllmWSL2PinMemoryEnv+"=1")
+	}
 	out = append(out, a.cfg.ExtraEnv...)
 	return out
 }
+
+// vllmWSL2PinMemoryEnv is vLLM's switch for pinned host memory under WSL2
+// (vllm/platforms/cuda.py, is_pin_memory_available).
+const vllmWSL2PinMemoryEnv = "VLLM_WSL2_ENABLE_PIN_MEMORY"
 
 // waitReady polls /health on HealthInterval cadence. After
 // HealthSuccess consecutive 200s it makes one /v1/models call to
