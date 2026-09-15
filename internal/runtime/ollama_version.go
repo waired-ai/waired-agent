@@ -199,12 +199,42 @@ package runtime
 //     misses once after this bump and re-measures. That is the correct
 //     result rather than a cost: the stored number was the old engine's.
 //
+// 0.33.3 -> 0.34.0 is a refresh with nothing on this product's path. No
+// release sits between the two, and the vendored llama.cpp stays at
+// b10760, so every term hostfit measured on 0.33.3 still describes the
+// engine. The release adds OpenAI-surface features (response compaction,
+// client tool search, a Codex proxy route) and touches server/sched.go
+// only to fix a data race in a log line. Re-checked 2026-09-16 rather
+// than taken from the notes:
+//
+//   - All four (goos, goarch) assets and sha256sum.txt
+//     (TestPinnedReleasePublishesEveryAssetChecksum), and the archive
+//     LAYOUTS: the darwin and windows archives list the same 59 and 87
+//     entries as 0.33.3's, and the linux one still unpacks bin/ + lib/
+//     (TestOllamaInstaller_RealArchive unpacks and runs it).
+//   - On Linux (an RTX 5070 Laptop GPU, qwen3.5:0.8b-q8_0): a system turn
+//     that is not first is HTTP 200 on /v1 and /api/chat; keep_alive=37m
+//     via /v1 still leaves the default 5-minute expiry while 41m via
+//     /api/chat moves it to 41; /api/ps returns the same eight keys;
+//     cached_tokens is reported on both surfaces (918 on a resend);
+//     engine.log is still logfmt with msg="..."; the runner still gets
+//     -c / -np 1 / -b 512 -ub 512 and --cache-type-k/-v from
+//     OLLAMA_KV_CACHE_TYPE.
+//   - ParseLlamaPlacement reads a 0.34.0 load log to the same fields it
+//     reads from 0.33.3's (offloaded layers, model buffers, n_ctx, KV
+//     type, the fit projection), which is expected with llama.cpp
+//     unchanged but is what agent#1384's placement read-back rests on.
+//   - The renderers the catalog stamps, qwen3.5 and qwen3.8, are still
+//     registered: stamped onto a tag, the non-first system turn answers
+//     200, while an unregistered renderer name answers 500.
+//
 // AT THE NEXT BUMP, one thing to re-read that is not about this release.
 // The catalog annotates qwen3.8-flash-next with 27648 B/token of KV while
 // the engine at b10760 actually holds 33792: the QSA indexer's cache gets
 // a V half allocated that the model has no projection for and the graph
-// never touches (ggml-org/llama.cpp#28330, open — it makes that cache
-// present as MLA so has_v goes false). The annotation deliberately
+// never touches (ggml-org/llama.cpp#28330 — it makes that cache present
+// as MLA so has_v goes false; merged 2026-09-10, first in b10889, which
+// 0.34.0's b10760 does not include). The annotation deliberately
 // carries the derivable number rather than the measured one. When the
 // vendored llama.cpp passes the commit that closes #28330, re-serve the
 // model and count the llama_kv_cache lines: the second one's V should be
