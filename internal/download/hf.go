@@ -18,8 +18,8 @@ import (
 )
 
 // HFRunner is the test seam for hf-cli download. Same shape as
-// CommandRunner (HF pulls export HF_TOKEN / HF_HUB_ENABLE_HF_TRANSFER;
-// ollama pulls export OLLAMA_HOST); kept separate because the two
+// CommandRunner (HF pulls export HF_TOKEN; ollama pulls export
+// OLLAMA_HOST); kept separate because the two
 // pipelines parse different progress formats.
 type HFRunner interface {
 	// Run executes binary with args, augmenting the parent's env with
@@ -59,13 +59,6 @@ type HFPullOpts struct {
 	// agent.json or env when adding gated entries downstream.
 	Token string
 
-	// FastTransfer chooses whether to attempt hf_transfer (the Rust
-	// parallel downloader bundled into the venv). True by default;
-	// the auto-fallback in Pull retries with FastTransfer=false when
-	// the first attempt fails, since older NAT/proxy setups have
-	// known compatibility issues with hf_transfer's connection model.
-	FastTransfer bool
-
 	// Files names the files to fetch, as positional arguments. Empty
 	// fetches the whole repository, which is what this did until
 	// waired-agent#1298: openai/gpt-oss-20b is 41.30 GB whole and
@@ -87,7 +80,7 @@ type HFErrorClass string
 
 const (
 	HFErrUnknown   HFErrorClass = "unknown"
-	HFErrTransport HFErrorClass = "transport" // network blip, hf_transfer incompat
+	HFErrTransport HFErrorClass = "transport" // network blip
 	HFErrAuth      HFErrorClass = "auth"      // 401/403 — likely gated without token
 	HFErrNotFound  HFErrorClass = "not_found" // repo or revision missing
 )
@@ -109,10 +102,18 @@ func (e *HFError) Unwrap() error { return e.Cause }
 
 // Pull invokes `huggingface-cli download <repo> --local-dir <dir>`
 // (with --local-dir-use-symlinks=False so vLLM can read the files
-// directly) and forwards parsed Progress events to onProgress. When
-// FastTransfer is true (the default) it sets HF_HUB_ENABLE_HF_TRANSFER=1;
-// on failure it retries once with =0 because some networks reject
-// hf_transfer's parallel chunked download pattern.
+// directly) and forwards parsed Progress events to onProgress. A failure
+// that is not an auth or not-found error is retried once; the CLI resumes
+// the files the first attempt finished.
+//
+// There is no fast-path toggle any more. The venv's huggingface_hub is
+// 1.x, which no longer uses hf_transfer: it ignores
+// HF_HUB_ENABLE_HF_TRANSFER apart from printing a FutureWarning, and
+// downloads through hf_xet instead (measured on vLLM 0.29.0's venv,
+// huggingface_hub 1.31.0). HF_XET_HIGH_PERFORMANCE, the setting it
+// points to, is not set either: on a 4.3 GB repository it finished in
+// 59 s against 65 s without it — inside the run-to-run spread of the
+// same link — and held 1.3 GB more resident memory while doing so.
 func (p *HFPuller) Pull(ctx context.Context, repo string, opts HFPullOpts, onProgress func(Progress)) error {
 	if onProgress == nil {
 		onProgress = func(Progress) {}
@@ -130,13 +131,8 @@ func (p *HFPuller) Pull(ctx context.Context, repo string, opts HFPullOpts, onPro
 		args = append(args, "--revision", opts.Revision)
 	}
 
-	attempt := func(fast bool) error {
+	attempt := func() error {
 		env := []string{}
-		if fast {
-			env = append(env, "HF_HUB_ENABLE_HF_TRANSFER=1")
-		} else {
-			env = append(env, "HF_HUB_ENABLE_HF_TRANSFER=0")
-		}
 		if opts.Token != "" {
 			env = append(env, "HF_TOKEN="+opts.Token)
 		}
@@ -159,23 +155,18 @@ func (p *HFPuller) Pull(ctx context.Context, repo string, opts HFPullOpts, onPro
 		}
 	}
 
-	if !opts.FastTransfer {
-		return attempt(false)
-	}
-	first := attempt(true)
+	first := attempt()
 	if first == nil {
 		return nil
 	}
-	// Auto-fallback: hf_transfer transport problems are common on
-	// proxied / NAT'd networks; retry once with the plain HTTP path
-	// before reporting failure. Auth / not-found errors don't benefit
-	// from a retry.
+	// Auth / not-found errors don't benefit from a retry; anything else
+	// (a dropped connection on a proxied or NAT'd network) gets one.
 	hfErr := &HFError{}
 	if errors.As(first, &hfErr) && (hfErr.Class == HFErrAuth || hfErr.Class == HFErrNotFound) {
 		return first
 	}
-	onProgress(Progress{State: StateUnknown, Percent: -1, Message: "hf_transfer fallback: retrying with HF_HUB_ENABLE_HF_TRANSFER=0"})
-	return attempt(false)
+	onProgress(Progress{State: StateUnknown, Percent: -1, Message: "download failed, retrying once"})
+	return attempt()
 }
 
 // DefaultHFRunner shells out to a real huggingface-cli binary.
@@ -282,8 +273,7 @@ func classifyHFError(runErr error, lines []string) HFErrorClass {
 			strings.Contains(ll, "does not exist"):
 			return HFErrNotFound
 		case strings.Contains(ll, "connection") || strings.Contains(ll, "timeout") ||
-			strings.Contains(ll, "ssl") || strings.Contains(ll, "tls") ||
-			strings.Contains(ll, "hf_transfer"):
+			strings.Contains(ll, "ssl") || strings.Contains(ll, "tls"):
 			return HFErrTransport
 		}
 	}

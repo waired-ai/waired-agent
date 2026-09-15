@@ -2,7 +2,7 @@ package runtime
 
 // The vLLM pin SET, in one place and on every platform.
 //
-// These four move together. `uv pip install vllm==X` resolves against
+// These three move together. `uv pip install vllm==X` resolves against
 // the interpreter the venv was built with and against the transformers
 // line that release requires, so a build is only reproducible as the
 // whole tuple — which is why ConvergeVLLM compares the tuple rather than
@@ -70,13 +70,42 @@ package runtime
 // optional, because without it every host that takes this pin loses
 // local inference entirely.
 //
+// 0.28.0 -> 0.29.0, validated 2026-09-16 by replaying the same argv on
+// an RTX PRO 4000 Blackwell (gpt-oss-20b at 124,928 tokens, and
+// Qwen3.5-4B bf16) against a venv this installer built, with 0.28.0's
+// venv beside it as the control:
+//
+//   - Every flag commandArgs emits is still accepted, through the old
+//     api_server module and through `vllm serve` alike; the adapter now
+//     uses the second (see commandArgs). All five tool parsers are still
+//     registered, and a tool request to gpt-oss-20b through `vllm serve`
+//     came back as tool_calls with finish_reason=tool_calls, as on 0.28.0. torch stays 2.13.0+cu130, flashinfer-python moves to
+//     0.6.18 and flashinfer-cubin is still not declared, so the nvcc
+//     PATH fix above is still load-bearing. transformers' floor rises to
+//     5.10.4 (TransformersConstraint).
+//   - Model Runner V2 is the default. Decode speed did not move: 131-135
+//     tok/s on gpt-oss-20b and 66 tok/s on Qwen3.5-4B on both releases.
+//     The KV pool did, because V2 reserves more for CUDA graphs and peaks
+//     higher in the activation profile: gpt-oss-20b's pool is 264,060
+//     tokens against 285,284 on each configuration's first start, and
+//     379,778 against 399,082 on a repeat start of the same
+//     configuration. Forcing the V1 runner on 0.29.0 gives 0.28.0's
+//     285,284 back exactly. The first-versus-repeat spread itself (about
+//     30-40%) is on both releases; compile and CUDA-graph caches are the
+//     likely reason, not isolated.
+//   - Under WSL2, V2 needs pinned host memory that vLLM turns off by
+//     default there, and dies with "UVA is not available" instead of
+//     falling back — see processEnv.
+//   - The sliding-window prefix cache keeps fewer restore points by
+//     default (prefix_cache_retention_interval=0 for SWA/SSM models,
+//     vllm-project/vllm#52216). On gpt-oss-20b a resent history still
+//     reuses 5,536 of 5,540 tokens, but a history edited about a third of
+//     the way in now reuses 64 tokens where 0.28.0 reused 1,904.
+//   - GPU KV cache size: and the scheduler tiers read the same as at
+//     0.28.0 (vllmKVCapacityRe; router.vllmBigGPUVRAMMB).
+//
 // renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.28.0"
-
-// HFTransferPinnedVersion is the hf_transfer wheel installed alongside
-// vLLM so HF downloads enable the Rust fast path.
-// renovate: datasource=pypi depName=hf_transfer
-const HFTransferPinnedVersion = "0.1.9"
+const VLLMPinnedVersion = "0.29.0"
 
 // TransformersConstraint pins the transformers wheel to a version
 // compatible with VLLMPinnedVersion. vllm 0.28.0 requires
@@ -90,7 +119,10 @@ const HFTransferPinnedVersion = "0.1.9"
 // Unchanged at 0.28.0, and the cap is doing work rather than sitting
 // idle: the verified venv resolved transformers 5.16.1, so the range is
 // live at its top end, not pinned at its floor.
-const TransformersConstraint = "transformers>=5.5.3,<6.0"
+//
+// 0.29.0 raises the floor to transformers>=5.10.4 with no upper bound of
+// its own; its verified venv resolved 5.17.0.
+const TransformersConstraint = "transformers>=5.10.4,<6.0"
 
 // VLLMPythonVersion is the interpreter `uv venv --python` materialises
 // for the venv — the Step 2 supported interpreter window. A constant
@@ -98,7 +130,8 @@ const TransformersConstraint = "transformers>=5.5.3,<6.0"
 // a venv built on a different interpreter is a different build even when
 // the vLLM version matches.
 //
-// 0.28.0 declares requires_python <3.15,>=3.10, so 3.12 stays inside it.
+// 0.28.0 and 0.29.0 both declare requires_python <3.15,>=3.10, so 3.12
+// stays inside it.
 const VLLMPythonVersion = "3.12"
 
 // VLLMPinSet is the tuple one venv was built from. Recorded beside the
@@ -109,9 +142,14 @@ const VLLMPythonVersion = "3.12"
 //
 // JSON field names are the wheel/tool names rather than the Go field
 // names so the file reads like the install request it records.
+//
+// hf_transfer was a member until the 0.29.0 pin. The huggingface_hub 1.x
+// every venv resolves no longer uses it, so it was dropped from the
+// install rather than pinned for nothing. A record written before that
+// still carries an "hf_transfer" key; decoding ignores it, and such a
+// venv is on vLLM 0.28.0 or older, so it rebuilds on the version anyway.
 type VLLMPinSet struct {
 	VLLM         string `json:"vllm"`
-	HFTransfer   string `json:"hf_transfer"`
 	Transformers string `json:"transformers"`
 	Python       string `json:"python"`
 }
@@ -120,7 +158,6 @@ type VLLMPinSet struct {
 func WantedVLLMPins() VLLMPinSet {
 	return VLLMPinSet{
 		VLLM:         VLLMPinnedVersion,
-		HFTransfer:   HFTransferPinnedVersion,
 		Transformers: TransformersConstraint,
 		Python:       VLLMPythonVersion,
 	}

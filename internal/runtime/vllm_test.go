@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,8 +91,21 @@ func TestVLLMAdapter_EnsureRunning_Success(t *testing.T) {
 	if spawner.lastBin != "/venv/bin/python" {
 		t.Errorf("python path = %q", spawner.lastBin)
 	}
-	if !sliceContains(spawner.lastArgs, "vllm.entrypoints.openai.api_server") {
-		t.Errorf("missing -m vllm.entrypoints.openai.api_server arg, got %v", spawner.lastArgs)
+	// `vllm serve <model>`, through the module its console script runs.
+	// vLLM 0.29.0 deprecates `python -m vllm.entrypoints.openai.api_server`
+	// (vllm-project/vllm#52131) and, under `vllm serve`, the --model option
+	// in favour of the positional model; both forms print a deprecation
+	// warning today and are named for removal. A record of the pinned
+	// release's CLI, not a contract vLLM keeps.
+	if want := []string{"-m", "vllm.entrypoints.cli.main", "serve"}; len(spawner.lastArgs) < 4 || !slices.Equal(spawner.lastArgs[:3], want) {
+		t.Errorf("argv does not start with %v <model>: %v", want, spawner.lastArgs)
+	} else if spawner.lastArgs[3] != a.cfg.Model {
+		t.Errorf("argv[3] = %q, want the model path %q as serve's positional argument", spawner.lastArgs[3], a.cfg.Model)
+	}
+	for _, gone := range []string{"vllm.entrypoints.openai.api_server", "--model"} {
+		if sliceContains(spawner.lastArgs, gone) {
+			t.Errorf("argv still carries the deprecated %q: %v", gone, spawner.lastArgs)
+		}
 	}
 	if !sliceContains(spawner.lastArgs, "--no-enable-log-requests") {
 		t.Errorf("missing --no-enable-log-requests, got %v", spawner.lastArgs)

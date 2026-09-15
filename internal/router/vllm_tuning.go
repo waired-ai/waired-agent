@@ -131,7 +131,7 @@ func VLLMMaxModelLen(weightGB float64, kvBytesPerTokFP16 int, tp int, gpuMemUtil
 //
 // vLLM prefills a prompt in scheduler steps of max_num_batched_tokens,
 // and its own default for the OpenAI API server is 2048 on every GPU
-// under 70 GiB and 8192 above (arg_utils.py, still true at 0.28.0).
+// under 70 GiB and 8192 above (arg_utils.py, still true at 0.29.0).
 // Every card waired can serve on is under that line, so a 30k-token
 // coding-agent prompt is ~15 sequential passes on a value nobody chose
 // — upstream's
@@ -157,7 +157,8 @@ const (
 	// picks 8192, and passing a flat 4096 there would LOWER the chunk —
 	// a regression introduced by a performance change.
 	//
-	// Re-read against the 0.28.0 pin: the sub-70 GiB default is still
+	// Re-read against the 0.28.0 pin, and unchanged at 0.29.0: the
+	// sub-70 GiB default is still
 	// 2048 and the 70 GiB branch still 8192, so both halves of this
 	// constant still say what they claim. Upstream did grow a THIRD tier
 	// above it — >= 160 GiB (B200/B300 class) now defaults to 16384 —
@@ -170,7 +171,8 @@ const (
 	// config/scheduler.py requires max_num_batched_tokens to reach or
 	// exceed (it raises a ValueError otherwise).
 	//
-	// 256 confirmed against the 0.28.0 pin as installed, not from prose:
+	// 256 confirmed against the 0.28.0 pin as installed (and again at
+	// 0.29.0), not from prose:
 	// arg_utils.py's tier table gives OPENAI_API_SERVER 256 for every
 	// card under 70 GiB (1024 above). Later upstream V1 documentation
 	// says 1024 unconditionally, which is the claim #1126 needed settled

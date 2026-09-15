@@ -28,7 +28,7 @@ import (
 
 // Registered vLLM --tool-call-parser names. Every constant below was
 // read out of the pinned engine's own registry
-// (runtime.VLLMPinnedVersion = 0.28.0, `_TOOL_PARSERS_TO_REGISTER` in
+// (runtime.VLLMPinnedVersion = 0.29.0, `_TOOL_PARSERS_TO_REGISTER` in
 // vllm/tool_parsers/__init__.py) rather than from prose, because vLLM
 // validates the name at start-up and rejects an unknown one — a typo
 // costs the entire engine, not just tool calling.
@@ -41,6 +41,11 @@ import (
 // than DeepSeekV4ToolParser, and glm47 joined glm45 pointing at the same
 // class — which is why this table records the NAME the CLI accepts and
 // not the Python class behind it.
+//
+// Re-read against 0.29.0: the registry gained one name (hy_v4) and lost
+// none, so all five below are still accepted, and qwen3_xml on Qwen3.5
+// and openai on gpt-oss-20b each returned a structured tool_calls array
+// with finish_reason=tool_calls on the installed venv.
 const (
 	// vllmParserHermes is the <tool_call>{json}</tool_call> template
 	// (Hermes2ProToolParser).

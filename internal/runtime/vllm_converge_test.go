@@ -12,7 +12,6 @@ import (
 func wantPins() VLLMPinSet {
 	return VLLMPinSet{
 		VLLM:         "0.24.0",
-		HFTransfer:   "0.1.9",
 		Transformers: "transformers>=5.5.3,<6.0",
 		Python:       "3.12",
 	}
@@ -96,15 +95,6 @@ func TestDecideVLLMConverge(t *testing.T) {
 			// The companion pins are why the record exists at all: the
 			// version DIRECTORY is named after the vLLM release, so a
 			// host in this state looks up to date by name.
-			name: "hf_transfer moved on its own",
-			facts: VLLMConvergeFacts{
-				Installed: true, Version: "0.24.0", HasRecord: true, Want: atPin,
-				Recorded: func() VLLMPinSet { p := atPin; p.HFTransfer = "0.1.8"; return p }(),
-			},
-			wantInstall: true,
-			wantWhy:     "hf_transfer is 0.1.8",
-		},
-		{
 			name: "transformers constraint moved on its own",
 			facts: VLLMConvergeFacts{
 				Installed: true, Version: "0.24.0", HasRecord: true, Want: atPin,
@@ -303,7 +293,6 @@ func TestWantedVLLMPins_IsFullyPopulated(t *testing.T) {
 	got := WantedVLLMPins()
 	for name, v := range map[string]string{
 		"VLLM":         got.VLLM,
-		"HFTransfer":   got.HFTransfer,
 		"Transformers": got.Transformers,
 		"Python":       got.Python,
 	} {

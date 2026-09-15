@@ -76,11 +76,10 @@ type InstallResult struct {
 }
 
 type InstallOpts struct {
-	Version           string
-	HFTransferVersion string
-	PythonVersion     string
-	KeepFailed        bool
-	ExtraPipPackages  []string
+	Version          string
+	PythonVersion    string
+	KeepFailed       bool
+	ExtraPipPackages []string
 	// Recreate mirrors the Linux field so cmd/waired compiles here; the
 	// stub installer never builds anything either way.
 	Recreate bool

@@ -244,6 +244,15 @@ func resolveVLLMKVCache(hw hardware.Profile, disableFP8 bool) (kvCacheDType stri
 // vLLM's documented starting point for single-stream decode; coding
 // agents run effectively single-stream so the speculation rarely
 // competes with batched requests.
+//
+// From vLLM 0.29.0 the price of turning it on is higher than it looks:
+// Model Runner V2, the new default, does not support ngram, so the engine
+// falls back to the V1 runner and also turns async scheduling off. The
+// trade measured on an RTX PRO 4000 Blackwell (Qwen3.5-4B bf16, fp8 KV)
+// is still lopsided in both directions — decode while rewriting code
+// already in the prompt went from 65 to 235 tok/s, while writing new code
+// stayed at 68 against 66 — and the KV pool shrank from 524,288 to
+// 423,586 tokens. It stays opt-in.
 const vllmNgramSpeculativeConfig = `{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}`
 
 // vllmSpeculativeConfigJSON returns the VLLMConfig SpeculativeConfig

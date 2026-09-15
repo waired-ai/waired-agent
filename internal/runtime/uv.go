@@ -47,7 +47,7 @@ import (
 // NOTE: UVPinnedSHA256Linux64 below must be recomputed in lockstep when
 // this is bumped — Renovate flags this on the uv PR (see renovate.json).
 // renovate: datasource=github-releases depName=astral-sh/uv
-const UVPinnedVersion = "0.11.26"
+const UVPinnedVersion = "0.12.15"
 
 // UVPinnedSHA256Linux64 is the sha256 of the linux x86_64 tarball at
 // https://github.com/astral-sh/uv/releases/download/<UVPinnedVersion>/uv-x86_64-unknown-linux-gnu.tar.gz
@@ -58,8 +58,8 @@ const UVPinnedVersion = "0.11.26"
 // no system uv) fail closed with ErrUVUnverifiedPin rather than download
 // something unverified — which is exactly what blocked
 // `waired runtimes install vllm` end-to-end (#557). Verified against
-// https://github.com/astral-sh/uv/releases/download/0.11.26/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
-const UVPinnedSHA256Linux64 = "6426a73c3837e6e2483ee344cbc00f36394d179afcba6183cb77437e67db4af0"
+// https://github.com/astral-sh/uv/releases/download/0.12.15/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
+const UVPinnedSHA256Linux64 = "f97935763c04be3e692460a7aaeaaab8fc3b78fcf8b389da820b38ae7423a638"
 
 // UVDownloadURLBase is the GitHub release download prefix the
 // auto-download path uses. Centralised so tests can swap it.

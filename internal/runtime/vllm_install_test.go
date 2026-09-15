@@ -117,6 +117,53 @@ func TestVLLMInstall_PutsThePythonInstallDirUnderBaseDir(t *testing.T) {
 	}
 }
 
+// The venv is created on a uv-managed interpreter, never a system one.
+//
+// uv prefers an interpreter it manages but takes a system python3.12 when
+// one is on PATH and none is installed yet. A distribution's python3.12
+// ships without its C headers unless python3.12-dev is installed, and
+// vLLM's Triton kernels compile a small C shim against Python.h the first
+// time a model is inspected — Qwen3.5's did, and the engine died with
+// "fatal error: Python.h: No such file or directory" on vLLM 0.28.0 and
+// 0.29.0 alike (Ubuntu 24.04 under WSL2, which has python3.12 but not the
+// -dev package). uv's managed builds carry their headers. Refs
+// waired-ai/waired#588.
+//
+// Only the creation carries the switch: pip and the verify run against the
+// venv's own interpreter, and a venv an older build made on a system
+// interpreter must still converge rather than be refused.
+func TestVLLMInstall_CreatesTheVenvOnAManagedInterpreter(t *testing.T) {
+	dir := t.TempDir()
+	uvDir := t.TempDir()
+	uvBin := filepath.Join(uvDir, "uv")
+	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.12.15\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := &scriptedRunner{t: t, respond: func(scriptedCall) ([]string, error) {
+		return []string{"ok"}, nil
+	}}
+	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow}
+	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	var sawVenv bool
+	for _, c := range r.calls {
+		managed := slices.Contains(c.env, "UV_MANAGED_PYTHON=1")
+		switch {
+		case filepath.Base(c.binary) == "uv" && len(c.args) > 0 && c.args[0] == "venv":
+			sawVenv = true
+			if !managed {
+				t.Errorf("uv venv ran without UV_MANAGED_PYTHON=1: %v (env=%v)", c.args, c.env)
+			}
+		case managed:
+			t.Errorf("%s %v carries UV_MANAGED_PYTHON=1; only the venv creation may", c.binary, c.args)
+		}
+	}
+	if !sawVenv {
+		t.Fatal("no uv venv call recorded")
+	}
+}
+
 // Active() must not report "no install" for a venv it simply cannot read.
 //
 // PRODUCT CONTRACT — waired-agent#778. "absent" and "present but not
@@ -218,7 +265,6 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 	// in this file would have noticed (waired-agent#263).
 	wantPipPackages := []string{
 		"vllm==0.11.0",
-		"hf_transfer==" + HFTransferPinnedVersion,
 		"huggingface_hub>=1.0",
 		"ninja",
 	}

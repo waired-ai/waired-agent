@@ -40,15 +40,14 @@ func TestHFPuller_PassesEnvAndArgs(t *testing.T) {
 	}
 	p := NewHFPuller("/venv/bin/huggingface-cli", runner)
 	err := p.Pull(context.Background(), "Qwen/Qwen3-0.5B-Instruct", HFPullOpts{
-		LocalDir:     "/tmp/qwen",
-		Revision:     "abc123",
-		FastTransfer: true,
+		LocalDir: "/tmp/qwen",
+		Revision: "abc123",
 	}, nil)
 	if err != nil {
 		t.Fatalf("Pull: %v", err)
 	}
 	if len(runner.calls) != 1 {
-		t.Fatalf("calls = %d, want 1 (FastTransfer first attempt should succeed)", len(runner.calls))
+		t.Fatalf("calls = %d, want 1 (the first attempt should succeed)", len(runner.calls))
 	}
 	c := runner.calls[0]
 	if c.binary != "/venv/bin/huggingface-cli" {
@@ -60,41 +59,42 @@ func TestHFPuller_PassesEnvAndArgs(t *testing.T) {
 	if !sliceEq(c.args, wantArgs) {
 		t.Errorf("args = %v, want %v", c.args, wantArgs)
 	}
-	if !contains(c.env, "HF_HUB_ENABLE_HF_TRANSFER=1") {
-		t.Errorf("env should include HF_HUB_ENABLE_HF_TRANSFER=1, got %v", c.env)
+	// huggingface_hub 1.x ignores this variable and warns about it, so
+	// the puller no longer sets it in either direction.
+	for _, e := range c.env {
+		if strings.HasPrefix(e, "HF_HUB_ENABLE_HF_TRANSFER=") {
+			t.Errorf("env still sets %s; huggingface_hub 1.x does not use hf_transfer", e)
+		}
 	}
 }
 
-func TestHFPuller_AutoFallback_DisablesHFTransferOnFailure(t *testing.T) {
+func TestHFPuller_RetriesOnceOnTransportFailure(t *testing.T) {
 	attempt := 0
 	runner := &fakeHFRunner{
 		respond: func(c hfCall) ([]string, error) {
 			attempt++
 			if attempt == 1 {
-				// First attempt (HF_HUB_ENABLE_HF_TRANSFER=1) fails with
-				// what looks like a transport problem.
+				// First attempt fails with what looks like a transport
+				// problem.
 				return []string{
 					"Downloading shards: 12%|█▌ | 1/9",
-					"hf_transfer: connection reset by peer",
+					"connection reset by peer",
 				}, errors.New("exit status 1")
 			}
-			// Second attempt (HF_HUB_ENABLE_HF_TRANSFER=0) succeeds.
 			return []string{"/tmp/qwen"}, nil
 		},
 	}
 	p := NewHFPuller("/venv/bin/huggingface-cli", runner)
-	err := p.Pull(context.Background(), "Qwen/X", HFPullOpts{LocalDir: "/tmp/qwen", FastTransfer: true}, nil)
+	err := p.Pull(context.Background(), "Qwen/X", HFPullOpts{LocalDir: "/tmp/qwen"}, nil)
 	if err != nil {
-		t.Fatalf("Pull (with fallback): %v", err)
+		t.Fatalf("Pull (with retry): %v", err)
 	}
 	if len(runner.calls) != 2 {
-		t.Fatalf("calls = %d, want 2 (one attempt + one fallback)", len(runner.calls))
+		t.Fatalf("calls = %d, want 2 (one attempt + one retry)", len(runner.calls))
 	}
-	if !contains(runner.calls[0].env, "HF_HUB_ENABLE_HF_TRANSFER=1") {
-		t.Errorf("first env missing HF_HUB_ENABLE_HF_TRANSFER=1: %v", runner.calls[0].env)
-	}
-	if !contains(runner.calls[1].env, "HF_HUB_ENABLE_HF_TRANSFER=0") {
-		t.Errorf("second env missing HF_HUB_ENABLE_HF_TRANSFER=0: %v", runner.calls[1].env)
+	if !sliceEq(runner.calls[0].args, runner.calls[1].args) || !sliceEq(runner.calls[0].env, runner.calls[1].env) {
+		t.Errorf("the retry must repeat the same request: %v %v vs %v %v",
+			runner.calls[0].args, runner.calls[0].env, runner.calls[1].args, runner.calls[1].env)
 	}
 }
 
@@ -105,12 +105,12 @@ func TestHFPuller_AuthErrorShortCircuits(t *testing.T) {
 		},
 	}
 	p := NewHFPuller("/venv/bin/huggingface-cli", runner)
-	err := p.Pull(context.Background(), "Foo/Bar", HFPullOpts{LocalDir: "/tmp/x", FastTransfer: true}, nil)
+	err := p.Pull(context.Background(), "Foo/Bar", HFPullOpts{LocalDir: "/tmp/x"}, nil)
 	if err == nil {
 		t.Fatalf("expected auth error")
 	}
 	if len(runner.calls) != 1 {
-		t.Errorf("auth error must NOT trigger hf_transfer fallback, got %d calls", len(runner.calls))
+		t.Errorf("auth error must NOT trigger a retry, got %d calls", len(runner.calls))
 	}
 	var hfErr *HFError
 	if !errors.As(err, &hfErr) || hfErr.Class != HFErrAuth {
@@ -125,12 +125,12 @@ func TestHFPuller_NotFoundShortCircuits(t *testing.T) {
 		},
 	}
 	p := NewHFPuller("/venv/bin/huggingface-cli", runner)
-	err := p.Pull(context.Background(), "Qwen/Bogus", HFPullOpts{LocalDir: "/tmp/x", FastTransfer: true}, nil)
+	err := p.Pull(context.Background(), "Qwen/Bogus", HFPullOpts{LocalDir: "/tmp/x"}, nil)
 	if err == nil {
 		t.Fatalf("expected not-found error")
 	}
 	if len(runner.calls) != 1 {
-		t.Errorf("not-found must NOT trigger fallback, got %d calls", len(runner.calls))
+		t.Errorf("not-found must NOT trigger a retry, got %d calls", len(runner.calls))
 	}
 	var hfErr *HFError
 	if !errors.As(err, &hfErr) || hfErr.Class != HFErrNotFound {
@@ -144,7 +144,7 @@ func TestHFPuller_TokenInjectsHFTOKEN(t *testing.T) {
 	}
 	p := NewHFPuller("/venv/bin/huggingface-cli", runner)
 	err := p.Pull(context.Background(), "Qwen/X", HFPullOpts{
-		LocalDir: "/tmp", FastTransfer: true, Token: "hf_secret_xyz",
+		LocalDir: "/tmp", Token: "hf_secret_xyz",
 	}, nil)
 	if err != nil {
 		t.Fatalf("Pull: %v", err)

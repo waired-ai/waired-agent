@@ -378,7 +378,7 @@ func (a *VLLMAdapter) EnsureRunning(ctx context.Context) error {
 	// holding the cancel (#947) — see the same split in OllamaAdapter.
 	// A vLLM start is minutes on a multi-GB model, so a request-owned one
 	// was almost certain to be cut short, and exec.CommandContext's kill
-	// reaches the api_server leader only: its EngineCore and TP workers
+	// reaches the API server leader only: its EngineCore and TP workers
 	// survive, still holding the VRAM the operator was trying to use.
 	startCtx, cancelStart := context.WithCancel(context.WithoutCancel(ctx))
 	a.startCancel = cancelStart
@@ -595,12 +595,24 @@ func (a *VLLMAdapter) FailureLatched() bool {
 	return latched
 }
 
-// commandArgs builds the `python -m vllm.entrypoints.openai.api_server ...`
-// argv. Order matches plan §3.1: -m first so the args after it are
-// the entry-point's flags.
+// commandArgs builds the `vllm serve <model> ...` argv, run as
+// `python -m vllm.entrypoints.cli.main serve` — the module the venv's
+// `vllm` console script calls — so the interpreter spawned is still the
+// venv's own. -m, the subcommand and the model come first; everything
+// after them is serve's flags.
 //
-// The single --model below is also how this adapter satisfies
-// MaxResidentModels: one api_server process holds one model, so vLLM has no
+// Until the 0.29.0 pin this was `python -m vllm.entrypoints.openai.api_server
+// --model <model>`. 0.29.0 deprecates that entry point
+// (vllm-project/vllm#52131) and, under `vllm serve`, the --model option in
+// favour of the positional model; both still work and print a warning
+// naming their removal. The serve form was replayed on an RTX PRO 4000
+// Blackwell with this adapter's full flag set: argparse accepted all of
+// it, and decode speed and prefix reuse matched api_server's. 0.28.0's
+// venv answers `vllm serve [model_tag]` from the same module, so a venv
+// that has not converged yet is started the same way.
+//
+// The single model argument is also how this adapter satisfies
+// MaxResidentModels: one serve process holds one model, so vLLM has no
 // equivalent of ollama's OLLAMA_MAX_LOADED_MODELS to set.
 // CommandArgsForDiagnostics is the argv this adapter would spawn,
 // exported so a failed start-up can log what it actually asked for
@@ -613,10 +625,9 @@ func (a *VLLMAdapter) CommandArgsForDiagnostics() []string {
 
 func (a *VLLMAdapter) commandArgs() []string {
 	args := []string{
-		"-m", "vllm.entrypoints.openai.api_server",
+		"-m", "vllm.entrypoints.cli.main", "serve", a.cfg.Model,
 		"--host", a.cfg.Host,
 		"--port", strconv.Itoa(a.cfg.Port),
-		"--model", a.cfg.Model,
 		"--gpu-memory-utilization", strconv.FormatFloat(a.cfg.GPUMemoryUtilization, 'f', 2, 64),
 		// vllm 0.24 removed --disable-log-requests in favour of the
 		// --[no-]enable-log-requests pair (argparse exits 2 on the old
@@ -720,9 +731,22 @@ func (a *VLLMAdapter) processEnv() []string {
 	// No HOME fallback: vLLM is linux-only and runs under systemd's User=
 	// (HOME already set), so "" tells ChildBaseEnv never to fabricate one.
 	out := ChildBaseEnv(runtime.GOOS, os.Environ(), "", string(os.PathListSeparator), venvBin, cudaBin)
+	// Under WSL2 vLLM leaves pinned host memory off unless told otherwise,
+	// and from 0.29.0 its default model runner cannot start without it:
+	// it raises "UVA is not available" rather than falling back to the V1
+	// runner (measured on an RTX 5080 under WSL2). vLLM reads the variable
+	// only when it detects WSL, so native Linux is unaffected. A value the
+	// operator already exported is kept.
+	if _, set := os.LookupEnv(vllmWSL2PinMemoryEnv); !set {
+		out = append(out, vllmWSL2PinMemoryEnv+"=1")
+	}
 	out = append(out, a.cfg.ExtraEnv...)
 	return out
 }
+
+// vllmWSL2PinMemoryEnv is vLLM's switch for pinned host memory under WSL2
+// (vllm/platforms/cuda.py, is_pin_memory_available).
+const vllmWSL2PinMemoryEnv = "VLLM_WSL2_ENABLE_PIN_MEMORY"
 
 // waitReady polls /health on HealthInterval cadence. After
 // HealthSuccess consecutive 200s it makes one /v1/models call to

@@ -292,10 +292,9 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	}
 
 	err := puller.Pull(ctx, variant.Source.RepoID, download.HFPullOpts{
-		LocalDir:     localDir,
-		Revision:     variant.Source.Revision,
-		FastTransfer: true,
-		Files:        download.HFFileNames(files),
+		LocalDir: localDir,
+		Revision: variant.Source.Revision,
+		Files:    download.HFFileNames(files),
 	}, func(pr download.Progress) {
 		p.dlProgress.observe(modelID, pr)
 		if pr.State == download.StateVerifying && !refresh {

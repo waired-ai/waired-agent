@@ -77,3 +77,51 @@ func TestVLLMProcessEnv_NoEmptyPATHElement(t *testing.T) {
 		}
 	}
 }
+
+// lastEnv is the value exec gives the child for key: the last entry
+// wins when a key repeats.
+func lastEnv(env []string, key string) (string, bool) {
+	val, found := "", false
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			val, found = v, true
+		}
+	}
+	return val, found
+}
+
+// Under WSL2 vLLM turns pinned host memory off unless
+// VLLM_WSL2_ENABLE_PIN_MEMORY=1 is set (vllm/platforms/cuda.py
+// is_pin_memory_available). From 0.29.0 that is fatal rather than slow:
+// the default model runner needs pinned memory and raises "UVA is not
+// available" instead of falling back, so the engine never starts. A
+// record of today's behaviour on the pinned release, measured on an RTX
+// 5080 under WSL2 (Qwen3.5-2B bf16, fp8 KV).
+//
+// The variable is read only when vLLM detects WSL, so setting it on
+// native Linux changes nothing.
+func TestVLLMProcessEnv_EnablesPinnedMemoryUnderWSL2(t *testing.T) {
+	t.Setenv("VLLM_WSL2_ENABLE_PIN_MEMORY", "")
+	os.Unsetenv("VLLM_WSL2_ENABLE_PIN_MEMORY")
+	a := &VLLMAdapter{cfg: VLLMConfig{Python: "/opt/venv/bin/python"}}
+	if v, ok := lastEnv(a.processEnv(), "VLLM_WSL2_ENABLE_PIN_MEMORY"); !ok || v != "1" {
+		t.Errorf("VLLM_WSL2_ENABLE_PIN_MEMORY = %q (set %v), want 1", v, ok)
+	}
+}
+
+// An operator who set the variable themselves, in either direction,
+// keeps their value, and ExtraEnv still has the last word.
+func TestVLLMProcessEnv_PinnedMemoryYieldsToTheOperator(t *testing.T) {
+	t.Setenv("VLLM_WSL2_ENABLE_PIN_MEMORY", "0")
+	a := &VLLMAdapter{cfg: VLLMConfig{Python: "/opt/venv/bin/python"}}
+	if v, _ := lastEnv(a.processEnv(), "VLLM_WSL2_ENABLE_PIN_MEMORY"); v != "0" {
+		t.Errorf("inherited 0 was overridden: child sees %q", v)
+	}
+
+	t.Setenv("VLLM_WSL2_ENABLE_PIN_MEMORY", "")
+	os.Unsetenv("VLLM_WSL2_ENABLE_PIN_MEMORY")
+	a = &VLLMAdapter{cfg: VLLMConfig{Python: "/opt/venv/bin/python", ExtraEnv: []string{"VLLM_WSL2_ENABLE_PIN_MEMORY=0"}}}
+	if v, _ := lastEnv(a.processEnv(), "VLLM_WSL2_ENABLE_PIN_MEMORY"); v != "0" {
+		t.Errorf("ExtraEnv 0 was overridden: child sees %q", v)
+	}
+}
