@@ -78,7 +78,8 @@ package runtime
 //   - Every flag commandArgs emits is still accepted, through the old
 //     api_server module and through `vllm serve` alike; the adapter now
 //     uses the second (see commandArgs). All five tool parsers are still
-//     registered. torch stays 2.13.0+cu130, flashinfer-python moves to
+//     registered, and a tool request to gpt-oss-20b through `vllm serve`
+//     came back as tool_calls with finish_reason=tool_calls, as on 0.28.0. torch stays 2.13.0+cu130, flashinfer-python moves to
 //     0.6.18 and flashinfer-cubin is still not declared, so the nvcc
 //     PATH fix above is still load-bearing. transformers' floor rises to
 //     5.10.4 (TransformersConstraint).

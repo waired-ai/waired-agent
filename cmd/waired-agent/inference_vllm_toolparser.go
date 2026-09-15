@@ -44,8 +44,8 @@ import (
 //
 // Re-read against 0.29.0: the registry gained one name (hy_v4) and lost
 // none, so all five below are still accepted, and qwen3_xml on Qwen3.5
-// returned a structured tool_calls array with finish_reason=tool_calls
-// on the installed venv.
+// and openai on gpt-oss-20b each returned a structured tool_calls array
+// with finish_reason=tool_calls on the installed venv.
 const (
 	// vllmParserHermes is the <tool_call>{json}</tool_call> template
 	// (Hermes2ProToolParser).
