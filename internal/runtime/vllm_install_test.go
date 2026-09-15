@@ -218,7 +218,6 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 	// in this file would have noticed (waired-agent#263).
 	wantPipPackages := []string{
 		"vllm==0.11.0",
-		"hf_transfer==" + HFTransferPinnedVersion,
 		"huggingface_hub>=1.0",
 		"ninja",
 	}

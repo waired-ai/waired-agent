@@ -50,9 +50,9 @@
       "labels": ["dependencies", "doc"]
     },
     {
-      "description": "Inference engine pins (ollama/uv/vllm/hf_transfer) — own PR each (each needs its own validation), labelled inference, stable-only",
+      "description": "Inference engine pins (ollama/uv/vllm) — own PR each (each needs its own validation), labelled inference, stable-only",
       "matchManagers": ["custom.regex"],
-      "matchDepNames": ["ollama/ollama", "astral-sh/uv", "vllm", "hf_transfer"],
+      "matchDepNames": ["ollama/ollama", "astral-sh/uv", "vllm"],
       "labels": ["dependencies", "inference"],
       "ignoreUnstable": true
     },

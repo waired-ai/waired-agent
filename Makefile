@@ -531,8 +531,8 @@ e2e-agentgrade:
 	     -run TestAgentGrade ./internal/e2e/agentgrade/...
 
 # vLLM e2e (GPU REQUIRED): exercises the Step-2 multi-engine path —
-# venv install (uv-managed Python 3.12), HF download (huggingface-cli +
-# hf_transfer), VLLMAdapter spawn against a real GPU, and the full
+# venv install (uv-managed Python 3.12), HF download (the venv's hf CLI),
+# VLLMAdapter spawn against a real GPU, and the full
 # /v1/chat/completions surface served from vllm. The smoke test uses
 # Qwen2.5-0.5B (~1 GB download, ~3 min total); the realistic pass
 # uses Qwen3-14B-Instruct-AWQ (~9 GB, ~30 min).

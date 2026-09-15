@@ -31,7 +31,7 @@ func newRecordingInstaller(t *testing.T, baseDir string) *VLLMInstaller {
 	}
 }
 
-// The record the converge reads. Without it a host whose hf_transfer /
+// The record the converge reads. Without it a host whose
 // transformers / interpreter pin moved on its own looks up to date,
 // because the version directory is named after the vLLM release and that
 // did not move.
@@ -48,7 +48,6 @@ func TestVLLMInstall_RecordsThePinSetBesideTheVenv(t *testing.T) {
 	}
 	want := VLLMPinSet{
 		VLLM:         "0.11.0",
-		HFTransfer:   HFTransferPinnedVersion,
 		Transformers: TransformersConstraint,
 		Python:       VLLMPythonVersion,
 	}

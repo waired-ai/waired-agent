@@ -20,7 +20,7 @@ current status you are given.
 1. **Identify every bumped dependency** and its `from → to` version. Sources, in order:
    the diff (`go.mod`, `web/admin/package.json`, GitHub Actions pins, or a
    `// renovate:`-annotated Go const pin such as `OllamaPinnedVersion` / `UVPinnedVersion`
-   / `VLLMPinnedVersion` / `HFTransferPinnedVersion`), the PR title, and the Renovate
+   / `VLLMPinnedVersion`), the PR title, and the Renovate
    body. Note each update type (patch / minor / major).
 2. **Read the changelog.** Start from the Release Notes already in `PR_META.body`. Then use
    WebFetch / WebSearch to open the upstream changelog, GitHub Releases, or the tag-to-tag

@@ -22,7 +22,7 @@ import (
 )
 
 // The pins this installer builds from — VLLMPinnedVersion,
-// HFTransferPinnedVersion, TransformersConstraint, VLLMPythonVersion —
+// TransformersConstraint, VLLMPythonVersion —
 // live in vllm_pins.go, untagged, because the converge compares the
 // whole set on every platform (#843).
 
@@ -124,14 +124,12 @@ type InstallResult struct {
 }
 
 // InstallOpts customises what gets installed. Defaults are the pin set
-// in vllm_pins.go: VLLMPinnedVersion / HFTransferPinnedVersion /
-// VLLMPythonVersion.
+// in vllm_pins.go: VLLMPinnedVersion / VLLMPythonVersion.
 type InstallOpts struct {
-	Version           string
-	HFTransferVersion string
-	PythonVersion     string // e.g. "3.12"
-	KeepFailed        bool   // leave the broken venv in place under ".failed-<ts>"
-	ExtraPipPackages  []string
+	Version          string
+	PythonVersion    string // e.g. "3.12"
+	KeepFailed       bool   // leave the broken venv in place under ".failed-<ts>"
+	ExtraPipPackages []string
 
 	// Recreate replaces an environment that is already there instead of
 	// reconciling the wheels into it. It is the difference between the
@@ -151,7 +149,7 @@ type InstallRunner interface {
 }
 
 // VLLMInstaller orchestrates the venv lifecycle: uv venv build →
-// pip install vllm + hf_transfer → torch/vllm verification →
+// pip install vllm → torch/vllm verification →
 // `current` symlink swap. Stateless across Install calls.
 type VLLMInstaller struct {
 	BaseDir string        // typically <XDG_DATA_HOME>/waired/runtimes/vllm
@@ -196,7 +194,7 @@ func NewVLLMInstaller() *VLLMInstaller {
 //
 //  1. Resolve uv (no-op when uv was already on PATH or cached).
 //  2. Create the versioned venv via `uv venv --python <py> <dir>/.venv`.
-//  3. Install vllm + hf_transfer (+ extras) via `uv pip install`.
+//  3. Install vllm (+ extras) via `uv pip install`.
 //  4. Verify the install runs `python -c "import vllm, torch; ..."`.
 //  5. Activate by atomically swapping the `current` symlink.
 func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgress func(InstallProgress)) (InstallResult, error) {
@@ -206,10 +204,6 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	version := opts.Version
 	if version == "" {
 		version = VLLMPinnedVersion
-	}
-	hf := opts.HFTransferVersion
-	if hf == "" {
-		hf = HFTransferPinnedVersion
 	}
 	py := opts.PythonVersion
 	if py == "" {
@@ -317,12 +311,11 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// browser wizard's engine_download row is drawn from comes from here
 	// (waired-agent#255).
 	pipBytes := newUVDownloadTracker()
-	onProgress(InstallProgress{Stage: StagePipInstall, Step: 3, Total: totalStages, Percent: -1, Message: "installing vllm==" + version + " hf_transfer==" + hf + " (this may take 5-15 minutes, ~4 GB download)..."})
+	onProgress(InstallProgress{Stage: StagePipInstall, Step: 3, Total: totalStages, Percent: -1, Message: "installing vllm==" + version + " (this may take 5-15 minutes, ~4 GB download)..."})
 	pipArgs := []string{
 		"pip", "install",
 		"--python", filepath.Join(venvDir, "bin", "python"),
 		"vllm==" + version,
-		"hf_transfer==" + hf,
 		// huggingface_hub ships the `hf` / `huggingface-cli` binary the
 		// agent's HFPuller (internal/download/hf.go, ResolveHFCLI) shells
 		// out to for the safetensors download. vLLM already pulls
@@ -401,7 +394,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// leave are "recorded but not live" (harmless) and "live and
 	// recorded" — never "live, claiming nothing".
 	if err := writeVLLMPins(versionDir, VLLMPinSet{
-		VLLM: version, HFTransfer: hf, Transformers: TransformersConstraint, Python: py,
+		VLLM: version, Transformers: TransformersConstraint, Python: py,
 	}); err != nil {
 		return InstallResult{}, fmt.Errorf("vllm install: record pins: %w", err)
 	}

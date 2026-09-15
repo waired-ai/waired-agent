@@ -65,7 +65,7 @@ func TestVLLMGatewayE2E(t *testing.T) {
 		// huggingface_hub < 1.0.
 		hfCLI = filepath.Join(venvPath, "bin", "huggingface-cli")
 		if _, err := os.Stat(hfCLI); err != nil {
-			t.Fatalf("HF CLI not found in venv (tried hf and huggingface-cli); reinstall vllm so hf_transfer co-installs")
+			t.Fatalf("HF CLI not found in venv (tried hf and huggingface-cli); reinstall vllm so huggingface_hub co-installs")
 		}
 	}
 
@@ -177,8 +177,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 	}
 	puller := download.NewHFPuller(hfBin, download.DefaultHFRunner{})
 	if err := puller.Pull(dlCtx, repo, download.HFPullOpts{
-		LocalDir:     cacheRoot,
-		FastTransfer: true,
+		LocalDir: cacheRoot,
 	}, func(p download.Progress) {
 		if p.State == download.StatePulling && p.Percent >= 0 && p.Percent%10 == 0 {
 			t.Logf("hf download: %d%% — %s", p.Percent, p.Message)

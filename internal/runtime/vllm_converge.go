@@ -35,7 +35,7 @@ package runtime
 //
 // The pin SET, not the vLLM version alone, is what a venv is compared
 // against. The version directory is named after the vLLM release, so a
-// host whose hf_transfer / transformers / interpreter pin moved on its
+// host whose transformers / interpreter pin moved on its
 // own looks up to date by name; the recorded set is what makes that
 // visible. Reconciling one of those is also cheap — the environment is
 // already there, so the venv stage is skipped and pip resolves the small
@@ -187,8 +187,6 @@ func (f VLLMConvergeFacts) drift() (string, bool) {
 		// of drift — and rebuilding ~6 GB on the absence of a file would
 		// charge every host that installed before this shipped.
 		return "", false
-	case f.Recorded.HFTransfer != f.Want.HFTransfer:
-		return fmt.Sprintf("hf_transfer is %s, pin is %s", f.Recorded.HFTransfer, f.Want.HFTransfer), false
 	case f.Recorded.Transformers != f.Want.Transformers:
 		return fmt.Sprintf("transformers constraint is %q, pin is %q", f.Recorded.Transformers, f.Want.Transformers), false
 	case f.Recorded.Python != f.Want.Python:

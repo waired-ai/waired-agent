@@ -2,7 +2,7 @@ package runtime
 
 // The vLLM pin SET, in one place and on every platform.
 //
-// These four move together. `uv pip install vllm==X` resolves against
+// These three move together. `uv pip install vllm==X` resolves against
 // the interpreter the venv was built with and against the transformers
 // line that release requires, so a build is only reproducible as the
 // whole tuple — which is why ConvergeVLLM compares the tuple rather than
@@ -71,12 +71,7 @@ package runtime
 // local inference entirely.
 //
 // renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.28.0"
-
-// HFTransferPinnedVersion is the hf_transfer wheel installed alongside
-// vLLM so HF downloads enable the Rust fast path.
-// renovate: datasource=pypi depName=hf_transfer
-const HFTransferPinnedVersion = "0.1.9"
+const VLLMPinnedVersion = "0.29.0"
 
 // TransformersConstraint pins the transformers wheel to a version
 // compatible with VLLMPinnedVersion. vllm 0.28.0 requires
@@ -90,7 +85,7 @@ const HFTransferPinnedVersion = "0.1.9"
 // Unchanged at 0.28.0, and the cap is doing work rather than sitting
 // idle: the verified venv resolved transformers 5.16.1, so the range is
 // live at its top end, not pinned at its floor.
-const TransformersConstraint = "transformers>=5.5.3,<6.0"
+const TransformersConstraint = "transformers>=5.10.4,<6.0"
 
 // VLLMPythonVersion is the interpreter `uv venv --python` materialises
 // for the venv — the Step 2 supported interpreter window. A constant
@@ -109,9 +104,14 @@ const VLLMPythonVersion = "3.12"
 //
 // JSON field names are the wheel/tool names rather than the Go field
 // names so the file reads like the install request it records.
+//
+// hf_transfer was a member until the 0.29.0 pin. The huggingface_hub 1.x
+// every venv resolves no longer uses it, so it was dropped from the
+// install rather than pinned for nothing. A record written before that
+// still carries an "hf_transfer" key; decoding ignores it, and such a
+// venv is on vLLM 0.28.0 or older, so it rebuilds on the version anyway.
 type VLLMPinSet struct {
 	VLLM         string `json:"vllm"`
-	HFTransfer   string `json:"hf_transfer"`
 	Transformers string `json:"transformers"`
 	Python       string `json:"python"`
 }
@@ -120,7 +120,6 @@ type VLLMPinSet struct {
 func WantedVLLMPins() VLLMPinSet {
 	return VLLMPinSet{
 		VLLM:         VLLMPinnedVersion,
-		HFTransfer:   HFTransferPinnedVersion,
 		Transformers: TransformersConstraint,
 		Python:       VLLMPythonVersion,
 	}
