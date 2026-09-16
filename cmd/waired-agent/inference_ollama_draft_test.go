@@ -161,6 +161,9 @@ func TestOllamaDraftToWrite_FollowsTheHost(t *testing.T) {
 		return &agentInferenceProvider{logger: testLogger(), profiler: hardware.NewProfiler(t.TempDir(),
 			hardware.WithOSArch(func() (string, string) { return "linux", "x86_64" }),
 			hardware.WithRAM(func(context.Context) (int, int, error) { return 64, 60, nil }),
+			// A discrete card on every OS: on an arm64 Mac the default
+			// probe would mark the host unified and size it from RAM.
+			hardware.WithUMA(func(context.Context, *hardware.Profile) {}),
 			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
 				return []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: vramMB, VRAMFreeMB: vramMB}}, hardware.Accelerators{CUDA: true}, nil
 			}))}
