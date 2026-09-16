@@ -466,12 +466,15 @@ func (i *VLLMInstaller) Uninstall(_ context.Context, version string) error {
 	return nil
 }
 
-// RemoveUVIfNoVenvs removes the managed uv and its cache when no vLLM
-// venv remains under BaseDir, and reports whether it did. uv exists only
-// to build and reconcile those venvs, and its cache is several GB, so
-// once the last venv is gone nothing is left for it to serve
-// (waired-ai/waired#1435). A directory kept as .failed-<ts> for
-// inspection is not a venv anyone runs and does not keep uv.
+// RemoveUVIfNoVenvs removes the managed uv, its cache, and the Python
+// interpreter uv installed for the venvs (<BaseDir>/python,
+// UV_PYTHON_INSTALL_DIR) when no vLLM venv remains under BaseDir, and
+// reports whether it removed anything. uv exists only to build and
+// reconcile those venvs, its cache is several GB, and the interpreter
+// runs nothing without a venv, so once the last venv is gone nothing is
+// left for any of them to serve (waired-ai/waired#1435). A directory kept
+// as .failed-<ts> for inspection is not a venv anyone runs and keeps
+// none of them.
 func (i *VLLMInstaller) RemoveUVIfNoVenvs() (bool, error) {
 	if i.UV == nil || i.UV.Root == "" {
 		return false, nil
@@ -488,13 +491,17 @@ func (i *VLLMInstaller) RemoveUVIfNoVenvs() (bool, error) {
 			return false, nil
 		}
 	}
-	if _, err := os.Stat(i.UV.Root); os.IsNotExist(err) {
-		return false, nil
+	removed := false
+	for _, dir := range []string{i.UV.Root, filepath.Join(i.BaseDir, "python")} {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return removed, fmt.Errorf("vllm uninstall: remove %s: %w", dir, err)
+		}
+		removed = true
 	}
-	if err := os.RemoveAll(i.UV.Root); err != nil {
-		return false, fmt.Errorf("vllm uninstall: remove %s: %w", i.UV.Root, err)
-	}
-	return true, nil
+	return removed, nil
 }
 
 // ErrVLLMNotInstalled means there is genuinely no active install here —

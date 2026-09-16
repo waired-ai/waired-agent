@@ -261,10 +261,11 @@ func newRuntimesUninstallCmd() *cobra.Command {
 			if err := inst.Uninstall(context.Background(), active.Version); err != nil {
 				return err
 			}
-			// With the last venv gone, the managed uv and its download
-			// cache (several GB, under <state-dir>/runtimes/uv) have nothing
-			// left to build for (waired-ai/waired#1435). Best effort: a
-			// leftover cache is disk, not a broken uninstall.
+			// With the last venv gone, the managed uv, its download cache
+			// (several GB, under <state-dir>/runtimes/uv) and the Python uv
+			// installed for the venvs have nothing left to build or run
+			// (waired-ai/waired#1435). Best effort: a leftover cache is
+			// disk, not a broken uninstall.
 			if _, err := inst.RemoveUVIfNoVenvs(); err != nil {
 				fmt.Fprintf(stderr, "Warning: %v\n", err)
 			}

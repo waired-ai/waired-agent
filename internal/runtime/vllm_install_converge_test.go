@@ -319,8 +319,9 @@ func TestConvergeVLLM_RebuildsAndReclaimsThroughTheRealInstaller(t *testing.T) {
 	}
 }
 
-// RemoveUVIfNoVenvs takes the managed uv and its cache away only when no
-// venv is left for them to build or reconcile (waired-ai/waired#1435).
+// RemoveUVIfNoVenvs takes the managed uv, its cache and the Python uv
+// installed away only when no venv is left for them to build, reconcile
+// or run (waired-ai/waired#1435).
 func TestVLLMInstaller_RemoveUVIfNoVenvs(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -344,14 +345,20 @@ func TestVLLMInstaller_RemoveUVIfNoVenvs(t *testing.T) {
 				t.Fatal(err)
 			}
 			mustWriteExec(t, uvStubPath(t, inst.UV.Root), "#!/bin/sh\n")
+			python := filepath.Join(base, "python", "cpython-3.12-linux-x86_64-gnu", "bin")
+			if err := os.MkdirAll(python, 0o755); err != nil {
+				t.Fatal(err)
+			}
 
 			removed, err := inst.RemoveUVIfNoVenvs()
 			if err != nil {
 				t.Fatalf("RemoveUVIfNoVenvs: %v", err)
 			}
-			_, statErr := os.Stat(inst.UV.Root)
-			if gone := os.IsNotExist(statErr); gone != tc.wantGone || removed != tc.wantGone {
-				t.Errorf("removed=%v gone=%v, want %v", removed, gone, tc.wantGone)
+			for _, dir := range []string{inst.UV.Root, filepath.Join(base, "python")} {
+				_, statErr := os.Stat(dir)
+				if gone := os.IsNotExist(statErr); gone != tc.wantGone || removed != tc.wantGone {
+					t.Errorf("%s: removed=%v gone=%v, want %v", dir, removed, gone, tc.wantGone)
+				}
 			}
 		})
 	}
