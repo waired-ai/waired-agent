@@ -216,3 +216,24 @@ func TestOllamaDraftTokensComesBeforeASecondSlot(t *testing.T) {
 		t.Error("the estimate at two slots dropped the draft; the second slot would be granted over it")
 	}
 }
+
+// vllmMTPReserveMB was calibrated on Qwen3.5 0.8B / 2B / 4B bf16, whose MTP
+// layer is at most 0.25 GiB. A vLLM build given a draft length whose weights
+// are heavier than the largest of those carries a larger MTP layer than the
+// reserve was measured on, so it needs its own starts first
+// (waired-ai/waired#1432).
+func TestBundledVLLMDraftsStayInsideTheReserveCalibration(t *testing.T) {
+	const largestCalibratedWeightGB = 9.32 // Qwen3.5-4B bf16
+	ms, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		for _, v := range m.Variants {
+			if v.Format == catalog.FormatSafetensors && v.MTPDraftTokens > 0 && v.EstimatedWeightGB > largestCalibratedWeightGB {
+				t.Errorf("%s/%s drafts %d tokens at %.2f GB of weights, beyond the %.2f GB the MTP reserve was measured on",
+					m.ModelID, v.VariantID, v.MTPDraftTokens, v.EstimatedWeightGB, largestCalibratedWeightGB)
+			}
+		}
+	}
+}

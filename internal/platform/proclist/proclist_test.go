@@ -155,3 +155,24 @@ func TestParsePsOutput(t *testing.T) {
 		t.Errorf("flags = %+v", f)
 	}
 }
+
+// The MTP draft is visible only on the runner's own command line: ollama
+// passes --spec-type draft-mtp and --spec-draft-n-max N to llama-server when
+// the tag or the request sets draft_num_predict, and nothing else reports
+// it. Verbatim argv tail from ollama 0.34.0 serving a stamped
+// Qwen3.6-35B-A3B MTP tag (waired-ai/waired#1433). A record of today's
+// behaviour, not a contract ollama keeps.
+func TestParseRunnerFlags_ReadsTheSpeculativeDraft(t *testing.T) {
+	f := ParseRunnerFlags([]string{"llama-server", "--model", "/b/sha256-x", "-c", "200704", "-np", "1",
+		"--cache-type-k", "q4_0", "--flash-attn", "on", "-b", "512", "-ub", "512",
+		"--spec-type", "draft-mtp", "--spec-draft-n-max", "2", "--spec-draft-backend-sampling", "--context-shift", "--keep", "4"})
+	if f.SpecType != "draft-mtp" || f.SpecDraftTokens != 2 {
+		t.Errorf("SpecType=%q SpecDraftTokens=%d, want draft-mtp and 2", f.SpecType, f.SpecDraftTokens)
+	}
+	if f.NumParallel != 1 || f.ContextLen != 200704 || f.BatchTokens != 512 {
+		t.Errorf("the draft flags disturbed the others: %+v", f)
+	}
+	if g := ParseRunnerFlags([]string{"llama-server", "-c", "4096", "-np", "1"}); g.SpecType != "" || g.SpecDraftTokens != 0 {
+		t.Errorf("no draft flags read as %+v", g)
+	}
+}

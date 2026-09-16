@@ -155,6 +155,9 @@ type VariantMeasurement struct {
 	AppliedWindow int     `json:"applied_window,omitempty"`
 	KVCacheType   string  `json:"kv_cache_type,omitempty"`
 	NumParallel   int     `json:"num_parallel,omitempty"`
+	// The draft the engine ran, absent for none (waired-ai/waired#1432).
+	SpeculativeMethod string `json:"speculative_method,omitempty"`
+	SpeculativeTokens int    `json:"speculative_tokens,omitempty"`
 }
 
 // BenchmarkRecord is the persisted completion record of a benchmark

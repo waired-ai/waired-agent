@@ -78,6 +78,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Inference.VLLMSpeculativeNgram {
 		t.Errorf("VLLMSpeculativeNgram default = true, want false (opt-in)")
 	}
+	if cfg.Inference.VLLMDisableMTP {
+		t.Errorf("VLLMDisableMTP default = true, want false (MTP on where the catalog gives a draft)")
+	}
 	if cfg.Inference.PreferredEngine != "" {
 		t.Errorf("PreferredEngine default = %q, want empty (auto)", cfg.Inference.PreferredEngine)
 	}
@@ -171,6 +174,7 @@ func TestMergeJSON_Step2Fields(t *testing.T) {
 			"vllm_tensor_parallel": 2,
 			"vllm_disable_fp8_kv": true,
 			"vllm_speculative_ngram": true,
+			"vllm_disable_mtp": true,
 			"preferred_engine": "vllm",
 			"preferred_model_id": "qwen3-14b-instruct",
 			"interactive_floor_tokps": 42.5,
@@ -200,6 +204,9 @@ func TestMergeJSON_Step2Fields(t *testing.T) {
 	if !cfg.Inference.VLLMSpeculativeNgram {
 		t.Errorf("VLLMSpeculativeNgram = false, want true after JSON override")
 	}
+	if !cfg.Inference.VLLMDisableMTP {
+		t.Errorf("VLLMDisableMTP = false, want true after JSON override")
+	}
 	if cfg.Inference.PreferredEngine != "vllm" {
 		t.Errorf("PreferredEngine = %q, want vllm", cfg.Inference.PreferredEngine)
 	}
@@ -225,6 +232,7 @@ func TestMergeEnv_Step2Fields(t *testing.T) {
 		"WAIRED_INFERENCE_VLLM_TENSOR_PARALLEL=4",
 		"WAIRED_INFERENCE_VLLM_DISABLE_FP8_KV=true",
 		"WAIRED_INFERENCE_VLLM_SPECULATIVE_NGRAM=true",
+		"WAIRED_INFERENCE_VLLM_DISABLE_MTP=true",
 		"WAIRED_INFERENCE_PREFERRED_ENGINE=ollama",
 		"WAIRED_INFERENCE_PREFERRED_MODEL_ID=qwen3-7b-instruct",
 		"WAIRED_INFERENCE_INTERACTIVE_FLOOR_TOKPS=18.5",
@@ -248,6 +256,9 @@ func TestMergeEnv_Step2Fields(t *testing.T) {
 	}
 	if !cfg.Inference.VLLMSpeculativeNgram {
 		t.Errorf("VLLMSpeculativeNgram = false, want true after env override")
+	}
+	if !cfg.Inference.VLLMDisableMTP {
+		t.Errorf("VLLMDisableMTP = false, want true after env override")
 	}
 	if cfg.Inference.PreferredEngine != "ollama" {
 		t.Errorf("PreferredEngine = %q", cfg.Inference.PreferredEngine)

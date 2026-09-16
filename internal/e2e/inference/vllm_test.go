@@ -120,6 +120,18 @@ type vllmSmokeOpts struct {
 	maxNumBatchedTokens       int
 	kvOffloadingGiB           float64
 	enablePromptTokensDetails bool
+	// toolCallParser maps to VLLMConfig.ToolCallParser ("" omits it).
+	toolCallParser string
+	// startBudget, when > 0, replaces the 5-minute readiness budget. A
+	// lane that profiles a 262,144-token window with an MTP draft on an
+	// L4 spends longer than that before the first 200: the draft head's
+	// compile and a second CUDA-graph capture follow the main model's
+	// (waired-ai/waired#1432).
+	startBudget time.Duration
+	// whileServing, when non-nil, runs after the completion while the
+	// engine is still up, with its port: for lanes that read /metrics
+	// or send more requests (waired-ai/waired#1432).
+	whileServing func(t *testing.T, port int)
 }
 
 // vllmSmokeResult carries what the clamp/fp8/ngram lanes read back after
@@ -191,6 +203,11 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 	// diagnosable; the path is logged below and dumped on failure.
 	port := freePort(t)
 	logDir := t.TempDir()
+	// 150 probes at 2 s, unless the lane asked for more.
+	healthMaxFails, startTimeout := 150, 6*time.Minute
+	if opts.startBudget > 0 {
+		healthMaxFails, startTimeout = int(opts.startBudget/(2*time.Second)), opts.startBudget+time.Minute
+	}
 	a := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:               filepath.Join(venvPath, "bin", "python"),
 		Host:                 "127.0.0.1",
@@ -207,6 +224,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		MaxNumBatchedTokens:       opts.maxNumBatchedTokens,
 		KVOffloadingGiB:           opts.kvOffloadingGiB,
 		EnablePromptTokensDetails: opts.enablePromptTokensDetails,
+		ToolCallParser:            opts.toolCallParser,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},
 		HealthInterval:            2 * time.Second,
@@ -215,7 +233,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		// flashinfer JIT compile (nvcc via ninja/g++), which alone can
 		// exceed the old 3-min budget on an L4 (observed ~4 min cold,
 		// <1 min warm).
-		HealthMaxFails: 150,
+		HealthMaxFails: healthMaxFails,
 		StopTimeout:    10 * time.Second,
 	})
 	t.Cleanup(func() {
@@ -226,7 +244,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		}
 	})
 
-	startCtx, startCancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	startCtx, startCancel := context.WithTimeout(context.Background(), startTimeout)
 	defer startCancel()
 	if err := a.EnsureRunning(startCtx); err != nil {
 		if raw, rerr := os.ReadFile(filepath.Join(logDir, "engine.log")); rerr == nil {
@@ -321,6 +339,9 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		t.Logf("bench: %d completion tokens in %.2fs → %.1f tok/s (wall, incl. prefill)",
 			parsed.Usage.CompletionTokens, elapsed, res.decodeTokPerSec)
 		t.Logf("sample output (first 200 chars): %.200s", parsed.Choices[0].Message.Content)
+	}
+	if opts.whileServing != nil {
+		opts.whileServing(t, port)
 	}
 	t.Logf("vLLM e2e ok for model=%s on port=%d", modelName, port)
 	return res
@@ -461,9 +482,8 @@ func TestVLLMSpeculativeNgram(t *testing.T) {
 		t.Skip("needs the ~9 GB AWQ model; run without -short (make e2e-vllm-spec)")
 	}
 	const window = 8192
-	// The exact ngram config the agent ships (keep in sync with
-	// cmd/waired-agent/inference_vllm_tuning.go vllmNgramSpeculativeConfig).
-	const ngramCfg = `{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}`
+	// The exact ngram config the agent ships.
+	ngramCfg := router.VLLMNgramSpeculativeConfig
 
 	// One engine at a time (see TestVLLMFP8KVCache): per-lane subtest so
 	// each engine is stopped and its VRAM released before the next spawns.

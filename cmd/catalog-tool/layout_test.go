@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -152,5 +153,21 @@ func TestLayoutDrift(t *testing.T) {
 	}
 	if msg := layoutDrift(same, layoutResult{Error: "status 502"}); msg == "" {
 		t.Error("an unreadable registry must be reported, not passed")
+	}
+
+	// A tag the product writes a draft onto (waired-ai/waired#1433).
+	noDraft, _ := layoutFromHeader(layoutResult{}, qwen35Header(), false)
+	ng := noDraft.Manifest.GGUF
+	stamped := catalog.Variant{GGUF: &ng, HostResidentWeightGB: noDraft.Manifest.HostResidentWeightGB, MTPDraftTokens: 2}
+	if msg := layoutDrift(stamped, noDraft); msg != "" {
+		t.Errorf("a draft the product writes onto a tag without one is not drift: %s", msg)
+	}
+	if msg := layoutDrift(stamped, derived); !strings.Contains(msg, "now sets draft_num_predict 4") {
+		t.Errorf("a tag that started publishing its own draft: %q", msg)
+	}
+	gone := noDraft
+	gone.Manifest.GGUF.NextNLayers = 0
+	if msg := layoutDrift(stamped, gone); !strings.Contains(msg, "no longer has nextn layers") {
+		t.Errorf("a tag that lost its nextn layers: %q", msg)
 	}
 }

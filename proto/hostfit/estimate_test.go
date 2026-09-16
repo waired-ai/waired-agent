@@ -18,6 +18,11 @@ func bundledVariantForTest(t *testing.T, model, variant string) catalog.Variant 
 		}
 		for _, v := range m.Variants {
 			if v.VariantID == variant {
+				// The tag as published. The loads these fixtures were
+				// measured on carried no draft the product writes
+				// (Variant.MTPDraftTokens, waired-ai/waired#1433); a row
+				// that measured one sets it itself.
+				v.MTPDraftTokens = 0
 				return v
 			}
 		}
@@ -93,6 +98,12 @@ func TestOllamaEstimateMemoryMatchesTheFit(t *testing.T) {
 		{"CUDA MoE 35B-A3B MTP, q8_0, 200k", moe35, cuda, catalog.KVCacheQ8_0, 200704, 1, 512, 23967 + 1909, 128},
 		{"CUDA MoE 35B-A3B MTP, q4_0, 200k", moe35, cuda, catalog.KVCacheQ4_0, 200704, 1, 512, 22987 + 1909, 128},
 		{"CUDA MoE 35B-A3B UD-Q3, q8_0, 200k", bundledVariantForTest(t, "qwen3.6-35b-a3b", "mtp-q3-gguf"), cuda, catalog.KVCacheQ8_0, 200704, 1, 512, 18284 + 1909, 128},
+		// The draft the product writes onto the unsloth tags
+		// (waired-ai/waired#1433), ollama 0.34.0, one 24 GB card.
+		{"CUDA dense 27B UD-Q3 written draft 2, q4_0, 200k", withDraft(ud3, 2), cuda, catalog.KVCacheQ4_0, 200704, 1, 512, 18091 + 1936, 128},
+		{"CUDA dense 27B UD-Q2 written draft 2, q4_0, 200k", withDraft(bundledVariantForTest(t, "qwen3.8-27b", "q2-gguf"), 2), cuda, catalog.KVCacheQ4_0, 200704, 1, 512, 15050 + 1936, 128},
+		{"CUDA MoE 35B-A3B UD-Q3 written draft 2, q4_0, 200k", withDraft(bundledVariantForTest(t, "qwen3.6-35b-a3b", "mtp-q3-gguf"), 2), cuda, catalog.KVCacheQ4_0, 200704, 1, 512, 18462 + 1909, 128},
+		{"CUDA MoE 35B-A3B UD-Q2 written draft 2, q4_0, 200k", withDraft(bundledVariantForTest(t, "qwen3.6-35b-a3b", "mtp-q2-gguf"), 2), cuda, catalog.KVCacheQ4_0, 200704, 1, 512, 14206 + 1909, 128},
 		{"CUDA dense 9B, inline vision, q8_0, 200k", bundledVariantForTest(t, "qwen3.5-9b", "q4-gguf"), cuda, catalog.KVCacheQ8_0, 200704, 1, 2048, 9891 + 1919, 256},
 		{"CUDA dense 9B, inline vision, q4_0, 200k", bundledVariantForTest(t, "qwen3.5-9b", "q4-gguf"), cuda, catalog.KVCacheQ4_0, 200704, 1, 2048, 8323 + 1919, 256},
 		{"CUDA dense 4B, inline vision, q8_0, 200k", bundledVariantForTest(t, "qwen3.5-4b", "q4-gguf"), cuda, catalog.KVCacheQ8_0, 200704, 1, 2048, 7664 + 1685, 256},
@@ -108,7 +119,7 @@ func TestOllamaEstimateMemoryMatchesTheFit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := ollamaEstimateMemoryAt(tc.v, tc.h, tc.kv, tc.window, tc.slots, tc.ubatch)
 			got := e.DeviceMB() - e.FixedMB
-			if g := tc.v.GGUF; g != nil && g.DraftMaxTokens > 0 {
+			if ollamaDraftTokensAt(tc.v, tc.h, tc.kv, tc.window, tc.ubatch) > 0 {
 				if tc.h.UnifiedMemory {
 					got -= ollamaDraftContextUnifiedMB
 				} else {
@@ -199,4 +210,9 @@ func TestOllamaPredictPlacementMatchesTheFit(t *testing.T) {
 			t.Errorf("%s: predicted %d/%d layers on the GPU, llama.cpp placed %d/66 (want the same or one fewer)", tc.name, p.GPULayers, p.TotalLayers, tc.gpu)
 		}
 	}
+}
+
+func withDraft(v catalog.Variant, n int) catalog.Variant {
+	v.MTPDraftTokens = n
+	return v
 }

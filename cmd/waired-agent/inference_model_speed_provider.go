@@ -76,30 +76,33 @@ func (p *agentInferenceProvider) speedDeps(ctx context.Context, mode string) Ben
 	}
 	tuning := p.currentServeTuning()
 	deps := BenchDeps{
-		EngineKind:      kind,
-		EnginePort:      port,
-		EngineVersion:   p.servingEngineVersion(ctx),
-		EngineReady:     p.EngineReady,
-		EngineQuiet:     p.engineQuietForBench,
-		EngineClaim:     p.claimBench,
-		EngineGen:       p.engineProcessGen,
-		EngineModel:     p.activeEngineModel(),
-		VariantID:       p.activeVariantID(),
-		ModelID:         p.activeModelID(),
-		VariantSHA:      p.activeVariantSHA(),
-		GPUModel:        gpu.Model,
-		VRAMTotalMB:     gpu.VRAMTotalMB,
-		DriverVersion:   gpu.DriverVersion,
-		WarmSlots:       p.WarmConversationSlots,
-		Cache:           p.benchCache,
-		Logger:          p.logger,
-		AppliedWindow:   tuning.ContextLength,
-		KVCacheType:     tuning.KVCacheType,
-		NumParallel:     tuning.NumParallel,
-		ServingInFlight: p.servingInFlight,
-		SkipCacheLoad:   mode == management.BenchmarkModeRerun,
-		Selected:        p.activeSelectionKey,
-		Progress:        p.publishBenchProgress,
+		EngineKind:    kind,
+		EnginePort:    port,
+		EngineVersion: p.servingEngineVersion(ctx),
+		EngineReady:   p.EngineReady,
+		EngineQuiet:   p.engineQuietForBench,
+		EngineClaim:   p.claimBench,
+		EngineGen:     p.engineProcessGen,
+		EngineModel:   p.activeEngineModel(),
+		VariantID:     p.activeVariantID(),
+		ModelID:       p.activeModelID(),
+		VariantSHA:    p.activeVariantSHA(),
+		GPUModel:      gpu.Model,
+		VRAMTotalMB:   gpu.VRAMTotalMB,
+		DriverVersion: gpu.DriverVersion,
+		WarmSlots:     p.WarmConversationSlots,
+		Cache:         p.benchCache,
+		Logger:        p.logger,
+		AppliedWindow: tuning.ContextLength,
+		KVCacheType:   tuning.KVCacheType,
+		NumParallel:   tuning.NumParallel,
+
+		SpeculativeMethod: tuning.SpeculativeMethod,
+		SpeculativeTokens: tuning.SpeculativeTokens,
+		ServingInFlight:   p.servingInFlight,
+		SkipCacheLoad:     mode == management.BenchmarkModeRerun,
+		Selected:          p.activeSelectionKey,
+		Progress:          p.publishBenchProgress,
 		// Set here rather than left to RunBootBenchmark's default: the loop
 		// reads these deps before RunBootBenchmark sees them
 		// (awaitServingIdle).
@@ -133,7 +136,8 @@ func (p *agentInferenceProvider) storedSpeedMeasurement(deps BenchDeps) (BenchRe
 	if !ok || m.TurnSeconds <= 0 ||
 		m.EngineKind != deps.EngineKind || m.EngineVersion != deps.EngineVersion ||
 		m.GPUModel != deps.GPUModel || m.VRAMTotalMB != deps.VRAMTotalMB || m.DriverVersion != deps.DriverVersion ||
-		m.AppliedWindow != deps.AppliedWindow || m.KVCacheType != deps.KVCacheType || m.NumParallel != deps.NumParallel {
+		m.AppliedWindow != deps.AppliedWindow || m.KVCacheType != deps.KVCacheType || m.NumParallel != deps.NumParallel ||
+		m.SpeculativeMethod != deps.SpeculativeMethod || m.SpeculativeTokens != deps.SpeculativeTokens {
 		return BenchResult{}, false
 	}
 	return BenchResult{

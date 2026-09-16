@@ -98,11 +98,19 @@ func NewResolvingPuller(resolve func() (string, error), runner CommandRunner, en
 type Rendering struct {
 	Renderer string
 	Parser   string
+
+	// DraftNumPredict, when > 0, is written as PARAMETER draft_num_predict:
+	// the MTP draft length for a tag that carries nextn blocks but whose
+	// publisher set no draft, so ollama would otherwise run none
+	// (catalog.Variant.MTPDraftTokens, waired-ai/waired#1433). Only
+	// num_batch turns off ollama's automatic batch sizing; this parameter
+	// does not (server/routes.go, v0.34.0).
+	DraftNumPredict int
 }
 
 // Wanted reports whether anything needs stamping.
 func (r Rendering) Wanted() bool {
-	return strings.TrimSpace(r.Renderer) != "" || strings.TrimSpace(r.Parser) != ""
+	return strings.TrimSpace(r.Renderer) != "" || strings.TrimSpace(r.Parser) != "" || r.DraftNumPredict > 0
 }
 
 // Pull runs `ollama pull <tag>`, stamps want onto the result, and
@@ -225,6 +233,9 @@ func (p *Puller) stamp(ctx context.Context, binary, tag string, want Rendering) 
 	if pa := strings.TrimSpace(parser); pa != "" {
 		fmt.Fprintf(&mf, "PARSER %s\n", pa)
 	}
+	if want.DraftNumPredict > 0 {
+		fmt.Fprintf(&mf, "PARAMETER draft_num_predict %d\n", want.DraftNumPredict)
+	}
 
 	// A file, not stdin: `ollama create -f -` is not a documented
 	// spelling, and a Modelfile whose FROM names a local tag resolves
@@ -244,6 +255,9 @@ func (p *Puller) stamp(ctx context.Context, binary, tag string, want Rendering) 
 	// manifest, not a derived model. A second name would have to be
 	// threaded through every caller that holds the tag.
 	if err := p.runner.Run(ctx, binary, []string{"create", tag, "-f", path}, p.env, func(string) {}); err != nil {
+		if want.DraftNumPredict > 0 {
+			return fmt.Errorf("download: stamp %s with renderer %q and draft_num_predict %d: %w", tag, renderer, want.DraftNumPredict, err)
+		}
 		return fmt.Errorf("download: stamp %s with renderer %q: %w", tag, renderer, err)
 	}
 	return nil

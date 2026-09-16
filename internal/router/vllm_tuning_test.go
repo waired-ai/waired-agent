@@ -1,8 +1,10 @@
 package router
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 )
@@ -262,5 +264,43 @@ func TestVLLMMaxNumSeqs(t *testing.T) {
 	}
 	if got := VLLMMaxNumSeqs(-1); got != vllmDefaultMaxNumSeqs {
 		t.Errorf("VLLMMaxNumSeqs(-1) = %d, want the default", got)
+	}
+}
+
+// The speculation decision in every combination of its four inputs
+// (waired-ai/waired#1432): an ngram opt-in wins, MTP needs a build with
+// layers and a draft length on the pinned venv and no opt-out, and
+// nothing else drafts.
+func TestVLLMSpeculative(t *testing.T) {
+	mtp := catalog.Variant{MTPLayers: 1, MTPKVBytesPerTokenFP16: 4096, MTPDraftTokens: 2}
+	noDraft := catalog.Variant{MTPLayers: 1, MTPKVBytesPerTokenFP16: 4096}
+	noLayers := catalog.Variant{MTPDraftTokens: 2}
+	for _, v := range []struct {
+		name string
+		v    catalog.Variant
+	}{{"mtp", mtp}, {"no-draft", noDraft}, {"no-layers", noLayers}, {"plain", catalog.Variant{}}} {
+		for _, ngram := range []bool{false, true} {
+			for _, disable := range []bool{false, true} {
+				for _, flags := range []bool{false, true} {
+					got := VLLMSpeculative(v.v, ngram, disable, flags)
+					var want VLLMSpeculation
+					switch {
+					case ngram:
+						want = VLLMSpeculation{Method: "ngram", Tokens: 5, Config: VLLMNgramSpeculativeConfig}
+					case v.name == "mtp" && !disable && flags:
+						want = VLLMSpeculation{Method: "mtp", Tokens: 2, Config: `{"method":"mtp","num_speculative_tokens":2}`}
+					}
+					if got != want {
+						t.Errorf("%s ngram=%v disable=%v serveFlags=%v: got %+v, want %+v", v.name, ngram, disable, flags, got, want)
+					}
+					if got.Config != "" && !json.Valid([]byte(got.Config)) {
+						t.Errorf("config %q is not JSON", got.Config)
+					}
+					if wantDraft := map[bool]int{true: got.Tokens, false: 0}[got.Method == "mtp"]; got.DraftTokens() != wantDraft {
+						t.Errorf("%+v DraftTokens = %d, want %d", got, got.DraftTokens(), wantDraft)
+					}
+				}
+			}
+		}
 	}
 }

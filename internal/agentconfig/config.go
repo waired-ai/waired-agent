@@ -334,6 +334,16 @@ type InferenceConfig struct {
 	// slow multi-stream serving, so it is opt-in until measured per host.
 	VLLMSpeculativeNgram bool `json:"vllm_speculative_ngram"`
 
+	// VLLMDisableMTP turns off MTP speculative decoding (waired-ai/waired#1432).
+	// Default false: a build whose catalog entry carries MTP layers and a
+	// draft length is served with the model's own MTP head as the draft,
+	// on the pinned vLLM release only. Set true to serve without a draft,
+	// which also gives the draft's memory back to the context window.
+	// vllm_speculative_ngram, when on, is used instead of MTP regardless.
+	// Selection sizes against the default-on; this opt-out affects
+	// serving only.
+	VLLMDisableMTP bool `json:"vllm_disable_mtp"`
+
 	// VLLMToolParser overrides vLLM's --tool-call-parser (#410). Empty
 	// (default) lets the agent pick from the served model's chat
 	// template; a non-empty value is passed through verbatim.
@@ -993,6 +1003,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.VLLMSpeculativeNgram = b
+	case "VLLM_DISABLE_MTP":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		c.VLLMDisableMTP = b
 	case "VLLM_MAX_NUM_BATCHED_TOKENS":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -1142,6 +1158,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.Inference.VLLMSpeculativeNgram, "inference-vllm-speculative-ngram",
 		c.Inference.VLLMSpeculativeNgram,
 		"enable vLLM ngram speculative decoding (single-stream decode boost)")
+	fs.BoolVar(&c.Inference.VLLMDisableMTP, "inference-vllm-disable-mtp",
+		c.Inference.VLLMDisableMTP,
+		"serve without MTP speculative decoding on builds that have MTP layers")
 	fs.StringVar(&c.Inference.VLLMToolParser, "inference-vllm-tool-parser",
 		c.Inference.VLLMToolParser,
 		"override vLLM --tool-call-parser (\"\" picks from the served model)")

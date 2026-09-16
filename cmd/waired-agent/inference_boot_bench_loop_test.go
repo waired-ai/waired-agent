@@ -432,6 +432,10 @@ func TestBootBenchSelectionKey(t *testing.T) {
 	if bootBenchSelectionKey(full) == "" {
 		t.Fatal("a complete selection produced no key")
 	}
+	// No draft keeps the pre-draft key (waired-ai/waired#1432).
+	if got := bootBenchSelectionKey(full); got != "m\x00v\x00ollama\x000.33.3\x000\x00\x000" {
+		t.Errorf("no-draft key %q changed shape", got)
+	}
 	if bootBenchSelectionKey(BenchDeps{VariantID: "v", EngineKind: "ollama"}) != "" {
 		t.Error("a host with no committed model produced a key; the first real " +
 			"selection would inherit its attempt")
@@ -447,6 +451,7 @@ func TestBootBenchSelectionKey(t *testing.T) {
 		{"window", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", AppliedWindow: 32768}},
 		{"kv cache type", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", KVCacheType: "q4_0"}},
 		{"parallel slots", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", NumParallel: 2}},
+		{"draft", BenchDeps{ModelID: "m", VariantID: "v", EngineKind: "ollama", EngineVersion: "0.33.3", SpeculativeMethod: "draft-mtp", SpeculativeTokens: 2}},
 	} {
 		if bootBenchSelectionKey(tc.d) == bootBenchSelectionKey(full) {
 			t.Errorf("a changed %s did not earn a new measurement", tc.name)

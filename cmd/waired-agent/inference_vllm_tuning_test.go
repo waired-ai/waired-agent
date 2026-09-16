@@ -1,13 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -29,7 +29,7 @@ func TestComputeVLLMTuning_ClampsBelowNative(t *testing.T) {
 	// 1×L4 @ 0.85: ~18.1 GB budget (util×VRAM − per-GPU overhead −
 	// activation reserve) − 14×1.15 GB weights → ~27k tokens (see
 	// router.TestVLLMMaxModelLen).
-	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
+	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	if maxLen != 26624 {
 		t.Fatalf("maxLen = %d, want 26624", maxLen)
 	}
@@ -53,7 +53,7 @@ func TestComputeVLLMTuning_ClampsBelowNative(t *testing.T) {
 func TestComputeVLLMTuning_SubFloorClampNamesCodingTarget(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	m.ContextLength = 262144 // above the native floor → floor phrasing applies
-	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
+	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	if maxLen != 26624 {
 		t.Fatalf("maxLen = %d, want 26624", maxLen)
 	}
@@ -66,7 +66,7 @@ func TestComputeVLLMTuning_NoClampWhenBudgetCovers(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	// TP=2 doubles the budget past the 131072 native window.
 	hw.GPUs = append(hw.GPUs, hw.GPUs[0])
-	maxLen, mt := computeVLLMTuning(m, v, hw, 2, 0.85, scoring.KVFactorF16)
+	maxLen, mt := computeVLLMTuning(m, v, hw, 2, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	if maxLen != m.ContextLength {
 		t.Fatalf("maxLen = %d, want native %d", maxLen, m.ContextLength)
 	}
@@ -81,7 +81,7 @@ func TestComputeVLLMTuning_NoClampWhenBudgetCovers(t *testing.T) {
 func TestComputeVLLMTuning_UnknownInputsPassThrough(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	v.KVBytesPerTokenFP16 = 0 // sizing unknown → never guess
-	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
+	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	if maxLen != m.ContextLength {
 		t.Fatalf("maxLen = %d, want manifest window %d", maxLen, m.ContextLength)
 	}
@@ -93,7 +93,7 @@ func TestComputeVLLMTuning_UnknownInputsPassThrough(t *testing.T) {
 func TestComputeVLLMTuning_WeightsExceedBudgetWarns(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	v.EstimatedWeightGB = 40.0 // padded weights alone exceed a single L4
-	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
+	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	if maxLen != m.ContextLength {
 		t.Fatalf("maxLen = %d, want manifest window %d (no invented clamp)", maxLen, m.ContextLength)
 	}
@@ -105,8 +105,8 @@ func TestComputeVLLMTuning_WeightsExceedBudgetWarns(t *testing.T) {
 func TestComputeVLLMTuning_FP8DoublesTheClampedWindow(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	m.ContextLength = 262144
-	f16, _ := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16)
-	fp8, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8)
+	f16, _ := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
+	fp8, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, router.VLLMSpeculation{})
 	if fp8 <= f16 {
 		t.Fatalf("fp8 window %d should exceed the f16 window %d", fp8, f16)
 	}
@@ -155,16 +155,33 @@ func TestVLLMKVCacheDType(t *testing.T) {
 	}
 }
 
-func TestVLLMSpeculativeConfigJSON(t *testing.T) {
-	if got := vllmSpeculativeConfigJSON(false); got != "" {
-		t.Errorf("disabled must omit the flag, got %q", got)
+// An MTP draft is sized into the window and recorded on the tuning; no
+// draft sizes exactly as before (waired-ai/waired#1432).
+func TestComputeVLLMTuning_SizesTheMTPDraft(t *testing.T) {
+	m := catalog.Manifest{ModelID: "qwen3.5-4b", ContextLength: 1 << 20}
+	v := catalog.Variant{VariantID: "bf16", EstimatedWeightGB: 8.5, KVBytesPerTokenFP16: 32768,
+		MTPLayers: 1, MTPKVBytesPerTokenFP16: 4096, MTPDraftTokens: 1}
+	hw := hardware.Profile{GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24463, ComputeCap: "12.0"}}}
+
+	none, plain := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, router.VLLMSpeculation{})
+	legacy := router.VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, 1, 0.85, scoring.KVFactorFP8, hw)
+	if none != legacy {
+		t.Errorf("no draft: max_model_len %d, want the draft-free estimate %d", none, legacy)
 	}
-	got := vllmSpeculativeConfigJSON(true)
-	if !strings.Contains(got, `"method":"ngram"`) {
-		t.Errorf("enabled config must select the ngram method, got %q", got)
+	if plain.SpeculativeMethod != "" || plain.SpeculativeTokens != 0 {
+		t.Errorf("no draft recorded as %q/%d", plain.SpeculativeMethod, plain.SpeculativeTokens)
 	}
-	if !json.Valid([]byte(got)) {
-		t.Errorf("speculative config must be valid JSON, got %q", got)
+	spec := router.VLLMSpeculative(v, false, false, true)
+	withMTP, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, spec)
+	if withMTP <= 0 || withMTP >= none {
+		t.Errorf("MTP draft: max_model_len %d, want below the draft-free %d", withMTP, none)
+	}
+	if mt.SpeculativeMethod != "mtp" || mt.SpeculativeTokens != 1 {
+		t.Errorf("MTP recorded as %q/%d, want mtp/1", mt.SpeculativeMethod, mt.SpeculativeTokens)
+	}
+	ngram, nt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, router.VLLMSpeculative(v, true, false, true))
+	if ngram != none || nt.SpeculativeMethod != "ngram" {
+		t.Errorf("ngram: max_model_len %d method %q, want the draft-free %d and ngram recorded", ngram, nt.SpeculativeMethod, none)
 	}
 }
 

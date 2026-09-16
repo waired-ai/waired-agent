@@ -201,3 +201,57 @@ func TestPull_DoesNotStampAfterAFailedPull(t *testing.T) {
 		}
 	}
 }
+
+// A community MTP tag carries the nextn blocks but no draft_num_predict, and
+// ollama runs no draft unless the tag or the request sets one; the product's
+// traffic reaches ollama through /v1, which cannot pass it per request. So
+// the draft goes into the same Modelfile as the renderer
+// (waired-ai/waired#1433). The exact text is pinned for the same reason the
+// renderer's is.
+func TestStamp_WritesTheDraftWithTheRenderer(t *testing.T) {
+	var seen string
+	r := &recordingRunner{onArgs: func(args []string) {
+		for i, a := range args {
+			if a == "-f" && i+1 < len(args) {
+				b, _ := os.ReadFile(args[i+1])
+				seen = string(b)
+			}
+		}
+	}}
+	p := NewPuller("/bin/ollama", r)
+	if err := p.Pull(context.Background(), "hf.co/ns/m:q2", Rendering{Renderer: "qwen3.5", Parser: "qwen3.5", DraftNumPredict: 2}, nil); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	want := "FROM hf.co/ns/m:q2\nRENDERER qwen3.5\nPARSER qwen3.5\nPARAMETER draft_num_predict 2\n"
+	if seen != want {
+		t.Errorf("Modelfile =\n%q\nwant\n%q", seen, want)
+	}
+}
+
+// A draft alone is enough to stamp: nothing ties it to a renderer.
+func TestStamp_DraftAloneIsWanted(t *testing.T) {
+	var seen string
+	r := &recordingRunner{onArgs: func(args []string) {
+		for i, a := range args {
+			if a == "-f" && i+1 < len(args) {
+				b, _ := os.ReadFile(args[i+1])
+				seen = string(b)
+			}
+		}
+	}}
+	p := NewPuller("/bin/ollama", r)
+	if err := p.Pull(context.Background(), "ns/m:t", Rendering{DraftNumPredict: 3}, nil); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if r.calls != 2 {
+		t.Fatalf("ran %d commands, want a pull and a create: %v", r.calls, r.seen)
+	}
+	if seen != "FROM ns/m:t\nPARAMETER draft_num_predict 3\n" {
+		t.Errorf("Modelfile = %q", seen)
+	}
+	err := NewPuller("/bin/ollama", &recordingRunner{failOn: "create", err: errors.New("boom")}).
+		Pull(context.Background(), "ns/m:t", Rendering{DraftNumPredict: 3}, nil)
+	if err == nil || !strings.Contains(err.Error(), "draft_num_predict 3") {
+		t.Errorf("a failed draft stamp must name the draft: %v", err)
+	}
+}
