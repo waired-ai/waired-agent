@@ -303,39 +303,38 @@ func TestComputeOllamaTuning(t *testing.T) {
 		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
 			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
 		}
-		// PRODUCT CONTRACT (decision 1 of
-		// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md):
-		// a CPU-only host serves f16 even where quantizing would buy window.
-		// It used to keep q8_0 here ("only when it buys context"); the owner
-		// decision fixes CPU-only at f16, off the path waired-agent#29's
-		// segfault lives on.
-		if got.KVCacheType != "f16" || got.FlashAttention {
-			t.Errorf("KVCacheType/FlashAttention = %q/%v, want f16/false on a CPU-only host",
+		// PRODUCT CONTRACT (owner decision 2026-09-16,
+		// docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md):
+		// a CPU-only host takes the same ladder as a GPU host. This build
+		// lists no kv_cache_types, so it serves q8_0 with flash attention.
+		if got.KVCacheType != "q8_0" || !got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on a CPU-only host",
 				got.KVCacheType, got.FlashAttention)
+		}
+		listed := computeOllamaTuning(m, withKVTypes(m.Variants[1], "q4_0", "q8_0", "f16"), hw, ollamaKVAuto, ollamaObservedServe{})
+		if listed.KVCacheType != "q4_0" || !listed.FlashAttention {
+			t.Errorf("a build listing q4_0 on a CPU-only host = %q/%v, want q4_0/true",
+				listed.KVCacheType, listed.FlashAttention)
 		}
 	})
 
-	// PRODUCT CONTRACT (waired-agent#29): the CI runner reproduced exactly.
-	// Quantizing here saves ~400 MB of a 12 GB budget while forcing
-	// llama.cpp's CPU + flash-attention + quantized-KV path, where the
-	// llama-server segfault lives. Everything else about the sizing must be
-	// untouched — especially NumParallel, which is why the f16 test uses the
-	// same 2x threshold the slot grant does.
-	t.Run("cpu-only-small-model-drops-quantized-kv", func(t *testing.T) {
+	// RECORD OF TODAY'S BEHAVIOUR: the CI runner shape (waired-agent#29).
+	// It serves the default ladder like any host since
+	// docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md;
+	// the rest of the sizing is unchanged — the manifest window and both
+	// request slots.
+	t.Run("cpu-only-small-model-takes-the-default-ladder", func(t *testing.T) {
 		tm := tinyCoderManifest()
 		got := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, ollamaObservedServe{})
-		if got.KVCacheType != "f16" {
-			t.Errorf("KVCacheType = %q, want f16 (f16 affords ~943k tokens vs the 65k served)", got.KVCacheType)
-		}
-		if got.FlashAttention {
-			t.Error("FlashAttention = true, want false: there is no quantized cache to protect")
+		if got.KVCacheType != "q8_0" || !got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true (the build lists no q4_0)",
+				got.KVCacheType, got.FlashAttention)
 		}
 		if got.ContextLength != tm.ContextLength {
 			t.Errorf("ContextLength = %d, want the full manifest window %d", got.ContextLength, tm.ContextLength)
 		}
 		if got.NumParallel != ollamaMaxAutoParallel {
-			t.Errorf("NumParallel = %d, want %d — choosing f16 must not cost a request slot",
-				got.NumParallel, ollamaMaxAutoParallel)
+			t.Errorf("NumParallel = %d, want %d", got.NumParallel, ollamaMaxAutoParallel)
 		}
 		if got.Warning != "" {
 			t.Errorf("unexpected warning: %q", got.Warning)
@@ -384,8 +383,8 @@ func TestComputeOllamaTuning(t *testing.T) {
 	t.Run("unknown-sizing-keeps-the-engine-window", func(t *testing.T) {
 		v := catalog.Variant{VariantID: "unknown", RuntimeSupport: []string{catalog.RuntimeOllama}}
 		got := computeOllamaTuning(m, v, hardware.Profile{RAMTotalGB: 32}, ollamaKVAuto, ollamaObservedServe{})
-		if got.KVCacheType != "f16" || got.FlashAttention {
-			t.Errorf("KVCacheType/FlashAttention = %q/%v, want f16/false on a CPU-only host",
+		if got.KVCacheType != "q8_0" || !got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on a CPU-only host",
 				got.KVCacheType, got.FlashAttention)
 		}
 		if got.ContextLength != 0 {
@@ -527,9 +526,11 @@ func TestOllamaTuningEnv(t *testing.T) {
 	// engine picks. Exporting =0 was rejected: f16 + engine-chosen FA is the
 	// upstream default that every non-waired user runs, i.e. the
 	// best-exercised configuration.
-	t.Run("cpu-only-auto-omits-flash-attention", func(t *testing.T) {
+	// An f16 cache is what a pin (or the verify pass's degrade) asks for
+	// now that no host defaults to it.
+	t.Run("f16-omits-flash-attention", func(t *testing.T) {
 		tm := tinyCoderManifest()
-		env := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, ollamaObservedServe{}).Env()
+		env := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), "f16", ollamaObservedServe{}).Env()
 		for _, want := range []string{
 			"OLLAMA_CONTEXT_LENGTH=32768",
 			"OLLAMA_KV_CACHE_TYPE=f16",
@@ -548,23 +549,17 @@ func TestOllamaTuningEnv(t *testing.T) {
 }
 
 // TestPlanOllamaKV is the seam-level table: the decision, isolated from the
-// sizing that consumes it. Both sides of the boundary are pinned, because the
-// whole point of the rule is that it turns over exactly where quantizing stops
-// buying context.
+// sizing that consumes it. The CPU-only rows span a roomy, a mid and a tight
+// budget, because the rule they pin is that the budget no longer decides the
+// type (docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md; it
+// used to turn over where f16 stopped holding two slots at the window).
 func TestPlanOllamaKV(t *testing.T) {
 	tm := tinyCoderManifest()
 	tv := tm.Variants[0]
 	m := tuningTestManifest()
 
-	// want = 32768 (the manifest window), so the boundary is 2*32768 = 65536
-	// f16 tokens. kv/tok = 12288 at f16, weights 0.4 GB, so a budget B gives
-	// (B*1e9 - 0.4e9)/12288 tokens. The CPU-only budget is RAM − the 2 GB
-	// OS deduction − the ~1.09 GB engine reservation at this weight
-	// (OllamaSizingBudgetGB):
-	//   65536 tokens exactly  -> 0.4e9 + 65536*12288 = 1.2054e9 -> 5.2054 GB
-	//                            budget => RAMTotalGB ≈ 8.29
-	atBoundary := hardware.Profile{RAMTotalGB: 10}   // budget ≈ 6.9 GB -> ~530k >= 65536
-	belowBoundary := hardware.Profile{RAMTotalGB: 4} // budget ≈ 0.91 GB -> ~42k < 65536
+	atBoundary := hardware.Profile{RAMTotalGB: 10}   // where f16 still held both slots
+	belowBoundary := hardware.Profile{RAMTotalGB: 4} // where it did not
 
 	cases := []struct {
 		name      string
@@ -577,13 +572,13 @@ func TestPlanOllamaKV(t *testing.T) {
 		{"pin-q8_0", tm, tv, ciRunner16GB(), "q8_0", ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
 		{"pin-q4_0", tm, tv, ciRunner16GB(), "q4_0", ollamaKVPlan{Type: "q4_0", FlashAttention: true}},
 		{"pin-f16", tm, tv, ciRunner16GB(), "f16", ollamaKVPlan{Type: "f16"}},
-		{"auto-cpu-roomy", tm, tv, ciRunner16GB(), ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
-		{"auto-cpu-at-boundary", tm, tv, atBoundary, ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
-		// CPU-only is f16 whatever the budget (decision 1 of
-		// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md,
-		// #29): a tight host no longer trades the CPU + flash-attention +
-		// quantized-KV path for window.
-		{"auto-cpu-below-boundary", tm, tv, belowBoundary, ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
+		// A CPU-only host takes the GPU host's ladder whatever the budget
+		// (docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md):
+		// q4_0 where the build lists it, q8_0 for a build with no list.
+		{"auto-cpu-roomy", tm, tv, ciRunner16GB(), ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		{"auto-cpu-at-boundary", tm, tv, atBoundary, ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		{"auto-cpu-below-boundary", tm, tv, belowBoundary, ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		{"auto-cpu-q4_0-listed", tm, withKVTypes(tv, "q4_0", "q8_0", "f16"), ciRunner16GB(), ollamaKVAuto, ollamaKVPlan{Type: "q4_0", FlashAttention: true}},
 		// A build that does not list q4_0 serves the next rung up.
 		{"auto-gpu-via-gpus", m, m.Variants[1], discrete24GB(), ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
 		// The default where the build lists it (#1348).
@@ -596,7 +591,7 @@ func TestPlanOllamaKV(t *testing.T) {
 		{
 			"auto-unsizable-host", tm, catalog.Variant{VariantID: "no-kv"},
 			hardware.Profile{RAMTotalGB: 16}, ollamaKVAuto,
-			ollamaKVPlan{Type: "f16"},
+			ollamaKVPlan{Type: "q8_0", FlashAttention: true},
 		},
 	}
 	for _, c := range cases {

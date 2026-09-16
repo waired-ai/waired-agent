@@ -285,15 +285,11 @@ func TestOllamaCapacityFit_PricesAWindowTheProductWouldServe(t *testing.T) {
 	if got := hostfit.OllamaFit(v, host); got.Fits {
 		t.Errorf("OllamaFit = %+v, want the same coding-window refusal", got)
 	}
-	// Half tiny's per-token cache: a CPU-only host prices its cache at
-	// the f16 it serves (decision 1 of
-	// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md),
-	// and the subject here is the missing rung, not the cache type.
 	short := catalog.Manifest{
 		ModelID: "short", ContextLength: 131072,
 		Variants: []catalog.Variant{{
 			RuntimeSupport:    []string{catalog.RuntimeOllama},
-			EstimatedWeightGB: 1.0, KVBytesPerTokenFP16: 6144,
+			EstimatedWeightGB: 1.0, KVBytesPerTokenFP16: 12288,
 		}},
 	}
 	sv := short.Variants[0]

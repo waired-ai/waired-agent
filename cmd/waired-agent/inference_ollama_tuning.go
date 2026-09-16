@@ -64,10 +64,11 @@ const ollamaContextFloor = 32768
 const ollamaMaxAutoParallel = 2
 
 // ollamaKVAuto is the kvType value meaning "decide": planOllamaKV then takes
-// the default the owner decided — q4_0 wherever the host and the build allow
-// it, the smallest type above it where they do not, f16 on a CPU-only host
-// (hostfit.ResolveKVCacheType; decision 2 of
-// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md).
+// the default the owner decided — q4_0 wherever the build allows it, the
+// smallest type above it where it does not, on a CPU-only host as on any
+// other (hostfit.ResolveKVCacheType; decision 2 of
+// docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md,
+// and docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md).
 // Any explicit type is a PIN — that is how the verify pass's f16 degrade, the
 // ollamaKVOverrideEnv test lane and a user's chosen type all express intent,
 // and it is why every existing caller that passes "q8_0"/"f16" keeps its
@@ -97,13 +98,13 @@ type ollamaKVPlan struct {
 // (ollamaKVRequestFor).
 //
 // "auto" is the default ladder: hostfit.ResolveKVCacheType with no request,
-// which is q4_0 on a host with GPU-addressable memory when the build lists it
-// (kv_cache_types), q8_0 when it does not, and f16 on a CPU-only host. The
-// CPU-only answer is f16 unconditionally: quantizing the cache there saves
-// memory nobody needs while forcing llama.cpp's least-exercised CPU + flash
-// attention + quantized-KV path, which is where waired-agent#29's
-// llama-server segfault lives. It used to fall back to q8_0 on a CPU host
-// too tight for f16; the owner decision fixes CPU-only at f16.
+// which is q4_0 when the build lists it (kv_cache_types) and q8_0 when it
+// does not, with flash attention, on every host. A CPU-only host was held at
+// f16 until 2026-09-16 to stay off the CPU + flash-attention + quantized-KV
+// path waired-agent#29's segfault was suspected on; 404 requests with a
+// quantised cache on ollama 0.34.0 found no crash, and the owner moved CPU
+// hosts onto the ladder
+// (docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md).
 func planOllamaKV(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, requested string) ollamaKVPlan {
 	if requested != ollamaKVAuto {
 		// A pin. f16 needs no flash attention; a quantized pin does.

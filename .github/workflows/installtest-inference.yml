@@ -211,12 +211,13 @@ jobs:
           IT_LOCAL: "1"
           IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
           # Keep q8_0 + flash attention exercised against a REAL engine.
-          # Since waired-agent#29 the serve tuning requests that pair only
-          # where it buys context, so a CPU-only host would otherwise never
-          # run it — and the GPU runner below is vLLM-only, so this is the
-          # last real-engine coverage that combination has. Deliberately NOT
-          # on the routing-sentinel leg: that one must exercise the
-          # configuration real users get.
+          # The serve tuning's default is q4_0 on CPU-only hosts too
+          # (docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md),
+          # so the routing-sentinel leg covers q4_0 and this pin keeps the
+          # q8_0 rung — the one a build without q4_0 is served at — covered
+          # on a real engine; the GPU runner below is vLLM-only.
+          # Deliberately NOT on the routing-sentinel leg: that one must
+          # exercise the configuration real users get.
           IT_AGENT_ENV_EXTRA: WAIRED_OLLAMA_KV_CACHE_TYPE=q8_0
         run: |
           set -euo pipefail

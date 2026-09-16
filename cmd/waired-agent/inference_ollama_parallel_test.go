@@ -76,15 +76,13 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 		}
 	})
 
-	// PRODUCT CONTRACT (waired-agent#29): dropping the quantized KV cache on a
-	// roomy CPU host must not cost a request slot. planOllamaKV's f16
-	// threshold is deliberately the same 2x the slot grant uses, which is what
-	// makes this a proof rather than a coincidence.
+	// RECORD OF TODAY'S BEHAVIOUR: a roomy CPU host keeps both request
+	// slots under the default cache type it serves.
 	t.Run("auto-cpu-host-keeps-parallelism", func(t *testing.T) {
 		tm := tinyCoderManifest()
 		got := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, 0, 0, ollamaObservedServe{})
-		if got.KVCacheType != "f16" {
-			t.Fatalf("precondition: KVCacheType = %q, want f16", got.KVCacheType)
+		if got.KVCacheType != "q8_0" {
+			t.Fatalf("precondition: KVCacheType = %q, want q8_0 (the build lists no q4_0)", got.KVCacheType)
 		}
 		if got.NumParallel != ollamaMaxAutoParallel {
 			t.Errorf("NumParallel = %d, want %d", got.NumParallel, ollamaMaxAutoParallel)

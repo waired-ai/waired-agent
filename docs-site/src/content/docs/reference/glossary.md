@@ -125,10 +125,10 @@ another page stops you.
 : The memory a model uses while it works on a request, one entry per token
   of the conversation so far. It grows with the context window, which is why
   the memory a model needs is more than the size of its weights. The cache can
-  itself be stored at lower precision. On a computer with a GPU, Ollama models
-  keep it at 4-bit (`q4_0`) where the model allows that, and at 8-bit (`q8_0`)
-  where it does not. A computer without a GPU keeps it at full precision
-  (`f16`). vLLM uses `fp8` on NVIDIA GPUs that support it and `fp16` elsewhere.
+  itself be stored at lower precision. Ollama models keep it at 4-bit (`q4_0`)
+  where the model allows that, and at 8-bit (`q8_0`) where it does not, on
+  computers with and without a GPU. vLLM uses `fp8` on NVIDIA GPUs that
+  support it and `fp16` elsewhere.
 
 <a id="quantization"></a>
 **Quantization and variant**
