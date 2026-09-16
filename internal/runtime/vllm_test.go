@@ -164,6 +164,31 @@ func TestVLLMCommandArgs(t *testing.T) {
 		}
 	})
 
+	// waired-ai/waired#1434: the engine picks the prefix-cache retention
+	// itself, and the argv never names one. Measured on vLLM 0.29.0 with
+	// Qwen3.5-4B served with an MTP draft and a coding-agent conversation
+	// grown turn by turn: vLLM's default for a hybrid model with a draft
+	// (dense checkpoints) answered the next turn in 1.8 s at 50k tokens,
+	// an explicit 0 in 3.1 s, recomputing 14k tokens a turn instead of 8k.
+	// Without a draft, 0 (the default), 1056 and None gave the same
+	// latencies within 1%, and None recomputed 17% more across three long
+	// conversations sharing the pool.
+	t.Run("never pins the prefix-cache retention interval", func(t *testing.T) {
+		cfg := base
+		cfg.SpeculativeConfig = `{"method":"mtp","num_speculative_tokens":2}`
+		cfg.KVCacheDType = "fp8"
+		cfg.EnablePromptTokensDetails = true
+		cfg.MaxNumBatchedTokens = 4096
+		cfg.MaxNumSeqs = 16
+		cfg.KVOffloadingGiB = 4
+		cfg.ToolCallParser = "qwen3_xml"
+		for _, arg := range NewVLLMAdapter(cfg).commandArgs() {
+			if strings.HasPrefix(arg, "--prefix-cache-retention-interval") {
+				t.Errorf("argv pins %q; vLLM's own default is the measured choice", arg)
+			}
+		}
+	})
+
 	t.Run("prefix caching pinned on", func(t *testing.T) {
 		args := NewVLLMAdapter(base).commandArgs()
 		if !sliceContains(args, "--enable-prefix-caching") {
