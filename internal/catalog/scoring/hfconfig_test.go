@@ -139,3 +139,34 @@ func TestArchConfig_MalformedIsAnError(t *testing.T) {
 		t.Fatal("unmarshal of a non-object text_config returned no error")
 	}
 }
+
+// The multi-token prediction head is declared under text_config on Qwen's
+// vision-language configs (Qwen/Qwen3.5-4B, Qwen/Qwen3.8-27B-FP8 both carry
+// "mtp_num_hidden_layers": 1 there), and its attention caches with the same
+// KV heads and head dim as the decoder's full-attention layers. vLLM itself
+// reads the count only from the top level, which is why the product states
+// num_speculative_tokens explicitly (waired-ai/waired#1432). A record of the
+// published configs, not a contract Qwen keeps.
+func TestArchConfig_ReadsTheMTPHeadOutOfAVisionLanguageConfig(t *testing.T) {
+	var cfg ArchConfig
+	src := `{"text_config": {"num_hidden_layers": 64, "num_key_value_heads": 4, "head_dim": 256,
+	  "full_attention_interval": 4, "mtp_num_hidden_layers": 1}}`
+	if err := json.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if cfg.MTPNumHiddenLayers != 1 {
+		t.Fatalf("MTPNumHiddenLayers = %d, want 1", cfg.MTPNumHiddenLayers)
+	}
+	headDim, _ := cfg.ResolvedHeadDim()
+	if got := MTPKVBytesPerTokenFP16(cfg, headDim); got != 4096 {
+		t.Errorf("MTPKVBytesPerTokenFP16 = %d, want 4096 (1 layer × 2 × 4 KV heads × 256 × 2 B)", got)
+	}
+
+	var none ArchConfig
+	if err := json.Unmarshal([]byte(qwen38VLMConfig), &none); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := MTPKVBytesPerTokenFP16(none, 256); got != 0 {
+		t.Errorf("a config without an MTP head priced %d B/token, want 0", got)
+	}
+}

@@ -105,6 +105,24 @@ const (
 	// from how much window fits beside them (waired-agent#1337).
 	vllmActivationReserveMB = 1280
 
+	// vllmMTPReserveMB and vllmMTPReservePerDraftTokenMB are what an MTP
+	// draft takes from each device outside the per-token KV price: a
+	// fixed part, and a part per drafted token (VLLMMaxModelLenFor).
+	//
+	// Measured on vLLM 0.29.0, RTX PRO 4000 Blackwell (24 GB), util 0.85,
+	// fp8 KV, from the profile lines of one start per draft length: the
+	// memory left for the KV cache fell by 0.34 / 0.43 / 0.43 / 0.46 GiB
+	// at 1 to 4 drafted tokens on Qwen3.5-4B bf16, by 0.25 / 0.33 GiB at
+	// 1 and 2 on 2B, and by 0.15 / 0.26 GiB on 0.8B. That is the MTP
+	// layer's weights (0.25 / 0.13 / 0.05 GiB), CUDA graphs captured for
+	// the longer steps (+0.06 GiB per token up to two) and a larger
+	// activation peak. 256 + 128 per token covers every reading. The
+	// fixed part is sized by the largest MTP layer measured, 0.25 GiB on
+	// the 4B; a build whose MTP layer is larger than that is outside the
+	// calibration (waired-ai/waired#1432).
+	vllmMTPReserveMB              = 256.0
+	vllmMTPReservePerDraftTokenMB = 128.0
+
 	// DefaultVLLMGPUMemoryUtilization mirrors the agent config default
 	// for vllm_gpu_memory_utilization. Selection-time callers (the
 	// context-floor gate, the recommendation) have no agent config in
@@ -248,6 +266,41 @@ func VLLMMaxModelLen(
 	weightGB float64, kvBytesPerTokFP16, tp int, gpuMemUtil, kvFactor float64,
 	gpus []signer.HardwareGPUSummary,
 ) int {
+	return vllmMaxModelLen(weightGB, kvBytesPerTokFP16, tp, gpuMemUtil, kvFactor, gpus, 0)
+}
+
+// VLLMMaxModelLenFor is VLLMMaxModelLen for a catalog build served with an
+// MTP draft of draftTokens tokens per step (0 = no draft, and then the two
+// agree exactly). The draft costs the pool twice: its layers' own KV for
+// every token of the window (Variant.MTPKVBytesPerTokenFP16, added to the
+// per-token price), and a fixed amount per device that grows with the
+// draft length — the draft's activations, its CUDA graphs and, on a
+// hybrid model, the extra recurrent-state pages vLLM reserves per running
+// request (vllmMTPReserveMB, vllmMTPReservePerDraftTokenMB, measured).
+// A build without MTP layers is priced as without a draft whatever
+// draftTokens says, because vLLM would refuse to start one.
+//
+// Selection passes catalog.MTPDraftTokens(v), the draft the product runs
+// by default; serving passes the draft it actually emits, which is 0 when
+// an operator turned MTP off or chose ngram. Same asymmetry as the fp8
+// opt-out (DefaultVLLMGPUMemoryUtilization's doc). waired-ai/waired#1432.
+func VLLMMaxModelLenFor(
+	v catalog.Variant, draftTokens, tp int, gpuMemUtil, kvFactor float64,
+	gpus []signer.HardwareGPUSummary,
+) int {
+	kv := v.KVBytesPerTokenFP16
+	reserveMB := 0.0
+	if draftTokens > 0 && v.MTPLayers > 0 && kv > 0 {
+		kv += v.MTPKVBytesPerTokenFP16
+		reserveMB = vllmMTPReserveMB + float64(draftTokens)*vllmMTPReservePerDraftTokenMB
+	}
+	return vllmMaxModelLen(v.EstimatedWeightGB, kv, tp, gpuMemUtil, kvFactor, gpus, reserveMB)
+}
+
+func vllmMaxModelLen(
+	weightGB float64, kvBytesPerTokFP16, tp int, gpuMemUtil, kvFactor float64,
+	gpus []signer.HardwareGPUSummary, extraReservePerGPUMB float64,
+) int {
 	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || gpuMemUtil <= 0 || kvFactor <= 0 {
 		return 0
 	}
@@ -268,7 +321,7 @@ func VLLMMaxModelLen(
 		return 0
 	}
 	const mib = float64(1 << 20)
-	perGPUBudgetGB := (gpuMemUtil*float64(perGPU) - vllmPerGPUOverheadMB - vllmActivationReserveMB) * mib / 1e9
+	perGPUBudgetGB := (gpuMemUtil*float64(perGPU) - vllmPerGPUOverheadMB - vllmActivationReserveMB - extraReservePerGPUMB) * mib / 1e9
 	if perGPUBudgetGB <= 0 {
 		return 0
 	}
@@ -325,7 +378,7 @@ func VLLMServesContextFloorFor(
 	if !hasNVIDIA {
 		return true
 	}
-	est := VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
+	est := VLLMMaxModelLenFor(v, catalog.MTPDraftTokens(v),
 		VLLMTensorParallelSize(gpus), DefaultVLLMGPUMemoryUtilization, vllmKVFactorForType(kvType), gpus)
 	return est >= OllamaEffectiveContextFloor(m)
 }

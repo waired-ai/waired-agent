@@ -243,6 +243,53 @@ type Variant struct {
 	// beyond the weight total (waired-ai/waired-agent#1337). nil = not
 	// derived; the sizing then falls back to its older overhead term.
 	GGUF *GGUFLayout `json:"gguf,omitempty"`
+
+	// MTPLayers is how many multi-token prediction (MTP) layers a vLLM
+	// build's checkpoint carries: the Hugging Face config's
+	// mtp_num_hidden_layers (under text_config on Qwen's
+	// vision-language configs), derived by `catalog-tool compute`. vLLM
+	// can run them as the draft of speculative decoding (method "mtp").
+	// 0 = none, or not derived. An ollama build records the same fact as
+	// gguf.nextn_layers. waired-ai/waired#1432.
+	MTPLayers int `json:"mtp_layers,omitempty"`
+
+	// MTPKVBytesPerTokenFP16 is the fp16 KV cache one token costs in those
+	// MTP layers' own attention (layers × 2 × KV heads × head dim × 2
+	// bytes). When the draft runs, vLLM allocates it from the same pool as
+	// the main model's KV, so the max-model-len sizing adds it then.
+	MTPKVBytesPerTokenFP16 int `json:"mtp_kv_bytes_per_token_fp16,omitempty"`
+
+	// MTPDraftTokens is how many tokens the product has the MTP draft
+	// propose per step on this build, set per build from a measurement.
+	// On vLLM it is num_speculative_tokens. On ollama it is the
+	// draft_num_predict the product stamps onto a tag whose publisher left
+	// it unset; a tag that sets its own keeps it (gguf.draft_max_tokens).
+	// 0 = the product runs no draft it chose. Read the draft that actually
+	// runs through MTPDraftTokens(v). waired-ai/waired#1432,
+	// waired-ai/waired#1433.
+	MTPDraftTokens int `json:"mtp_draft_tokens,omitempty"`
+}
+
+// MTPDraftTokens is the number of tokens the MTP draft proposes per step
+// when v is served: on an ollama build the tag's own draft_num_predict if
+// it declares one, else the value the product stamps (Variant.MTPDraftTokens);
+// on a vLLM build the product's choice when the checkpoint carries MTP
+// layers. 0 means no draft runs. The VRAM sizing reads this rather than
+// either field, so selection and serving price the same draft.
+func MTPDraftTokens(v Variant) int {
+	if v.GGUF != nil {
+		if v.GGUF.DraftMaxTokens > 0 {
+			return v.GGUF.DraftMaxTokens
+		}
+		if v.GGUF.NextNLayers > 0 && v.MTPDraftTokens > 0 {
+			return v.MTPDraftTokens
+		}
+		return 0
+	}
+	if v.MTPLayers > 0 && v.MTPDraftTokens > 0 {
+		return v.MTPDraftTokens
+	}
+	return 0
 }
 
 // GGUFLayout is what a GGUF header and its ollama tag say about how a
@@ -594,6 +641,9 @@ func (m *Manifest) Validate() error {
 		if err := validateSizingLayout(m.ModelID, v); err != nil {
 			return err
 		}
+		if err := validateMTP(m.ModelID, v); err != nil {
+			return err
+		}
 		if d := v.Source.Digest; d != "" {
 			if v.Source.Type != SourceOllama {
 				return fmt.Errorf("manifest %s variant %s: source.digest pins an ollama tag; source.type is %q", m.ModelID, v.VariantID, v.Source.Type)
@@ -670,6 +720,39 @@ func validateSizingLayout(modelID string, v Variant) error {
 			g.RepeatingBytes+g.NextNBytes > g.TensorBytes {
 			return fmt.Errorf("manifest %s variant %s: gguf layout %+v is inconsistent", modelID, v.VariantID, *g)
 		}
+	}
+	return nil
+}
+
+// validateMTP checks the multi-token prediction fields (waired-ai/waired#1432,
+// #1433): the checkpoint facts belong to vLLM builds and come as a pair, and
+// a draft the product chooses has layers to run on — MTP layers on a vLLM
+// build, nextn blocks on an ollama tag that does not already set its own
+// draft_num_predict.
+func validateMTP(modelID string, v Variant) error {
+	if v.MTPLayers < 0 || v.MTPKVBytesPerTokenFP16 < 0 || v.MTPDraftTokens < 0 {
+		return fmt.Errorf("manifest %s variant %s: mtp fields must be ≥ 0", modelID, v.VariantID)
+	}
+	if (v.MTPLayers > 0) != (v.MTPKVBytesPerTokenFP16 > 0) {
+		return fmt.Errorf("manifest %s variant %s: mtp_layers and mtp_kv_bytes_per_token_fp16 are set together", modelID, v.VariantID)
+	}
+	if v.MTPLayers > 0 && v.Format != FormatSafetensors {
+		return fmt.Errorf("manifest %s variant %s: mtp_layers describes a safetensors checkpoint; an ollama build records gguf.nextn_layers", modelID, v.VariantID)
+	}
+	if v.MTPDraftTokens == 0 {
+		return nil
+	}
+	if v.Format == FormatSafetensors {
+		if v.MTPLayers == 0 {
+			return fmt.Errorf("manifest %s variant %s: mtp_draft_tokens needs mtp_layers", modelID, v.VariantID)
+		}
+		return nil
+	}
+	if v.GGUF == nil || v.GGUF.NextNLayers == 0 {
+		return fmt.Errorf("manifest %s variant %s: mtp_draft_tokens needs gguf.nextn_layers", modelID, v.VariantID)
+	}
+	if v.GGUF.DraftMaxTokens > 0 {
+		return fmt.Errorf("manifest %s variant %s: the tag already sets draft_num_predict=%d; mtp_draft_tokens only stamps a tag that does not", modelID, v.VariantID, v.GGUF.DraftMaxTokens)
 	}
 	return nil
 }

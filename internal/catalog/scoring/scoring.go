@@ -80,6 +80,16 @@ func KVBytesPerTokenFP16ForConfig(c ArchConfig, fullAttnLayers, headDim int) int
 		indexerKeyBytesPerTokenFP16(fullAttnLayers, c.IndexerKVHeads, c.IndexerHeadDim)
 }
 
+// MTPKVBytesPerTokenFP16 is the fp16 KV cache one token costs in a
+// checkpoint's multi-token prediction layers: each is a full-attention
+// layer with the decoder's KV heads and head dim, so the price is the
+// per-layer one times mtp_num_hidden_layers. 0 when the config declares no
+// MTP head. The catalog carries it as Variant.MTPKVBytesPerTokenFP16
+// (waired-ai/waired#1432).
+func MTPKVBytesPerTokenFP16(c ArchConfig, headDim int) int {
+	return KVBytesPerTokenFP16(c.MTPNumHiddenLayers, c.NumKeyValueHeads, headDim)
+}
+
 // WeightGB returns the estimated quantized weight size in GB (decimal,
 // /1e9) for a model of totalParams parameters at quant q:
 //

@@ -31,6 +31,8 @@ type computeResult struct {
 	QuantizationTier    int         `json:"quantization_tier"`
 	AttentionArch       string      `json:"attention_arch"`
 	KVBytesPerTokenFP16 int         `json:"kv_bytes_per_token_fp16"`
+	MTPLayers           int         `json:"mtp_layers,omitempty"`
+	MTPKVBytesPerToken  int         `json:"mtp_kv_bytes_per_token_fp16,omitempty"`
 	DecodeFLOPsPerTok   int64       `json:"decode_flops_per_tok"`
 	EstimatedWeightGB   float64     `json:"estimated_weight_gb"`
 	VRAMByContext       []vramPoint `json:"vram_gb_by_context"`
@@ -120,6 +122,8 @@ func runCompute(args []string) error {
 		QuantizationTier:    q.Tier,
 		AttentionArch:       cfg.DeriveAttentionArch(),
 		KVBytesPerTokenFP16: kv,
+		MTPLayers:           cfg.MTPNumHiddenLayers,
+		MTPKVBytesPerToken:  scoring.MTPKVBytesPerTokenFP16(cfg, headDim),
 		DecodeFLOPsPerTok:   scoring.DecodeFLOPsPerTok(active),
 		EstimatedWeightGB:   round1(weightGB),
 		VRAMByContext:       curve,

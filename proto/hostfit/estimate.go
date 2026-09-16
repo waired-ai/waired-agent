@@ -191,9 +191,58 @@ func OllamaEstimateMemory(v catalog.Variant, h Host, kvType string, window, para
 	return ollamaEstimateMemoryAt(v, h, kvType, window, parallel, ollamaUBatchTokens)
 }
 
+// OllamaDraftTokens is the MTP draft length ollama runs for v on h at this
+// window, and so the one OllamaEstimateMemory prices at any slot count.
+//
+// A draft the tag publishes itself (GGUFLayout.DraftMaxTokens) runs on
+// every host: ollama reads it from the tag. A draft the product writes
+// onto the tag (Variant.MTPDraftTokens, waired-ai/waired#1433) is written
+// only where the load with one request slot, draft included, fits the
+// device budget, and 0 is returned everywhere else.
+//
+// Decided at one slot: the draft comes before a second slot
+// (owner decision, 2026-09-17), which is also how ollama runs these
+// builds. Its scheduler starts the qwen35 and qwen35moe architectures with
+// one slot whatever OLLAMA_NUM_PARALLEL asks (server/sched.go load,
+// v0.34.0), and it never drops a tag's draft to make room. A second slot
+// is granted only where it fits beside the draft (the estimate at two
+// slots includes it); the window is sized before either
+// (OllamaDeviceCapacityTokens). The draft's own context moves layers off
+// the device, and a load that spills gets slower with a draft, not faster:
+// measured with ollama 0.34.0 on a 16 GB Apple M4, Qwen3.8-27B UD-Q2_K_XL
+// at a 200,704-token window already kept 38 of 66 layers on the GPU and
+// decoded 4 tokens/s; with draft_num_predict 2 it kept 24 and decoded
+// 0.11 tokens/s. The agent writes the draft by the same rule, so what is
+// priced is what runs.
+func OllamaDraftTokens(v catalog.Variant, h Host, kvType string, window int) int {
+	return ollamaDraftTokensAt(v, h, kvType, window, ollamaUBatchTokens)
+}
+
+func ollamaDraftTokensAt(v catalog.Variant, h Host, kvType string, window, ubatch int) int {
+	draft := catalog.MTPDraftTokens(v)
+	if draft <= 0 || v.GGUF == nil || v.GGUF.DraftMaxTokens > 0 {
+		return draft
+	}
+	budget := h.OllamaVRAMBudgetMB()
+	if !h.HasGPU() || budget <= 0 {
+		return 0
+	}
+	if ollamaEstimateMemoryDraft(v, h, kvType, window, 1, ubatch, draft).DeviceMB() > budget {
+		return 0
+	}
+	return draft
+}
+
 // ollamaEstimateMemoryAt is OllamaEstimateMemory at a given ubatch, so the
 // estimate can be held to logged loads that ran with a larger one.
 func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, parallel, ubatch int) OllamaMemory {
+	return ollamaEstimateMemoryDraft(v, h, kvType, window, parallel, ubatch,
+		ollamaDraftTokensAt(v, h, kvType, window, ubatch))
+}
+
+// ollamaEstimateMemoryDraft prices the load with a draft of draft tokens
+// (0 = none), whoever decided it.
+func ollamaEstimateMemoryDraft(v catalog.Variant, h Host, kvType string, window, parallel, ubatch, draft int) OllamaMemory {
 	if v.EstimatedWeightGB <= 0 {
 		return OllamaMemory{}
 	}
@@ -220,13 +269,13 @@ func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, pa
 	// ollama offloads beside the model and the device copy of a tied
 	// embedding.
 	loaded := g.TensorBytes + g.ProjectorBytes + g.TiedOutputBytes
-	if g.DraftMaxTokens <= 0 {
+	if draft <= 0 {
 		loaded -= g.NextNBytes
 	}
 	out.DeviceWeightsMB = max(bytesToMiB(float64(loaded))-hostMB, 0)
 	out.TotalLayers = g.BlockCount + 1
 	unified := h.Class() == ClassUnified
-	copies := int64(parallel) * int64(1+max(g.DraftMaxTokens, 0))
+	copies := int64(parallel) * int64(1+max(draft, 0))
 	out.RecurrentStateMB = bytesToMiB(float64(g.RecurrentStateBytes * copies))
 	layerKVPerCell := 0.0
 	if g.FullAttentionLayers > 0 {
@@ -239,7 +288,7 @@ func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, pa
 		compute += layerKVPerCell * float64(cells)
 	}
 	out.ComputeMB = base + bytesToMiB(compute)
-	if g.DraftMaxTokens > 0 && layerKVPerCell > 0 {
+	if draft > 0 && layerKVPerCell > 0 {
 		draftKV := bytesToMiB(layerKVPerCell * float64(cells))
 		out.DraftKVCacheMB = draftKV
 		if unified {
@@ -410,6 +459,13 @@ func OllamaDeviceCapacityTokens(v catalog.Variant, h Host, kvType string) int {
 	}
 	if budget <= 0 {
 		return 0
+	}
+	// A draft the product writes is decided at the served window
+	// (OllamaDraftTokens) and gives way to it, so the largest window is
+	// sized without one. With it the requirement would also stop being
+	// affine: the draft counts at a small window and not at a large one.
+	if v.GGUF != nil && v.GGUF.DraftMaxTokens == 0 {
+		v.MTPDraftTokens = 0
 	}
 	need := func(window int) int {
 		e := OllamaEstimateMemory(v, h, kvType, window, 1)

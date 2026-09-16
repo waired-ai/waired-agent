@@ -1,6 +1,7 @@
 package modelrank
 
 import (
+	"github.com/waired-ai/waired-agent/proto/catalog"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
@@ -59,6 +60,14 @@ func VLLMKVFactor(gpus []signer.HardwareGPUSummary) float64 {
 // VLLMVRAMBudgetMB is hostfit.VLLMVRAMBudgetMB.
 func VLLMVRAMBudgetMB(host hostfit.Host, gpus []signer.HardwareGPUSummary) int {
 	return hostfit.VLLMVRAMBudgetMB(host, gpus)
+}
+
+// VLLMMaxModelLenFor is hostfit.VLLMMaxModelLenFor.
+func VLLMMaxModelLenFor(
+	v catalog.Variant, draftTokens, tp int, gpuMemUtil, kvFactor float64,
+	gpus []signer.HardwareGPUSummary,
+) int {
+	return hostfit.VLLMMaxModelLenFor(v, draftTokens, tp, gpuMemUtil, kvFactor, gpus)
 }
 
 // VLLMMaxModelLen is hostfit.VLLMMaxModelLen.
