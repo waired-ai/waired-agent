@@ -523,17 +523,31 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// instruction from two places.
 	kvCacheDType, kvFactor := resolveVLLMKVCache(hwProfile,
 		p.cfg.VLLMDisableFP8KV || p.effectiveBuildChoice().KVCacheType == catalog.KVCacheFP16)
+	// The serve-flag gate (waired-agent#885). activeVer is the "current"
+	// symlink's version, which may predate this build on a host installed
+	// by an older agent — and an unrecognised flag is an argparse exit 2
+	// that costs the whole engine, not one feature. Decided before the
+	// sizing, because it decides whether an MTP draft runs and the draft
+	// is sized into the window (waired-ai/waired#1432).
+	activeVer, _ := vllmActiveVersion(p.stateDir)
+	serveFlags := vllmServeFlagsSupported(activeVer)
+	if !serveFlags {
+		p.logger.Warn("vllm venv predates this build's serve flags; starting without them",
+			"venv_version", activeVer, "pinned", infruntime.VLLMPinnedVersion,
+			"fix", "waired runtimes install vllm")
+	}
+	// Speculative decoding: ngram when the operator turned it on (#677),
+	// else the build's own MTP head when the catalog gives it a draft
+	// length (waired-ai/waired#1432).
+	spec := router.VLLMSpeculative(variant, p.cfg.VLLMSpeculativeNgram, p.cfg.VLLMDisableMTP, serveFlags)
 	// #675: clamp --max-model-len to what the utilization budget fits
 	// instead of forwarding the manifest window verbatim (an unfittable
 	// window aborts vLLM startup — no spill-style degradation exists).
-	maxLen, tuning := computeVLLMTuning(manifest, variant, hwProfile, tp, p.cfg.VLLMGPUMemoryUtilization, kvFactor)
+	maxLen, tuning := computeVLLMTuning(manifest, variant, hwProfile, tp, p.cfg.VLLMGPUMemoryUtilization, kvFactor, spec)
 	if tuning.Warning != "" {
 		p.logger.Warn("vllm context sizing", "model", manifest.ModelID,
 			"max_model_len", maxLen, "native", manifest.ContextLength, "note", tuning.Warning)
 	}
-	// #677: ngram speculative decoding accelerates single-stream decode
-	// (coding agents) with no draft weights, when the operator enables it.
-	specConfig := vllmSpeculativeConfigJSON(p.cfg.VLLMSpeculativeNgram)
 	// #410: without a parser vLLM never populates tool_calls, so a coding
 	// agent gets the model's call as prose. Resolved from the served
 	// model, overridable per host.
@@ -542,17 +556,6 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		p.logger.Warn("vllm tool calling disabled: no --tool-call-parser is known for this model; "+
 			"the model's tool calls will arrive as text (set inference.vllm_tool_parser to override)",
 			"model", manifest.ModelID)
-	}
-	// The serve-flag gate (waired-agent#885). activeVer is the "current"
-	// symlink's version, which may predate this build on a host installed
-	// by an older agent — and an unrecognised flag is an argparse exit 2
-	// that costs the whole engine, not one feature.
-	activeVer, _ := vllmActiveVersion(p.stateDir)
-	serveFlags := vllmServeFlagsSupported(activeVer)
-	if !serveFlags {
-		p.logger.Warn("vllm venv predates this build's serve flags; starting without them",
-			"venv_version", activeVer, "pinned", infruntime.VLLMPinnedVersion,
-			"fix", "waired runtimes install vllm")
 	}
 	batchedTokens := 0
 	kvOffloadGiB := 0.0
@@ -584,7 +587,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		GPUMemoryUtilization:      p.cfg.VLLMGPUMemoryUtilization,
 		TensorParallelSize:        tp,
 		KVCacheDType:              kvCacheDType,
-		SpeculativeConfig:         specConfig,
+		SpeculativeConfig:         spec.Config,
 		ToolCallParser:            toolParser,
 		EnablePromptTokensDetails: serveFlags,
 		MaxNumBatchedTokens:       batchedTokens,
@@ -689,7 +692,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		"model", manifest.ModelID, "variant", variant.VariantID,
 		"served_as", variant.Source.RepoID, "endpoint", adapter.BaseURL(),
 		"tensor_parallel_size", tp, "max_model_len", maxLen,
-		"kv_cache_dtype", kvCacheDType, "speculative_ngram", specConfig != "",
+		"kv_cache_dtype", kvCacheDType,
+		"speculative", spec.Method, "speculative_tokens", spec.Tokens,
 		"tool_call_parser", toolParser,
 		"prompt_tokens_details", serveFlags,
 		"max_num_batched_tokens", batchedTokens,

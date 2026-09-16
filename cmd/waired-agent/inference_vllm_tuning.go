@@ -29,16 +29,19 @@ import (
 // host, tp, util) combination. tp is the RESOLVED tensor-parallel size
 // (resolveVLLMTensorParallel — operator override included). Returns the
 // value to pass as VLLMConfig.MaxModelLen plus the ModelTuning record
-// for the status/doctor surfaces.
+// for the status/doctor surfaces. spec is the speculative decoding the
+// engine will run (router.VLLMSpeculative); an MTP draft's layers and
+// memory come out of the window (waired-ai/waired#1432).
 //
 // Unknown sizing inputs keep the manifest window with no warning
 // (pre-#675 behaviour: never guess). Known inputs whose padded weights
 // alone exceed the budget also keep the manifest window — a shorter
 // window cannot save that case — but carry a startup-will-likely-fail
 // warning so the abort is diagnosable before it happens.
-func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tp int, gpuMemUtil float64, kvFactor float64) (int, infruntime.ModelTuning) {
-	mt := infruntime.ModelTuning{ModelID: m.ModelID, VariantID: v.VariantID}
-	est := router.VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, tp, gpuMemUtil, kvFactor, hw)
+func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tp int, gpuMemUtil float64, kvFactor float64, spec router.VLLMSpeculation) (int, infruntime.ModelTuning) {
+	mt := infruntime.ModelTuning{ModelID: m.ModelID, VariantID: v.VariantID,
+		SpeculativeMethod: spec.Method, SpeculativeTokens: spec.Tokens}
+	est := router.VLLMMaxModelLenFor(v, spec.DraftTokens(), tp, gpuMemUtil, kvFactor, hw)
 	if est <= 0 {
 		// Unknown sizing inputs are not evidence against the host —
 		// permissive, like VLLMServesContextFloor. The exception is the
@@ -233,36 +236,6 @@ func resolveVLLMKVCache(hw hardware.Profile, disableFP8 bool) (kvCacheDType stri
 		return vllmKVCacheDType(true), scoring.KVFactorFP8
 	}
 	return vllmKVCacheDType(false), scoring.KVFactorF16
-}
-
-// vllmNgramSpeculativeConfig is the --speculative-config vLLM receives
-// when vllm_speculative_ngram is enabled (#677). ngram (prompt-lookup)
-// speculation needs no draft model — it proposes tokens by matching the
-// recent context against earlier n-grams, a strong fit for coding where
-// the model re-emits identifiers, imports and code already present in
-// the prompt. num_speculative_tokens=5 with a 2–4 token match window is
-// vLLM's documented starting point for single-stream decode; coding
-// agents run effectively single-stream so the speculation rarely
-// competes with batched requests.
-//
-// From vLLM 0.29.0 the price of turning it on is higher than it looks:
-// Model Runner V2, the new default, does not support ngram, so the engine
-// falls back to the V1 runner and also turns async scheduling off. The
-// trade measured on an RTX PRO 4000 Blackwell (Qwen3.5-4B bf16, fp8 KV)
-// is still lopsided in both directions — decode while rewriting code
-// already in the prompt went from 65 to 235 tok/s, while writing new code
-// stayed at 68 against 66 — and the KV pool shrank from 524,288 to
-// 423,586 tokens. It stays opt-in.
-const vllmNgramSpeculativeConfig = `{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}`
-
-// vllmSpeculativeConfigJSON returns the VLLMConfig SpeculativeConfig
-// value for the ngram toggle: the ngram config JSON when enabled, else
-// "" which omits --speculative-config (no speculation).
-func vllmSpeculativeConfigJSON(ngramEnabled bool) string {
-	if ngramEnabled {
-		return vllmNgramSpeculativeConfig
-	}
-	return ""
 }
 
 // vllmKVCapacityRe matches vLLM V1's post-profiling KV pool report,

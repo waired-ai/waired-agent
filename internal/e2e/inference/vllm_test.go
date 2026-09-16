@@ -461,9 +461,8 @@ func TestVLLMSpeculativeNgram(t *testing.T) {
 		t.Skip("needs the ~9 GB AWQ model; run without -short (make e2e-vllm-spec)")
 	}
 	const window = 8192
-	// The exact ngram config the agent ships (keep in sync with
-	// cmd/waired-agent/inference_vllm_tuning.go vllmNgramSpeculativeConfig).
-	const ngramCfg = `{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}`
+	// The exact ngram config the agent ships.
+	ngramCfg := router.VLLMNgramSpeculativeConfig
 
 	// One engine at a time (see TestVLLMFP8KVCache): per-lane subtest so
 	// each engine is stopped and its VRAM released before the next spawns.

@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/proto/modelrank"
 )
@@ -116,6 +117,87 @@ func VLLMVRAMBudgetMB(hw hardware.Profile) int {
 // them raw against an overhead-reduced budget.
 func VLLMMaxModelLen(weightGB float64, kvBytesPerTokFP16 int, tp int, gpuMemUtil float64, kvFactor float64, hw hardware.Profile) int {
 	return modelrank.VLLMMaxModelLen(weightGB, kvBytesPerTokFP16, tp, gpuMemUtil, kvFactor, hw.GPUSummaries())
+}
+
+// VLLMMaxModelLenFor is VLLMMaxModelLen for a catalog build served with
+// an MTP draft of draftTokens tokens (VLLMSpeculative): the MTP layers'
+// KV and the draft's own memory come out of the same budget
+// (modelrank.VLLMMaxModelLenFor). draftTokens 0 returns exactly what
+// VLLMMaxModelLen returns for the build.
+func VLLMMaxModelLenFor(v catalog.Variant, draftTokens, tp int, gpuMemUtil, kvFactor float64, hw hardware.Profile) int {
+	return modelrank.VLLMMaxModelLenFor(v, draftTokens, tp, gpuMemUtil, kvFactor, hw.GPUSummaries())
+}
+
+// --- speculative decoding (waired-ai/waired#1432) ---
+
+// VLLMNgramSpeculativeConfig is the --speculative-config vLLM receives
+// when vllm_speculative_ngram is enabled (#677). ngram (prompt-lookup)
+// speculation needs no draft model — it proposes tokens by matching the
+// recent context against earlier n-grams, a strong fit for coding where
+// the model re-emits identifiers, imports and code already present in
+// the prompt. num_speculative_tokens=5 with a 2–4 token match window is
+// vLLM's documented starting point for single-stream decode.
+//
+// From vLLM 0.29.0 the price of turning it on is higher than it looks:
+// Model Runner V2, the new default, does not support ngram, so the engine
+// falls back to the V1 runner and also turns async scheduling off. The
+// trade measured on an RTX PRO 4000 Blackwell (Qwen3.5-4B bf16, fp8 KV)
+// is still lopsided in both directions — decode while rewriting code
+// already in the prompt went from 65 to 235 tok/s, while writing new code
+// stayed at 68 against 66 — and the KV pool shrank from 524,288 to
+// 423,586 tokens. It stays opt-in.
+const VLLMNgramSpeculativeConfig = `{"method":"ngram","num_speculative_tokens":5,"prompt_lookup_max":4,"prompt_lookup_min":2}`
+
+// VLLMSpeculation is the speculative decoding the vLLM serve path runs.
+// The zero value is none.
+type VLLMSpeculation struct {
+	// Method is "mtp", "ngram", or "" for none.
+	Method string
+	// Tokens is num_speculative_tokens.
+	Tokens int
+	// Config is the --speculative-config JSON; "" omits the flag.
+	Config string
+}
+
+// VLLMSpeculative decides the speculative decoding for serving v
+// (waired-ai/waired#1432), in this order:
+//
+//   - ngram when the operator turned vllm_speculative_ngram on. It is an
+//     explicit opt-in and wins over the default below.
+//   - MTP when the build carries MTP layers and a draft length
+//     (catalog.Variant.MTPLayers, MTPDraftTokens), the operator has not
+//     set vllm_disable_mtp, and the venv is the pinned release
+//     (serveFlags, vllmServeFlagsSupported): the draft length is chosen
+//     per build from measurements on that release, and the model's own
+//     head needs num_speculative_tokens spelled out, because vLLM reads
+//     mtp_num_hidden_layers only at the top of config.json and Qwen's
+//     vision-language builds keep it in text_config.
+//   - none otherwise.
+//
+// MTP keeps Model Runner V2 and async scheduling on 0.29.0, where ngram
+// gives both up.
+func VLLMSpeculative(v catalog.Variant, ngram, disableMTP, serveFlags bool) VLLMSpeculation {
+	if ngram {
+		return VLLMSpeculation{Method: "ngram", Tokens: 5, Config: VLLMNgramSpeculativeConfig}
+	}
+	if disableMTP || !serveFlags || v.MTPLayers <= 0 || v.MTPDraftTokens <= 0 {
+		return VLLMSpeculation{}
+	}
+	return VLLMSpeculation{
+		Method: "mtp",
+		Tokens: v.MTPDraftTokens,
+		Config: fmt.Sprintf(`{"method":"mtp","num_speculative_tokens":%d}`, v.MTPDraftTokens),
+	}
+}
+
+// DraftTokens is the draft length the memory sizing charges for:
+// VLLMMaxModelLenFor prices MTP's layers and draft, and ngram's pool
+// shrink is not modelled, so it is 0 for ngram.
+func (s VLLMSpeculation) DraftTokens() int {
+	if s.Method == "mtp" {
+		return s.Tokens
+	}
+	return 0
 }
 
 // --- vLLM serve flags (waired-agent#887) ---
