@@ -451,6 +451,13 @@ func OllamaDeviceCapacityTokens(v catalog.Variant, h Host, kvType string) int {
 	if budget <= 0 {
 		return 0
 	}
+	// A draft the product writes is decided at the served window
+	// (OllamaDraftTokens) and gives way to it, so the largest window is
+	// sized without one. With it the requirement would also stop being
+	// affine: the draft counts at a small window and not at a large one.
+	if v.GGUF != nil && v.GGUF.DraftMaxTokens == 0 {
+		v.MTPDraftTokens = 0
+	}
 	need := func(window int) int {
 		e := OllamaEstimateMemory(v, h, kvType, window, 1)
 		if total {
