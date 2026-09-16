@@ -72,7 +72,7 @@ func publicSelectorWith(t *testing.T, policy PublicPolicy, manifest catalog.Mani
 		MeshSnapshotFn:      func() inferencemesh.Snapshot { return snap },
 		PublicPolicyFn:      func() PublicPolicy { return policy },
 		OnPublicNudge:       func(n PublicNudge) { nudges = append(nudges, n) },
-		OnPublicGrantDemand: func() { demands++ },
+		OnPublicGrantDemand: func(int) { demands++ },
 	})
 	return s, &nudges, &demands
 }
@@ -541,7 +541,7 @@ func TestPublicSideSignals_AllOverloadedPath(t *testing.T) {
 		LocalInFlight:       tracker,
 		PublicPolicyFn:      func() PublicPolicy { return allowAll() },
 		OnPublicNudge:       func(n PublicNudge) { nudges = append(nudges, n) },
-		OnPublicGrantDemand: func() { demands++ },
+		OnPublicGrantDemand: func(int) { demands++ },
 	})
 
 	_, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
@@ -575,7 +575,7 @@ func TestPublicSideSignals_SilentWhenServedLocally(t *testing.T) {
 		RoutingMode:         state.RoutingModePeerPreferred,
 		PublicPolicyFn:      func() PublicPolicy { return allowAll() },
 		OnPublicNudge:       func(n PublicNudge) { nudges = append(nudges, n) },
-		OnPublicGrantDemand: func() { demands++ },
+		OnPublicGrantDemand: func(int) { demands++ },
 	})
 
 	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
@@ -658,4 +658,65 @@ func TestPublicCandidate_ReasonNamesThePseudonymNotTheDeviceName(t *testing.T) {
 	if !strings.Contains(joined, publicPeerAlias) {
 		t.Errorf("Decision.Reason does not name the peer at all:\n%s", joined)
 	}
+}
+
+// A demand carries the request's window floor, and a public provider the map
+// already carries does not stop it when that provider declares less: the
+// acquirer has to hear that the grant it holds cannot take the request
+// (waired-agent#1399). Without a floor the old rule stands — any provider in
+// the map means there is a grant to use.
+//
+// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+// waired-agent#1396 and the design recorded on waired-agent#1399.
+func TestPublicGrantDemand_CarriesTheWindowFloor(t *testing.T) {
+	provider := func(window int) inferencemesh.PeerView {
+		p := mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M")
+		p.InferenceState.ContextWindow = window
+		return p
+	}
+	run := func(t *testing.T, peer inferencemesh.PeerView, req Request) (demands []int, err error) {
+		t.Helper()
+		snap := inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{peer}}
+		s := NewSelector(Inputs{
+			Manifests:           []catalog.Manifest{qwenTier(50)},
+			LocalState:          emptyState(),
+			Hardware:            goodHardware(),
+			Runtimes:            registryWithOllama(),
+			MeshSnapshotFn:      func() inferencemesh.Snapshot { return snap },
+			PublicPolicyFn:      func() PublicPolicy { return allowAll() },
+			OnPublicGrantDemand: func(w int) { demands = append(demands, w) },
+		})
+		_, err = s.SelectK(t.Context(), req, 3)
+		return demands, err
+	}
+
+	t.Run("a held 200k provider does not stop a 1M demand", func(t *testing.T) {
+		demands, err := run(t, provider(200704), Request{Model: "waired/default", MinContextWindow: 1048576})
+		if err == nil {
+			t.Fatal("a 200k provider took a 1M request")
+		}
+		if len(demands) != 1 || demands[0] != 1048576 {
+			t.Errorf("demands = %v, want one for 1048576", demands)
+		}
+	})
+
+	t.Run("a provider holding the window is used, and nothing is asked", func(t *testing.T) {
+		demands, err := run(t, provider(1048576), Request{Model: "waired/default", MinContextWindow: 1048576})
+		if err != nil {
+			t.Fatalf("err = %v, want the 1M provider used", err)
+		}
+		if len(demands) != 0 {
+			t.Errorf("demands = %v, want none", demands)
+		}
+	})
+
+	t.Run("an undeclared provider does not stop a 200k demand", func(t *testing.T) {
+		demands, err := run(t, provider(0), Request{Model: "waired/default", MinContextWindow: 200704})
+		if err == nil {
+			t.Fatal("a provider declaring no window took a 200k request")
+		}
+		if len(demands) != 1 || demands[0] != 200704 {
+			t.Errorf("demands = %v, want one for 200704", demands)
+		}
+	})
 }

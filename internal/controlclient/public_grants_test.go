@@ -66,6 +66,13 @@ func TestAcquirePublicGrantsTypedErrorsAndEmpty(t *testing.T) {
 	if _, err := cli.AcquirePublicGrants(context.Background(), AcquirePublicGrantsRequest{ConsentVersion: 1}); !errors.Is(err, ErrPublicShareRateLimited) {
 		t.Fatalf("429: err = %v, want ErrPublicShareRateLimited", err)
 	}
+	// What a control plane that predates a field answers (it decodes with
+	// DisallowUnknownFields); the acquirer retries without the window on it
+	// (waired-agent#1399).
+	status = http.StatusBadRequest
+	if _, err := cli.AcquirePublicGrants(context.Background(), AcquirePublicGrantsRequest{ConsentVersion: 1}); !errors.Is(err, ErrPublicShareBadRequest) {
+		t.Fatalf("400: err = %v, want ErrPublicShareBadRequest", err)
+	}
 	status = http.StatusOK
 	res, err := cli.AcquirePublicGrants(context.Background(), AcquirePublicGrantsRequest{ConsentVersion: 1})
 	if err != nil || len(res.Grants) != 0 {
@@ -122,5 +129,30 @@ func TestPublicGrantsCustomAuthHeader(t *testing.T) {
 	}
 	if gotCustom != "tok-custom" || gotAuth != "" {
 		t.Errorf("custom-auth headers: custom=%q auth=%q", gotCustom, gotAuth)
+	}
+}
+
+// min_context_window is on the wire only when set, so a 200k demand's request
+// is byte-for-byte one a control plane that predates the field accepts
+// (waired-agent#1399).
+func TestAcquirePublicGrantsWindowFieldOnlyWhenSet(t *testing.T) {
+	for _, tc := range []struct {
+		window  int
+		present bool
+	}{
+		{0, false},
+		{1048576, true},
+	} {
+		raw, err := json.Marshal(AcquirePublicGrantsRequest{ConsentVersion: 1, MinContextWindow: tc.window})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := m["min_context_window"]; ok != tc.present {
+			t.Errorf("window %d: min_context_window present = %v, want %v (%s)", tc.window, ok, tc.present, raw)
+		}
 	}
 }

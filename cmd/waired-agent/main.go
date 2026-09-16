@@ -1073,13 +1073,11 @@ func run(ctx context.Context, args []string) error {
 		// coalesce and the routing hot path never waits. Session scope,
 		// matching its only consumer (runPublicGrantLoop below); never
 		// closed — ctx cancellation ends both sides.
-		publicGrantDemand := make(chan struct{}, 1)
-		notifyPublicGrantDemand := func() {
-			select {
-			case publicGrantDemand <- struct{}{}:
-			default:
-			}
-		}
+		//
+		// The window floor the demand came with rides beside it, the
+		// largest since the acquirer last read it (waired-agent#1399).
+		publicGrantDemand := newPublicGrantDemandSignal()
+		notifyPublicGrantDemand := publicGrantDemand.Notify
 		// publicGrantReady carries this node's own "my engine became
 		// reachable" edge to the acquirer (waired-agent#806). Same shape
 		// and same reasons as publicGrantDemand above — buffered-1,
@@ -1893,7 +1891,8 @@ func run(ctx context.Context, args []string) error {
 				PublicUsePath:  agentconfig.DefaultPublicUsePath(),
 				WarningVersion: management.PublicShareWarningVersion,
 				Logger:         logger,
-				Demand:         publicGrantDemand,
+				Demand:         publicGrantDemand.C(),
+				DemandWindow:   publicGrantDemand.Take,
 				Ready:          publicGrantReady,
 				Usage:          grantUsage,
 			})
