@@ -534,6 +534,22 @@ func snapshotHasPublicProvider(snap inferencemesh.Snapshot) bool {
 	return false
 }
 
+// snapshotHasPublicProviderAt is snapshotHasPublicProvider for a request
+// with a window floor: only a provider that declares at least window counts.
+// window <= 0 asks nothing of the window.
+func snapshotHasPublicProviderAt(snap inferencemesh.Snapshot, window int) bool {
+	for i := range snap.Peers {
+		p := &snap.Peers[i]
+		if !isPublicProvider(p) {
+			continue
+		}
+		if window <= 0 || (p.InferenceState != nil && p.InferenceState.ContextWindow >= window) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPublicProvider reports whether a peer entry is a Public Share
 // provider injected for this device. Grant.Role is authoritative: the
 // same foreign device can appear as a consumer (a guest using OUR
@@ -634,12 +650,19 @@ func (p *publicShortfall) record(snap inferencemesh.Snapshot, gate publicGate, r
 //   - the pre-consent nudge, when no consent has been recorded. Consent
 //     is a precondition for holding a grant, so an unconsented agent can
 //     never reach the demand branch.
-func (s *Selector) emitPublicShortfall(short publicShortfall, modelID string) {
+//
+// minContextWindow is the request's window floor. A public provider the map
+// carries but whose declared window is under it is not one the request can
+// use, so it does not stop the demand: the acquirer is told the window, lets
+// go of that grant and asks for one that holds it (waired-agent#1399). Before
+// that, a consumer holding a provider the row refused kept it — and renewed
+// it, since the row kept routing to nothing else.
+func (s *Selector) emitPublicShortfall(short publicShortfall, modelID string, minContextWindow int) {
 	if !short.hit {
 		return
 	}
-	if short.gate.admit && !snapshotHasPublicProvider(short.snap) {
-		s.notifyPublicGrantDemand()
+	if short.gate.admit && !snapshotHasPublicProviderAt(short.snap, minContextWindow) {
+		s.notifyPublicGrantDemand(minContextWindow)
 	}
 	s.notifyPublicNudge(s.publicPolicy(), modelID, short.reason)
 }
@@ -648,9 +671,9 @@ func (s *Selector) emitPublicShortfall(short publicShortfall, modelID string) {
 // request wanted a public candidate and found no grant to use. Fire and
 // forget: the callback is a non-blocking send onto a coalescing
 // buffered channel, so the routing hot path never waits on the acquirer.
-func (s *Selector) notifyPublicGrantDemand() {
+func (s *Selector) notifyPublicGrantDemand(minContextWindow int) {
 	if s.in.OnPublicGrantDemand != nil {
-		s.in.OnPublicGrantDemand()
+		s.in.OnPublicGrantDemand(minContextWindow)
 	}
 }
 

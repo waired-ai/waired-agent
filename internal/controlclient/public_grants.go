@@ -39,8 +39,16 @@ type AcquirePublicGrantsRequest struct {
 	// operator has one stored so the control plane's prefilter keeps
 	// applying it. Cleared the moment they set a size.
 	MinQualityTier int `json:"min_quality_tier"`
-	Want           int `json:"want"`            // 0 → server default (3)
-	ConsentVersion int `json:"consent_version"` // accepted warning version, ≥1
+	// MinContextWindow is the context window the provider must declare,
+	// sent only for a 1M demand (1048576) and left out otherwise
+	// (waired-agent#1399). A control plane from waired#1442 on treats an
+	// absent floor as 200704, the session every Waired row without "[1m]"
+	// is, so a 200k demand needs nothing on the wire — and leaving it out
+	// keeps that request valid on a control plane that predates the field,
+	// which decodes with DisallowUnknownFields and answers 400.
+	MinContextWindow int `json:"min_context_window,omitempty"`
+	Want             int `json:"want"`            // 0 → server default (3)
+	ConsentVersion   int `json:"consent_version"` // accepted warning version, ≥1
 }
 
 // AcquirePublicGrantsResponse carries the device's FULL current active
@@ -70,6 +78,11 @@ type ReleasePublicGrantsResponse struct {
 var (
 	ErrPublicShareNotEligible = errors.New("controlclient: public share: not eligible")
 	ErrPublicShareRateLimited = errors.New("controlclient: public share: rate limited")
+	// ErrPublicShareBadRequest is a 400: the control plane could not read
+	// the request. The one the acquirer acts on is a control plane that
+	// predates a field this build sends (min_context_window), which it
+	// retries without (waired-agent#1399).
+	ErrPublicShareBadRequest = errors.New("controlclient: public share: bad request")
 )
 
 // AcquirePublicGrants requests up to req.Want grants (K=3 cap CP-side).
@@ -130,6 +143,8 @@ func (c *Client) postPublicGrants(ctx context.Context, path string, body, out an
 		return fmt.Errorf("%w: %s", ErrPublicShareNotEligible, string(buf))
 	case http.StatusTooManyRequests:
 		return fmt.Errorf("%w: %s", ErrPublicShareRateLimited, string(buf))
+	case http.StatusBadRequest:
+		return fmt.Errorf("%w: %s: %s", ErrPublicShareBadRequest, path, string(buf))
 	default:
 		return fmt.Errorf("controlclient: %s: %d: %s", path, resp.StatusCode, string(buf))
 	}

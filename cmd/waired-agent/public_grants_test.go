@@ -18,6 +18,11 @@ type fakeGrantAPI struct {
 	mu           sync.Mutex
 	acquireCalls int
 	lastAcquire  controlclient.AcquirePublicGrantsRequest
+	// acquireReqs records every acquire request, in order.
+	acquireReqs []controlclient.AcquirePublicGrantsRequest
+	// acquireFn, when set, answers each acquire instead of acquireRes /
+	// acquireErr, so a test can vary the answer by request.
+	acquireFn    func(controlclient.AcquirePublicGrantsRequest) (controlclient.AcquirePublicGrantsResponse, error)
 	renewCalls   [][]string
 	releaseCalls [][]string
 	acquireRes   controlclient.AcquirePublicGrantsResponse
@@ -31,6 +36,10 @@ func (f *fakeGrantAPI) AcquirePublicGrants(_ context.Context, req controlclient.
 	defer f.mu.Unlock()
 	f.acquireCalls++
 	f.lastAcquire = req
+	f.acquireReqs = append(f.acquireReqs, req)
+	if f.acquireFn != nil {
+		return f.acquireFn(req)
+	}
 	return f.acquireRes, f.acquireErr
 }
 

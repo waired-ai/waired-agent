@@ -5,11 +5,13 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -100,6 +102,13 @@ type publicGrantDeps struct {
 	// nil leaves the loop purely periodic.
 	Demand <-chan struct{}
 
+	// DemandWindow returns the largest context-window floor the demands
+	// since its last call asked for, and forgets it: 200704 or 1048576 for
+	// a Waired row, 0 for a request that is not one (waired-agent#1399).
+	// The loop calls it once per admitted demand wake. nil reads as 0,
+	// which is the acquirer this replaced.
+	DemandWindow func() int
+
 	// Ready is the agent's "this node's own engine just became reachable"
 	// edge (waired-agent#806). Receive-only, buffered-1 with a
 	// non-blocking send at the source, exactly like Demand.
@@ -129,6 +138,79 @@ type publicGrantDeps struct {
 
 	Tick time.Duration    // 0 → publicGrantTick
 	Now  func() time.Time // nil → time.Now
+}
+
+// publicGrantDemandSignal is the router's demand signal with the window it
+// asked for: a coalescing wake channel, exactly the buffered-1 non-blocking
+// shape Demand always had, and the largest window floor seen since the
+// acquirer last took it (waired-agent#1399).
+//
+// The largest, because the wake coalesces: a 200k and a 1M request in one
+// burst make one wake, and a grant that holds 1M serves both rows.
+type publicGrantDemandSignal struct {
+	ch     chan struct{}
+	mu     sync.Mutex
+	window int
+}
+
+func newPublicGrantDemandSignal() *publicGrantDemandSignal {
+	return &publicGrantDemandSignal{ch: make(chan struct{}, 1)}
+}
+
+// Notify records the window and wakes the acquirer without blocking. It is
+// router.Inputs.OnPublicGrantDemand, called on the routing hot path.
+func (d *publicGrantDemandSignal) Notify(minContextWindow int) {
+	d.mu.Lock()
+	if minContextWindow > d.window {
+		d.window = minContextWindow
+	}
+	d.mu.Unlock()
+	select {
+	case d.ch <- struct{}{}:
+	default:
+	}
+}
+
+// C is the wake channel, publicGrantDeps.Demand.
+func (d *publicGrantDemandSignal) C() <-chan struct{} { return d.ch }
+
+// Take returns the largest window since the last Take and forgets it,
+// publicGrantDeps.DemandWindow.
+func (d *publicGrantDemandSignal) Take() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	w := d.window
+	d.window = 0
+	return w
+}
+
+// publicAcquireWindow is the min_context_window an acquire sends for a demand
+// with floor window: 1048576 for a 1M demand, and nothing otherwise. A control
+// plane from waired#1442 on holds an absent floor to 200704, and one from
+// before rejects the field, so the 200k demand — the one every public turn
+// makes — never risks a 400 (waired-agent#1399).
+func publicAcquireWindow(window int) int {
+	if window >= hostfit.ServingWindow1M {
+		return hostfit.ServingWindow1M
+	}
+	return 0
+}
+
+// publicGrantWindows maps each public provider grant the map carries to the
+// context window its provider declares (0 = none).
+func publicGrantWindows(snap inferencemesh.Snapshot) map[string]int {
+	out := map[string]int{}
+	for _, p := range snap.Peers {
+		if !inferencemesh.IsPublicGrant(p.Grant) || p.Grant.Role != signer.GrantRoleProvider || p.Grant.ID == "" {
+			continue
+		}
+		w := 0
+		if p.InferenceState != nil {
+			w = p.InferenceState.ContextWindow
+		}
+		out[p.Grant.ID] = w
+	}
+	return out
 }
 
 type heldGrant struct {
@@ -221,6 +303,9 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		// acquires — so an idle consumer (mode on, no requests) holds
 		// nothing. Re-declared each iteration, so it resets naturally.
 		demandWake := false
+		// demandWindow is the window floor THIS wake's demand asked for
+		// (waired-agent#1399); 0 on any other wake.
+		demandWindow := 0
 		// The timer is re-armed per arm, not unconditionally after the
 		// select: with more than one non-ctx arm, an unconditional
 		// Reset on a timer that has NOT fired leaves its pending value
@@ -241,6 +326,11 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 				continue
 			}
 			demandWake = true
+			// Taken only on an admitted wake: a throttled one leaves the
+			// window for the next.
+			if deps.DemandWindow != nil {
+				demandWindow = deps.DemandWindow()
+			}
 		case <-deps.Ready:
 			// This node's engine became reachable (waired-agent#806).
 			//
@@ -372,6 +462,39 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			}
 		}
 
+		// A demand with a window floor: let go of the held grants whose
+		// provider declares less (waired-agent#1399). The router asked
+		// because none of them could take the request, and holding one
+		// keeps the acquirer from asking for a grant that could — before
+		// this, len(held) >= want stopped it, and the row that refused the
+		// provider kept refusing every turn until the grant lapsed. A grant
+		// the map does not carry yet is not judged: its window is unknown,
+		// and the map grace above exists for it.
+		released := map[string]bool{} // provider device ids let go this cycle
+		if demandWake && demandWindow > 0 && deps.Mesh != nil && len(held) > 0 {
+			windows := publicGrantWindows(deps.Mesh.Snapshot())
+			var below []string
+			for id, h := range held {
+				if w, ok := windows[id]; ok && w < demandWindow {
+					below = append(below, id)
+					released[h.providerDeviceID] = true
+				}
+			}
+			if len(below) > 0 {
+				if _, err := deps.API.ReleasePublicGrants(ctx, below); err != nil {
+					// The grant is still dropped here: renew stops for it,
+					// so the control plane lapses it at its TTL.
+					logger.Warn("public grants: release of a grant below the window failed", "err", err)
+				}
+				logger.Info("public grants: released grants whose provider's context window is below the request's",
+					"count", len(below), "window", demandWindow)
+				for _, id := range below {
+					delete(held, id)
+					forgetUsage(id)
+				}
+			}
+		}
+
 		// Acquire is demand-driven (waired#898): only a router demand wake
 		// acquires, and only up to K=publicGrantWant, out of backoff. A
 		// periodic tick reaches here with demandWake false and stops,
@@ -384,13 +507,25 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			consentVersion = pu.Consent.WarningVersion
 		}
 		lastAcquireAt = tnow
-		res, err := deps.API.AcquirePublicGrants(ctx, controlclient.AcquirePublicGrantsRequest{
-			Class:          "",
-			MinModelSize:   pu.MinModelSize,
-			MinQualityTier: pu.MinQualityTier,
-			Want:           publicGrantWant, // K=1 (waired#898)
-			ConsentVersion: consentVersion,
-		})
+		acquireReq := controlclient.AcquirePublicGrantsRequest{
+			Class:            "",
+			MinModelSize:     pu.MinModelSize,
+			MinQualityTier:   pu.MinQualityTier,
+			MinContextWindow: publicAcquireWindow(demandWindow),
+			Want:             publicGrantWant, // K=1 (waired#898)
+			ConsentVersion:   consentVersion,
+		}
+		res, err := deps.API.AcquirePublicGrants(ctx, acquireReq)
+		if errors.Is(err, controlclient.ErrPublicShareBadRequest) && acquireReq.MinContextWindow > 0 {
+			// A control plane that predates min_context_window decodes
+			// with DisallowUnknownFields and refuses the whole request.
+			// Ask once more without it: a grant it gives may not hold 1M,
+			// and the next 1M demand lets go of it (waired-agent#1399).
+			logger.Info("public grants: the control plane does not take a window floor; acquiring without it",
+				"window", acquireReq.MinContextWindow)
+			acquireReq.MinContextWindow = 0
+			res, err = deps.API.AcquirePublicGrants(ctx, acquireReq)
+		}
 		switch {
 		case errors.Is(err, controlclient.ErrPublicShareNotEligible),
 			errors.Is(err, controlclient.ErrPublicShareRateLimited):
@@ -417,7 +552,17 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		// The response is the FULL active set: replace wholesale,
 		// preserving acquiredAt/renew schedule for grants we knew.
 		next := make(map[string]*heldGrant, len(res.Grants))
+		var regranted []string
 		for _, g := range res.Grants {
+			// A provider let go of this cycle for its window, granted
+			// again — a control plane that cannot filter on the window
+			// had nothing better. Let go of it again and wait, rather than
+			// hold a grant the request refuses or churn on it every
+			// demand (waired-agent#1399).
+			if released[g.ProviderDeviceID] {
+				regranted = append(regranted, g.GrantID)
+				continue
+			}
 			if prev, ok := held[g.GrantID]; ok {
 				next[g.GrantID] = prev
 				continue
@@ -434,6 +579,14 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			}
 			logger.Info("public grants: acquired",
 				"grant_id", g.GrantID, "provider_pseudonym", g.ProviderPseudonym, "created", g.Created)
+		}
+		if len(regranted) > 0 {
+			if _, err := deps.API.ReleasePublicGrants(ctx, regranted); err != nil {
+				logger.Warn("public grants: release of a regranted provider failed", "err", err)
+			}
+			logger.Info("public grants: the control plane granted the provider just let go of for its window again; backing off",
+				"count", len(regranted), "window", demandWindow)
+			backOff(tnow.Add(publicGrantBackoff), false)
 		}
 		// Any previously-held grant absent from the fresh active set is
 		// gone CP-side; prune its usage record along with it.

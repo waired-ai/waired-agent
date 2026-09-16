@@ -305,12 +305,15 @@ type Inputs struct {
 	PublicOnly bool
 
 	// OnPublicGrantDemand is called when policy would have used a public
-	// candidate but this device holds no Public Share grant, so the
-	// background acquirer can wake early instead of waiting out its
-	// periodic tick (spec §4.3 cold start). Must not block: the
-	// production implementation is a non-blocking send onto a
+	// candidate but this device holds no Public Share grant to one that
+	// can take the request, so the background acquirer can wake early
+	// instead of waiting out its periodic tick (spec §4.3 cold start).
+	// minContextWindow is the request's window floor
+	// (Request.MinContextWindow): 200704 or 1048576 for a Waired row, 0
+	// for a request that is not one (waired-agent#1399). Must not block:
+	// the production implementation is a non-blocking send onto a
 	// coalescing buffered channel.
-	OnPublicGrantDemand func()
+	OnPublicGrantDemand func(minContextWindow int)
 
 	// OnPublicGrantUsed is called with a Public Share grant's ID the moment
 	// a request is committed to that grant's provider (Commit succeeds).
@@ -1261,7 +1264,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	modelID := ""
 	defer func() {
 		if err != nil {
-			s.emitPublicShortfall(short, modelID)
+			s.emitPublicShortfall(short, modelID, req.MinContextWindow)
 		}
 	}()
 	// One exit, so every branch's terminal miss carries the reason.

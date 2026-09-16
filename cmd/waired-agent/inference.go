@@ -323,8 +323,9 @@ type inferenceSubsystemDeps struct {
 	// nil admits no public candidates.
 	PublicPolicy func() router.PublicPolicy
 	// OnPublicGrantDemand wakes the background grant acquirer when a
-	// request wanted a public candidate and no grant was held.
-	OnPublicGrantDemand func()
+	// request wanted a public candidate and no grant was held to one that
+	// holds the request's window floor (waired-agent#1399).
+	OnPublicGrantDemand func(minContextWindow int)
 	// OnPublicGrantUsed reports the Public Share grant behind each
 	// committed public route so the acquirer renews grants in use and
 	// lapses idle ones (waired#898). Loopback only. nil disables it.
@@ -1684,7 +1685,7 @@ type agentInferenceProvider struct {
 	// Public Share consumer inputs (waired#827); see
 	// inferenceSubsystemDeps for the contract.
 	publicPolicy        func() router.PublicPolicy
-	onPublicGrantDemand func()
+	onPublicGrantDemand func(minContextWindow int)
 	onPublicGrantUsed   func(grantID string)
 	onPublicNudge       func(router.PublicNudge)
 
