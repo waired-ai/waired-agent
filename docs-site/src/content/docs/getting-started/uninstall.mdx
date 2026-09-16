@@ -151,6 +151,13 @@ program is gone, and ends with:
 
 Then restart Claude Code.
 
+The uninstaller also cleans up your own Claude Code settings, such as the
+status line and the Waired rows in `/model`, but only for the user who runs
+it. If Waired was removed from a software center such as GNOME Software or
+from a root shell, run the uninstall command yourself, as the user who uses
+Claude Code and not as root: Waired does not go through other users' home
+folders.
+
 On Linux, the uninstaller needs `python3` to edit the settings file. Without
 it, the file is left alone and the uninstaller warns:
 

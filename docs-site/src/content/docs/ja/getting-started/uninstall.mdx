@@ -126,6 +126,8 @@ API Error: Connection refused — a firewall or proxy may be blocking it (Connec
 
 そのあと、Claude Codeを再起動します。
 
+アンインストーラは、ステータス行や`/model`のWairedの行など、自分のClaude Codeの設定も片付けますが、対象は実行したユーザーの分だけです。GNOME SoftwareなどのソフトウェアセンターやrootのシェルからWairedを消した場合は、rootではなく、Claude Codeを使っているユーザー自身でアンインストールコマンドを実行してください。Wairedはほかのユーザーのホームフォルダを見に行きません。
+
 Linuxでは、アンインストーラが設定ファイルを編集するのに`python3`が必要です。無い場合はファイルに触れず、次の警告を表示します。
 
 ```
