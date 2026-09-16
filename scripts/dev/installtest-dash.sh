@@ -1795,8 +1795,8 @@ if [ -f "$cl_tmp/uninstall.sh" ] && command -v python3 >/dev/null 2>&1; then
 
   # 11f. No python3, for real, once per awk: the sudo stub runs the awk
   #      wrapper (and only that), so the managed file really changes here.
-  #      Go's own Linux bytes go in; the env keeps only the host's window, the
-  #      hooks stay, and the file keeps its mode.
+  #      Go's own Linux bytes go in; the env goes, the fixed 200704 window with
+  #      it (waired-agent#1396), the hooks stay, and the file keeps its mode.
   mkdir -p "$cl_tmp/execsudo"
   printf '#!/bin/sh\ncase "$1" in sh) exec "$@" ;; esac\nexec "%s/sudo" "$@"\n' "$STUBDIR" >"$cl_tmp/execsudo/sudo"
   chmod +x "$cl_tmp/execsudo/sudo"
@@ -1824,7 +1824,7 @@ try:
     doc = json.load(open(p))
 except (OSError, ValueError) as e:
     print("not JSON any more: %s" % e); sys.exit(0)
-if doc.get("env") != {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200704"}:
+if "env" in doc:
     print("env is %s" % doc.get("env")); sys.exit(0)
 if "SessionStart" not in doc.get("hooks", {}):
     print("the hooks went too"); sys.exit(0)
@@ -1833,7 +1833,7 @@ print("ok" if mode == 0o644 else "mode is %o" % mode)
 PY
 )"
     if [ "$verdict" = ok ] && printf '%s' "$out" | grep -qF "Left Waired's hooks (SessionStart)" \
-       && printf '%s' "$out" | grep -qF "Left CLAUDE_CODE_MAX_CONTEXT_TOKENS=200704"; then
+       && ! printf '%s' "$out" | grep -qF "Left CLAUDE_CODE_MAX_CONTEXT_TOKENS"; then
       ok "without python3 ($impl) the uninstall takes the loopback URL out of Go's own managed file and keeps the rest (#1407)"
     else
       printf '%s\n' "$out" >&2

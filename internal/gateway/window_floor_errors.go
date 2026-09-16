@@ -37,7 +37,7 @@ func windowFloorDetail(err error) string {
 	case e.Public:
 		return fmt.Sprintf("No public computer that could take this turn has a context window of %d tokens, which the model you picked needs", e.Need)
 	}
-	return fmt.Sprintf("None of your computers that could take this turn has a context window of %d tokens, which the model you picked needs. A model row that names one computer does not ask for this", e.Need)
+	return fmt.Sprintf("None of your computers that could take this turn has a context window of %d tokens, which the model you picked needs", e.Need)
 }
 
 // pinnedPeerDeclinedDetail is the sentence for a declined pin.

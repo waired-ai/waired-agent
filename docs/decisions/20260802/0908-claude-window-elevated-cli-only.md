@@ -1,11 +1,13 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md
 ---
 
 # Claude Code に伝える窓は昇格 CLI が書く。daemon には持たせない (20260802 09:08)
 
 ## Status
-Accepted
+Accepted。書き手を昇格した CLI に限る決定は有効。値を `/v1/models` の実窓から導く部分と、訂正の「`local window:` の STALE 行は恒久的に必要」は、オーナー決定(2026-09-16、waired-ai/waired-agent#1396)で `docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md` に置き換えられた。値はどのホストでも 200704 になり、モデルを切り替えても古くならない。
 
 ## Context
 

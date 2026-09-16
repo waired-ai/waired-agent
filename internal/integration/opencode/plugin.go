@@ -8,7 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"text/template"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 //go:embed templates/plugin_waired.js.tmpl
@@ -63,7 +66,12 @@ func renderPlugin(gatewayBaseURL string) ([]byte, error) {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]string{"BaseURLLiteral": string(baseLit)}); err != nil {
+	if err := tmpl.Execute(&buf, map[string]string{
+		"BaseURLLiteral": string(baseLit),
+		// The two sessions a Waired row can be (waired-agent#1396).
+		"ContextWindowLiteral":   strconv.Itoa(hostfit.ServingWindow200k),
+		"ContextWindow1MLiteral": strconv.Itoa(hostfit.ServingWindow1M),
+	}); err != nil {
 		return nil, fmt.Errorf("opencode: render plugin: %w", err)
 	}
 	return buf.Bytes(), nil

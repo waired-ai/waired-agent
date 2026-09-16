@@ -33,16 +33,16 @@ waired link opencode
 	| モデル | ターンが動く場所 |
 	|---|---|
 	| `waired/default`（表示は**Waired**） | 自分のコンピュータのどれか。200kのコンテキストウィンドウを持つコンピュータをWairedが選びます |
-	| `waired/local`（**Waired local**） | このコンピュータ |
+	| `waired/local`（**Waired local**） | このコンピュータ。200kのコンテキストウィンドウを持つ場合に限ります |
 	| `waired/peer`（**Waired peer**） | 200kのコンテキストウィンドウを持つ自分の別のコンピュータ。このコンピュータでは動きません |
-	| `waired/peer-<名前>`（**Waired peer: &lt;名前&gt;**） | 名前で指定したコンピュータ |
+	| `waired/peer-<名前>`（**Waired peer: &lt;名前&gt;**） | 名前で指定したコンピュータ。200kのコンテキストウィンドウを持つ場合に限ります |
 	| `waired/public`（**Waired public share**） | 200kのコンテキストウィンドウを持つ他の人のコンピュータ |
 	| `waired/default[1m]`などの`[1m]`付きの項目（**… (1M context)**） | 上と同じで、1Mのコンテキストウィンドウを持つコンピュータ。その項目に答えられるコンピュータが1Mを宣言している間だけ出ます |
 </Expected>
 
 APIキーも環境変数も使いません。WairedはOpenCodeを自分のパソコンのモデルに直接接続します。
 
-項目が指しているのはモデルではなく**パソコン**です。答えたパソコンが、そのパソコンの持っているモデルで動かします。`waired/local`は、このパソコンにエンジンがあってローカル推論がオンのときだけ出ます。`waired/public`は、Public Shareをオンにしたときだけ出ます。`waired/peer-<名前>`は、いま推論を提供している自分のパソコン1台につき1つ出ます。
+項目が指しているのはモデルではなく**パソコン**です。答えたパソコンが、そのパソコンの持っているモデルで動かします。`waired/local`は、このパソコンにエンジンがあってローカル推論がオンのときだけ出ます。`waired/public`は、Public Shareをオンにしたときだけ出ます。`waired/peer-<名前>`は、いま推論を提供していて、200,704トークン以上のコンテキストウィンドウを持つ自分のコンピュータ1台につき1つ出ます。
 
 項目が指しているパソコンが答えられないときは、黙って別の場所で動かさずに、理由を言って失敗します。
 
@@ -78,16 +78,16 @@ Wairedはサブエージェントのリクエストを会話のリクエスト�
 
 ## <a id="context-windows"></a>コンテキストウィンドウ
 
-Wairedがコンピュータを選ぶ項目、つまり`waired/default`、`waired/peer`、`waired/public`は、200,704トークンのコンテキストウィンドウを持つコンピュータだけを使います。`[1m]`付きの項目は、1,048,576トークンを持つコンピュータだけを使います。それより小さいコンピュータ、たとえばGPUのVRAMに収まるようvLLMがコンテキストウィンドウを小さくしたコンピュータは、これらの項目には使われません。そのコンピュータ自身の`waired/local`と、そのコンピュータの`waired/peer-<名前>`の項目には引き続き答えます。これらの項目は、指定したコンピュータに条件を求めません。
+どの項目も、200,704トークンのコンテキストウィンドウを持つコンピュータだけを使います。`[1m]`付きの項目は、1,048,576トークンを持つコンピュータだけを使います。`waired/local`と`waired/peer-<名前>`も同じです。それより小さいコンピュータ、たとえばGPUのVRAMに収まるようvLLMがコンテキストウィンドウを小さくしたコンピュータは、どの項目にも答えません。そのコンピュータ自身の`waired/local`も同じです。
 
-各項目は、`http://127.0.0.1:9473/v1/models`の一覧で自分のコンテキストウィンドウを`max_input_tokens`として示します。OpenCodeは起動のたびにこれを項目の`limit.context`として読み、項目が示すウィンドウに達する前に会話を要約します。値は、`waired/default`、`waired/peer`、`waired/public`が200704、`[1m]`付きの項目が1048576、`waired/local`がこのコンピュータ自身のコンテキストウィンドウ、`waired/peer-<名前>`が指定したコンピュータ自身のコンテキストウィンドウです。コンテキストウィンドウを示していないコンピュータには値が付かず、その項目ではOpenCodeが自身の既定値を使います。
+プラグインは、各項目のコンテキストウィンドウを項目の名前だけから決めて`limit.context`に書きます。`[1m]`付きの項目は1048576、それ以外の項目は200704です。Wairedが動いていないときに一覧が戻る`waired/default`の項目も同じです。OpenCodeは、このウィンドウに達する前に会話を要約します。このウィンドウは、どのコンピュータが答えるかに依りません。`[1m]`の付かない項目で200,704トークンを超えるターンは、1Mを保持するコンピュータでも`prompt is too long`として返ります。`http://127.0.0.1:9473/v1/models`の一覧も、同じ値を`max_input_tokens`として示します。
 
 プラグインは、どのコンピュータでもよい項目を`waired/default`として表示します。この名前で書いた設定はそのまま使えます。送信するときは、Claude Codeが送るのと同じidである`waired`として送ります。`waired/default[1m]`は`waired[1m]`として送ります。上の200kと1Mの条件を運ぶのはこれらのidです。チャットアプリが`waired/default`をそのまま送った場合、この条件は付きません。[チャットアプリから使う](/ja/guides/chat-clients/#what-to-put-in-the-settings)を参照してください。
 
 項目が必要とするコンテキストウィンドウをどのコンピュータも満たさない場合、ターンは失敗し、OpenCodeがエラーを表示します。要約も再試行もしません。会話の長さが原因ではないからです。
 
 ```
-None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this.
+None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs.
 ```
 
 ## <a id="what-it-changed"></a>変更される内容

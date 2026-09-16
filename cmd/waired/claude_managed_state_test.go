@@ -52,22 +52,25 @@ func TestClaudeRoutedNow(t *testing.T) {
 	})
 }
 
-// PRODUCT CONTRACT (waired-agent#796): the browser wizard routes before the
-// model exists, so the context window has to be filled in afterwards — and only
-// then. Every other combination must leave the file alone.
+// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+// waired-agent#1396 — CLAUDE_CODE_MAX_CONTEXT_TOKENS is 200704 on every routed
+// host. A file an older build left without it (the wizard case,
+// waired-agent#796) or with the window that build derived is set to it; every
+// other combination leaves the file alone.
 //
 // RECORD OF TODAY'S BEHAVIOUR: an already-correct value is not rewritten, so the
 // terminal path (which writes the right number before this runs) costs no second
 // write.
 func TestClaudeWindowTopUpNeeded(t *testing.T) {
-	base := claudeWindowFacts{routed: true, directives: true, elevated: true, managed: "", live: 200704}
+	base := claudeWindowFacts{routed: true, directives: true, elevated: true, managed: ""}
 
 	cases := map[string]struct {
 		mutate func(*claudeWindowFacts)
 		want   bool
 	}{
-		"the wizard case: routed, directives on, window now known": {func(*claudeWindowFacts) {}, true},
-		"replacing a stale number":                                 {func(f *claudeWindowFacts) { f.managed = "250000" }, true},
+		"the wizard case: routed, directives on, nothing written": {func(*claudeWindowFacts) {}, true},
+		"replacing the pre-#408 constant":                         {func(f *claudeWindowFacts) { f.managed = "250000" }, true},
+		"replacing the window an older build derived":             {func(f *claudeWindowFacts) { f.managed = "262144" }, true},
 
 		"already correct — no second write":  {func(f *claudeWindowFacts) { f.managed = "200704" }, false},
 		"not routed — not our file to touch": {func(f *claudeWindowFacts) { f.routed = false }, false},
@@ -75,10 +78,6 @@ func TestClaudeWindowTopUpNeeded(t *testing.T) {
 			func(f *claudeWindowFacts) { f.directives = false }, false},
 		"not elevated — cannot write the machine-wide file": {
 			func(f *claudeWindowFacts) { f.elevated = false }, false},
-		"window still unknown — a stale honest number beats a guess": {
-			func(f *claudeWindowFacts) { f.live = 0 }, false},
-		"window unknown and nothing recorded yet": {
-			func(f *claudeWindowFacts) { f.live, f.managed = 0, "" }, false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

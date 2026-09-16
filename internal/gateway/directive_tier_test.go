@@ -10,6 +10,10 @@ import (
 // serving endpoint (waired#1031). Claude Code sized the session from the
 // id string before the request existed, so this is what the router has
 // to hold an endpoint to.
+//
+// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+// waired-agent#1396 — every Waired row is 200k, or 1M with "[1m]". The rows
+// naming one computer used to demand nothing (waired-agent#1395).
 func TestRequiredWindowFor(t *testing.T) {
 	for _, tc := range []struct {
 		id   string
@@ -21,8 +25,8 @@ func TestRequiredWindowFor(t *testing.T) {
 				"promises a floor"},
 		{Tier1M(ModelWairedAny), hostfit.ServingWindow1M,
 			"the [1m] suffix outranks everything, including the env var"},
-		{ModelWairedLocal, 0,
-			"pinning is how you reach a device that declares no window at all"},
+		{ModelWairedLocal, hostfit.ServingWindow200k,
+			"this computer's row is a 200k session like every other row (waired-agent#1396)"},
 		{ModelWairedPeer, hostfit.ServingWindow200k,
 			"another of your computers: Waired chooses which, so the row promises " +
 				"the floor the any-node row does (waired-agent#1395)"},
@@ -32,8 +36,8 @@ func TestRequiredWindowFor(t *testing.T) {
 			"the pre-#1185 peer spelling means the same row"},
 		{ModelWairedPublicLegacy, hostfit.ServingWindow200k,
 			"and so does the public one"},
-		{ModelWairedPeerPrefix + "linux-gpu", 0,
-			"a row naming ONE computer must not also make demands of it"},
+		{ModelWairedPeerPrefix + "linux-gpu", hostfit.ServingWindow200k,
+			"so is a row naming one computer: the session does not depend on which"},
 		{Tier1M(ModelWairedPeerPrefix + "linux-gpu"), hostfit.ServingWindow1M,
 			"its twin IS the demand"},
 		{Tier1M(ModelWairedPublic), hostfit.ServingWindow1M,
@@ -48,8 +52,8 @@ func TestRequiredWindowFor(t *testing.T) {
 			"never touches a Waired endpoint"},
 		{ModelWairedAnyLegacy, hostfit.ServingWindow200k,
 			"the pre-#1185 spelling of the any-node row means the same row"},
-		{ModelWairedLocalLegacy, 0,
-			"and the pre-#1185 named rows still promise nothing"},
+		{ModelWairedLocalLegacy, hostfit.ServingWindow200k,
+			"and the pre-#1185 named rows mean the same rows"},
 		{"claude-sonnet-5", 0, "an ordinary model id promises nothing"},
 		{"", 0, "no id, no promise"},
 		{"CLAUDE-WAIRED-AUTO", hostfit.ServingWindow200k,
@@ -105,9 +109,8 @@ func TestRequiredWindowForRequest(t *testing.T) {
 		{"local pin with the tier header", ModelWairedLocal, []string{beta},
 			hostfit.ServingWindow1M,
 			"same, for this computer's own 1M twin"},
-		{"computer-naming id without it", ModelWairedPeerPrefix + "linux-gpu", nil, 0,
-			"the bare row still demands nothing: it is how you reach a device " +
-				"that declares no window at all"},
+		{"computer-naming id without it", ModelWairedPeerPrefix + "linux-gpu", nil, hostfit.ServingWindow200k,
+			"the bare row is a 200k session like every other (waired-agent#1396)"},
 		{"peer row without it", ModelWairedPeer, nil, hostfit.ServingWindow200k,
 			"Waired chooses which of your other computers, so the bare row keeps " +
 				"its own 200k floor (waired-agent#1395)"},

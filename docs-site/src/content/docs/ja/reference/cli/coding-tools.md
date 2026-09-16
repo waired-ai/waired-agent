@@ -45,7 +45,7 @@ managed settings:   /etc/claude-code/managed-settings.json (present)
 ANTHROPIC_BASE_URL: http://127.0.0.1:9472
 expected base URL:  http://127.0.0.1:9472
 gateway listener:   127.0.0.1:9472 (listening)
-local window:       200704  (managed settings: 200704)
+context window:     200704  (managed settings: 200704)
 /model rows:        6 rows
                     /home/you/.claude/settings.json
 statusline:         waired segment installed
@@ -60,7 +60,7 @@ waired node:        auto (this device or a mesh peer)   (change with `waired wor
 |---|---|
 | `managed settings:` | パソコン全体の設定ファイルと、その有無。 |
 | `ANTHROPIC_BASE_URL:` | ファイルが指す先。ルーティングがオフなら`(not set)`、読めなければ`unreadable. This file isn't JSON Waired can parse.`。 |
-| `local window:` | このパソコンの推論エンジンが保持できるコンテキストウィンドウと、Claude Codeに伝えた値。食い違っていればその旨が表示されます。推論エンジンのないパソコンでは`none here`と表示し、ほかのパソコンから借りている上限を示します。 |
+| `context window:` | `(1M context)`の付かないWairedの行のコンテキストウィンドウである200704と、Claude Codeが起動時に読むコンピュータ全体の設定ファイルの値。`not set`のとき、または`stale`の付いた別の数のときは、末尾に`` re-run `sudo waired claude enable` ``が付きます。このコンピュータでClaude CodeがWairedを経由していないとき、または`/model`のWairedの行をオフにしているときは表示されません。 |
 | `/model rows:` | 設定ファイルにあるWairedの行数。または`not written`、`left alone`（ファイルに独自の行がある）、`unreadable`。 |
 | `statusline:` | `waired segment installed`、`wrapping your existing statusLine`、`not waired (custom: …)`、`not installed`、または`installed but shadowed here by <file> (<scope> scope)`。 |
 | `subagents:` | `follow their own model`、`on Waired`、または`left alone. CLAUDE_CODE_SUBAGENT_MODEL=<value> isn't Waired's`。 |

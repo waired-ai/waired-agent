@@ -12,7 +12,9 @@ import (
 // PIN: product contract — the rows, their "[1m]" twins and the window each
 // states are the same on Claude Code's /model and on the OpenAI-dialect
 // listing, and a row states exactly the window routing guarantees for it
-// (owner decision 2026-09-16, waired-agent#1395).
+// (owner decision 2026-09-16, waired-agent#1395): 1M for a twin and 200k for
+// every other row, whatever the computer behind it holds (owner decision
+// 2026-09-16, waired-agent#1396).
 func TestRows_StateTheWindowRoutingGuarantees(t *testing.T) {
 	f := Facts{
 		LocalServes:    true,
@@ -34,18 +36,22 @@ func TestRows_StateTheWindowRoutingGuarantees(t *testing.T) {
 	wants := []want{
 		{claudecode.DirectiveModelAny, hostfit.ServingWindow200k, false},
 		{claudecode.Tier1M(claudecode.DirectiveModelAny), hostfit.ServingWindow1M, true},
-		// This computer serves 262144: its row states that, and no twin.
-		{claudecode.DirectiveModelLocal, 262144, false},
+		// This computer serves 262144: its row is still a 200k session, and
+		// it earns no twin.
+		{claudecode.DirectiveModelLocal, hostfit.ServingWindow200k, false},
 		{claudecode.DirectiveModelPeer, hostfit.ServingWindow200k, false},
 		{claudecode.Tier1M(claudecode.DirectiveModelPeer), hostfit.ServingWindow1M, true},
 		{claudecode.DirectiveModelPublic, hostfit.ServingWindow200k, false},
 		// The public row has a twin now: a public machine's window rides the
 		// network map like any other peer's.
 		{claudecode.Tier1M(claudecode.DirectiveModelPublic), hostfit.ServingWindow1M, true},
-		{"waired/peer-big-box", hostfit.ServingWindow1M, false},
+		// A computer that holds 1M: its row is a 200k session like any other,
+		// and its twin is the 1M one.
+		{"waired/peer-big-box", hostfit.ServingWindow200k, false},
 		{claudecode.Tier1M("waired/peer-big-box"), hostfit.ServingWindow1M, true},
-		// A computer that states no window gets no number.
-		{"waired/peer-quiet-box", 0, false},
+		// Rows states what the row is; whether a computer that declares
+		// nothing gets a row at all is FactsFromSnapshot's decision.
+		{"waired/peer-quiet-box", hostfit.ServingWindow200k, false},
 	}
 	got := Rows(f)
 	if len(got) != len(wants) {

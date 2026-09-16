@@ -6,18 +6,22 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
+// peerView is a computer serving tag at the 200k tier, which every computer
+// that answers a Waired row declares (waired-agent#1396).
 func peerView(name, deviceID, tag string, reachable bool) inferencemesh.PeerView {
 	return inferencemesh.PeerView{
 		DeviceID:   deviceID,
 		DeviceName: name,
 		InferenceState: &signer.InferenceState{
-			Reachable:   reachable,
-			Type:        signer.InferenceTypeOllama,
-			Models:      []string{tag},
-			ActiveModel: "qwen3.5-4b",
+			Reachable:     reachable,
+			Type:          signer.InferenceTypeOllama,
+			Models:        []string{tag},
+			ActiveModel:   "qwen3.5-4b",
+			ContextWindow: hostfit.ServingWindow200k,
 		},
 	}
 }
@@ -56,6 +60,37 @@ func TestFactsFromSnapshot(t *testing.T) {
 		}
 		if f.Peers[0].Model != "qwen3.5-4b" {
 			t.Errorf("model = %q, want the catalog id rather than the engine tag", f.Peers[0].Model)
+		}
+	})
+
+	// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+	// waired-agent#1396. Every Waired row is at least a 200k session, so a
+	// computer that declares less, or nothing, cannot answer any of them, and
+	// a row naming it is a menu entry whose selection fails.
+	t.Run("a computer under the 200k tier gets no row", func(t *testing.T) {
+		narrow := peerView("small-box", "dev_n", "qwen3.5:4b", true)
+		narrow.InferenceState.ContextWindow = 131072
+		silent := peerView("quiet-box", "dev_q", "qwen3.5:4b", true)
+		silent.InferenceState.ContextWindow = 0
+		f := FactsFromSnapshot(&inferencemesh.Snapshot{
+			Peers: []inferencemesh.PeerView{narrow, peerView("linux-gpu", "dev_a", "qwen3.5:4b", true), silent},
+		}, 5, false)
+		var peerRows []string
+		for _, r := range Rows(f) {
+			if claudecode.IsPeerDirectiveID(r.ID) {
+				peerRows = append(peerRows, r.ID)
+			}
+		}
+		if len(peerRows) != 1 || peerRows[0] != "waired/peer-linux-gpu" {
+			t.Errorf("peer rows = %v, want only the computer at the 200k tier", peerRows)
+		}
+		// Still in the facts, for the ids: a session that picked the row keeps
+		// the id, and the refusal names the computer.
+		if len(f.Peers) != 3 {
+			t.Errorf("peers = %+v, want all three kept for id hashing", f.Peers)
+		}
+		if got, ok := PeerForDirective([]inferencemesh.PeerView{narrow, silent}, "waired/peer-small-box"); !ok || got.DeviceID != "dev_n" {
+			t.Errorf("the id of a computer under the tier resolved to %q, %v", got.DeviceID, ok)
 		}
 	})
 
@@ -106,6 +141,7 @@ func TestFactsFromSnapshot(t *testing.T) {
 		// A node that publishes no window declares nothing, which is not the
 		// same as declaring a small one — but it earns no twin either.
 		silent := peerView("quiet-box", "dev_q", "qwen3.5:4b", true)
+		silent.InferenceState.ContextWindow = 0
 		g := FactsFromSnapshot(&inferencemesh.Snapshot{
 			Self: silent, Peers: []inferencemesh.PeerView{silent},
 		}, 5, false)

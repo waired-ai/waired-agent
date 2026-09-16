@@ -18,12 +18,12 @@ Claude Codeのターンは、`/model`で選んだモデルが指す場所で実�
 | 行 | 2行目 | 答えるパソコン |
 |---|---|---|
 | **Waired** | *Any of your computers* | Wairedが選んだ自分のパソコンのどれか。通常はこの行を使います。 |
-| **Waired local** | *This computer* | 常にこのパソコン。載せられるモデルの範囲は問いません。推論エンジンのないパソコンでは表示されません。 |
+| **Waired local** | *This computer* | 常にこのパソコン。推論エンジンのないパソコンでは表示されません。 |
 | **Waired peer** | *Another of your computers* | 常に自分の別のパソコン。このパソコンは使いません。静かにしておきたいノートパソコンで選びます。 |
 | **Waired public share** | *Someone else's computer* | 別のWairedユーザーが貸し出しているパソコン。[パブリック共有](/ja/public-share/)をオンにしたあとでだけ表示されます。 |
 | **Waired peer: studio-desktop** | 動かしているモデル | そのパソコンだけ。いま答えられるパソコンごとに1行ずつ表示されます。 |
 
-Wairedがコンピュータを選ぶ行、つまり**Waired**、**Waired peer**、**Waired public share**では、200,000トークンの会話を保持できるモデルを動かしているコンピュータだけが使われます。ほとんどのコンピュータはこの条件を満たします。それより小さいコンテキストウィンドウのコンピュータ、たとえばGPUのVRAMに収まるようvLLMがコンテキストウィンドウを小さくしたコンピュータは、これらの行には使われません。そのコンピュータ自身の**Waired local**と、そのコンピュータの名前を持つ**Waired peer: &lt;名前&gt;**の行には引き続き答え、これらの行はそのコンピュータ自身のコンテキストウィンドウを示します。自分のコンピュータのどれが選ばれるかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
+Wairedの行に答えるのは、200,704トークン以上のコンテキストウィンドウを持つコンピュータだけです。`(1M context)`付きの行では1,048,576トークン以上です。**Waired local**と**Waired peer: &lt;名前&gt;**の行も同じです。ほとんどのコンピュータはこの条件を満たします。それより小さいコンテキストウィンドウのコンピュータ、たとえばGPUのVRAMに収まるようvLLMがコンテキストウィンドウを小さくしたコンピュータは、Wairedのどの行にも答えません。そのコンピュータ自身の**Waired local**も同じで、その行のターンは失敗して理由を表示します。Wairedがコンピュータを選ぶ場合、どれを選ぶかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
 これらの行は、自分の`~/.claude/settings.json`（Windowsでは`%USERPROFILE%\.claude\settings.json`）の`modelPicker`に書き込まれます。このファイルに自分で書いた`modelPicker`の行がすでにある場合、Wairedはそれに触れず、何も書き込みません。`waired claude status`の`/model rows:`の行に`left alone`と表示されます。
 
@@ -45,17 +45,17 @@ Waired peer: attic-server      qwen3.5-122b-a10b
 この行を選ぶと、会話はそのパソコンだけに送られます。知っておくことが2つあります。
 
 - **一覧が変わるのはセッションの間で、セッションの途中では変わりません。** WairedはClaude Codeが起動するたびに一覧を書き直すので、1分前に起動したパソコンは、次に起動した`claude`から表示されます。選んだあとにいなくなったパソコンを選ぶと、ターンは失敗し、そのパソコンの名前を表示します。
-- **いま答えられるパソコンだけが表示されます。** 電源が入っていない、まだダウンロード中、推論エンジンがない、というパソコンは表示されません。
+- **いま答えられるパソコンだけが表示されます。** 電源が入っていない、まだダウンロード中、推論エンジンがない、コンテキストウィンドウが200,704トークンに満たない、というパソコンは表示されません。
 
 ## <a id="the-1m-context-twins"></a>(1M context)付きの行
 
-自分のパソコンのどれかが1Mトークンのコンテキストウィンドウを持つモデルを動かしていると、そのパソコンに届く行のそれぞれが、`(1M context)`を付けてもう一度表示されます。この行を選ぶと、1Mのウィンドウを持つパソコンで、1Mのウィンドウで会話を実行します。そのようなパソコンが答えられない場合、ターンは失敗して理由を表示します。黙って小さいウィンドウで実行することはありません。**Waired public share**にも、自分が使える公開コンピュータが1Mのコンテキストウィンドウを宣言していればこの行が出ます。公開コンピュータもほかのコンピュータと同じようにコンテキストウィンドウを公開しています。所有者が［Serve main conversation］をオフにしたコンピュータは、この行の対象になりません。この行で送られるのはメイン会話だからです。
+自分のパソコンのどれかが1Mトークンのコンテキストウィンドウを持つモデルを動かしていると、そのパソコンに届く行のそれぞれが、`(1M context)`を付けてもう一度表示されます。この行を選ぶと、1Mのウィンドウを持つパソコンで、1Mのウィンドウで会話を実行します。そのようなパソコンが答えられない場合、ターンは失敗して理由を表示します。黙って小さいウィンドウで実行することはありません。**Waired public share**にも、自分が使える公開コンピュータが1Mのコンテキストウィンドウを宣言していればこの行が出ます。公開コンピュータもほかのコンピュータと同じようにコンテキストウィンドウを公開しています。所有者が［Serve main conversation］をオフにしたコンピュータは、この行の対象になりません。この行で送られるのはメイン会話だからです。`(1M context)`の付かない行は、答えるコンピュータが1Mを保持していても、200,704トークンのセッションのままです。
 
 ## <a id="long-sessions-get-compacted"></a>長いセッションは要約されます
 
-モデルが一度に保持できる会話はクラウドより短いため、Claude Codeは古いターンを要約して収めます。Wairedの行では、`sudo waired claude enable`が伝えた、このパソコンの推論エンジンが保持できるコンテキストウィンドウを上限として動きます。`(1M context)`の行は1Mを上限とします。あとでこのパソコンのモデルを変えた場合は、新しい上限が伝わるよう`sudo waired claude enable`をもう一度実行します。`waired claude status`は両方の値を表示し、食い違っていればそのことを示します。
+モデルが一度に保持できる会話はクラウドより短いため、Claude Codeは古いターンを要約して収めます。上限は、`(1M context)`の付かないWairedの行ではどれも200,704トークン、`(1M context)`の行では1,048,576トークンで、どのコンピュータが答えても変わりません。200,704をClaude Codeに伝えるのは`sudo waired claude enable`です。コンピュータがモデルを切り替えてもこの値は変わらないので、実行し直す必要はありません。Claude Codeにこの値が伝わっているかは、`waired claude status`が表示します。
 
-答えるパソコンにとって長すぎるプロンプトは`prompt is too long`として返り、Claude Codeが自動で要約して再試行します。セッションは失敗したのではなく、続いています。
+行の上限を超えるプロンプトは、答えるコンピュータがそれ以上を保持していても`prompt is too long`として返り、Claude Codeが自動で要約して再試行します。セッションは失敗したのではなく、続いています。
 
 ## <a id="when-a-turn-cannot-run"></a>ターンを実行できないとき
 
@@ -68,7 +68,7 @@ API Error: 400 Waired is not set up to answer on this computer, so this turn has
 行が必要とするコンテキストウィンドウを自分のコンピュータのどれも満たさない場合も、同じ形で失敗し、メッセージにその値が示されます。次は**Waired**の行で、ターンを受けられるコンピュータがすべて200,704トークン未満だった例です。
 
 ```
-API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 そのターンをクラウドで実行したければ、Anthropicのモデルを選択します。足りないものを直したければ、`waired doctor`を実行します。自分のパソコンのどれも次のターンを受けられないことをWairedが把握している場合は、送信する前にフッターが赤くなります。エラーを見て初めて気づくことはあまりありません。

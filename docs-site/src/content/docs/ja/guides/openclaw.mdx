@@ -26,18 +26,18 @@ waired link openclaw
 	| モデル | ターンが動く場所 |
 	|---|---|
 	| `waired/default` | 自分のコンピュータのどれか。200kのコンテキストウィンドウを持つコンピュータをWairedが選びます |
-	| `waired/local` | このコンピュータ |
+	| `waired/local` | このコンピュータ。200kのコンテキストウィンドウを持つ場合に限ります |
 	| `waired/peer` | 200kのコンテキストウィンドウを持つ自分の別のコンピュータ。このコンピュータでは動きません |
-	| `waired/peer-<名前>` | 名前で指定したコンピュータ |
+	| `waired/peer-<名前>` | 名前で指定したコンピュータ。200kのコンテキストウィンドウを持つ場合に限ります |
 	| `waired/public` | 200kのコンテキストウィンドウを持つ他の人のコンピュータ |
 	| `waired/default[1m]`などの`[1m]`付きの項目 | 上と同じで、1Mのコンテキストウィンドウを持つコンピュータ。その項目に答えられるコンピュータが1Mを宣言している間だけ書き込まれます |
 </Expected>
 
 APIキーも環境変数も使いません。WairedはOpenClawを自分のパソコンのモデルに直接接続します。
 
-項目が指しているのはモデルではなく**パソコン**です。答えたパソコンが、そのパソコンの持っているモデルで動かします。`waired/local`は、このパソコンにエンジンがあってローカル推論がオンのときだけ出ます。`waired/public`は、Public Shareをオンにしたときだけ出ます。`waired/peer-<名前>`は、連携したときに推論を提供していた自分のパソコン1台につき1つ出ます。
+項目が指しているのはモデルではなく**パソコン**です。答えたパソコンが、そのパソコンの持っているモデルで動かします。`waired/local`は、このパソコンにエンジンがあってローカル推論がオンのときだけ出ます。`waired/public`は、Public Shareをオンにしたときだけ出ます。`waired/peer-<名前>`は、連携したときに推論を提供していて、200,704トークン以上のコンテキストウィンドウを持っていた自分のコンピュータ1台につき1つ出ます。
 
-項目が指しているパソコンが答えられないときは、黙って別の場所で動かさずに、理由を言って失敗します。Wairedがコンピュータを選ぶ項目、つまり`waired/default`、`waired/peer`、`waired/public`は、200,704トークンのコンテキストウィンドウを持つコンピュータだけを使います。`[1m]`付きの項目は、1,048,576トークンを持つコンピュータだけを使います。どのコンピュータも満たさない場合、ターンは失敗し、必要だったコンテキストウィンドウを表示します。この一覧はClaude Codeの`/model`に出るものと同じです。各行の意味は[Claude Codeのターンはどこで実行されるか](/ja/guides/claude-code/how-turns-are-routed/)を参照してください。
+項目が指しているパソコンが答えられないときは、黙って別の場所で動かさずに、理由を言って失敗します。どの項目も、`waired/local`と`waired/peer-<名前>`を含めて、200,704トークンのコンテキストウィンドウを持つコンピュータだけを使います。`[1m]`付きの項目は、1,048,576トークンを持つコンピュータだけを使います。どのコンピュータも満たさない場合、ターンは失敗し、必要だったコンテキストウィンドウを表示します。この一覧はClaude Codeの`/model`に出るものと同じです。各行の意味は[Claude Codeのターンはどこで実行されるか](/ja/guides/claude-code/how-turns-are-routed/)を参照してください。
 
 プラグインは、どのコンピュータでもよい項目を`waired/default`として表示します。この名前で書いた設定はそのまま使えます。送信するときは、Claude Codeが送るのと同じidである`waired`として送ります。`waired/default[1m]`は`waired[1m]`として送ります。上の200kと1Mの条件を運ぶのはこれらのidです。
 
@@ -68,9 +68,9 @@ APIキーも環境変数も使いません。WairedはOpenClawを自分のパソ
 
 ## <a id="how-much-context-openclaw-is-told-about"></a>OpenClawに伝えるコンテキストの長さ
 
-プラグインは、Wairedの項目ごとにコンテキストウィンドウを記録します。これにより、OpenClawは項目が示すウィンドウに達する前に会話を要約し、それより早くは要約しません。`waired/default`、`waired/peer`、`waired/public`は、Wairedがこれらの項目に求める200704トークンを示します。`[1m]`付きの項目は1048576を示します。`waired/local`はこのコンピュータ自身のコンテキストウィンドウ、`waired/peer-<名前>`は指定したコンピュータ自身のコンテキストウィンドウを示します。コンテキストウィンドウを示していないコンピュータには値が付かず、その項目ではOpenClawが自身の既定値を使います。
+プラグインは、Wairedの項目ごとにコンテキストウィンドウを記録します。これにより、OpenClawは項目が示すウィンドウに達する前に会話を要約し、それより早くは要約しません。値は項目の名前だけで決まります。`[1m]`付きの項目は1048576トークン、それ以外の項目は`waired/local`と`waired/peer-<名前>`を含めて200704を示します。これは、どのコンピュータが答えても、Wairedが項目に求めるコンテキストウィンドウです。
 
-項目は連携のときに書き込まれます。初回のセットアップ中はこのコンピュータがまだ推論を提供していないことが多く、その場合プラグインは`waired/default`だけで始まります。`waired init`、`waired link all`、`waired doctor --fix`は、名前かコンテキストウィンドウが変わった項目があるとき、またはプラグインを書いたのが古い版のWairedであるときにプラグインを更新し、そのことを表示します。
+項目は連携のときに書き込まれます。初回のセットアップ中はこのコンピュータがまだ推論を提供していないことが多く、その場合プラグインは`waired/default`だけで始まります。この項目も最初から200704を示します。`waired init`、`waired link all`、`waired doctor --fix`は、項目の一覧が変わったとき、またはプラグインを書いたのが古い版のWairedであるときにプラグインを更新し、そのことを表示します。
 
 ```
 Updated OpenClaw's list of Waired models and their context windows.
@@ -81,7 +81,6 @@ Updated OpenClaw's list of Waired models and their context windows.
 ```
 ! openclaw context window   the plugin was written by an older version of Waired
 ! openclaw context window   the plugin's list of Waired models is out of date
-! openclaw context window   the plugin declares no window for waired/default; Waired now gives it 200704 tokens
 ```
 
 `f`キーを押すと最新の内容に更新されます。

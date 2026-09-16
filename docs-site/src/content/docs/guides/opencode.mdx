@@ -37,9 +37,9 @@ Waired model.
 	| Model | Where the turn runs |
 	|---|---|
 	| `waired/default` (shown as **Waired**) | Any of your computers — Waired picks one with a 200k context window |
-	| `waired/local` (**Waired local**) | This computer |
+	| `waired/local` (**Waired local**) | This computer, if it has a 200k context window |
 	| `waired/peer` (**Waired peer**) | Another of your computers, never this one, with a 200k context window |
-	| `waired/peer-<name>` (**Waired peer: &lt;name&gt;**) | The computer you name |
+	| `waired/peer-<name>` (**Waired peer: &lt;name&gt;**) | The computer you name, if it has a 200k context window |
 	| `waired/public` (**Waired public share**) | Someone else's computer, with a 200k context window |
 	| `waired/default[1m]` and the other `[1m]` entries (**… (1M context)**) | The same, on a computer with a 1M context window. Listed while a computer that could answer the entry declares one |
 </Expected>
@@ -51,7 +51,8 @@ The entries name a **computer**, not a model: whichever computer answers runs
 the model it has. `waired/local` is offered only where this computer has an
 engine and local inference is on, and `waired/public` only where you have
 turned Public Share on. There is one `waired/peer-<name>` entry per computer
-of yours that is serving right now.
+of yours that is serving right now with a context window of at least 200,704
+tokens.
 
 If the computer an entry names cannot answer, the turn fails and says so
 rather than quietly running somewhere else.
@@ -105,21 +106,21 @@ request itself.
 
 ## Context windows
 
-The entries where Waired picks the computer, `waired/default`, `waired/peer`
-and `waired/public`, use only a computer whose context window holds 200,704
-tokens, and every `[1m]` entry only one that holds 1,048,576. A computer
-serving less, such as one where vLLM sized the window down to fit the GPU's
-VRAM, is not used for them. It still answers `waired/local` on itself and its
-own `waired/peer-<name>` entry, which ask nothing of the computer they name.
+Every entry uses only a computer whose context window holds 200,704 tokens,
+and every `[1m]` entry only one that holds 1,048,576. That includes
+`waired/local` and `waired/peer-<name>`. A computer serving less, such as one
+where vLLM sized the window down to fit the GPU's VRAM, answers none of the
+entries, not even `waired/local` on itself.
 
-Each entry states its window as `max_input_tokens` in the list at
-`http://127.0.0.1:9473/v1/models`, and OpenCode reads it at every start as
-the entry's `limit.context`, so it compacts the conversation before the
-window the entry states: 200704 on `waired/default`, `waired/peer` and
-`waired/public`, 1048576 on every `[1m]` entry, this computer's own window on
-`waired/local`, and the named computer's own on `waired/peer-<name>`. A
-computer that states no window gets no number, and OpenCode uses its own
-default for that entry.
+The plugin gives each entry its window as `limit.context`, taken from the
+entry's name alone: 1048576 on every `[1m]` entry and 200704 on every other
+one, including the `waired/default` entry the list falls back to when Waired
+is not running. OpenCode compacts the conversation before that window. The
+window does not depend on which computer answers. A turn on an entry without
+`[1m]` that grows past 200,704 tokens is answered `prompt is too long` even on
+a computer that holds 1M. The list at
+`http://127.0.0.1:9473/v1/models` states the same numbers as
+`max_input_tokens`.
 
 The plugin shows the any-computer entry as `waired/default`, so a config
 written against it keeps working, and sends it as `waired`, the id Claude
@@ -133,7 +134,7 @@ the error. It does not compact or retry, because the conversation's length is
 not the problem:
 
 ```
-None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this.
+None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs.
 ```
 
 ## What it changed

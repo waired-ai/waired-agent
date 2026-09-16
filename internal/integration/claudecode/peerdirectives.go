@@ -76,12 +76,10 @@ type PeerFact struct {
 	// twin offered where the node cannot keep it is a menu entry whose
 	// selection fails.
 	Window1M bool
-	// ContextWindow is the input window the peer's engine is loaded with, 0
-	// when it publishes none. A surface that states a window per row — the
-	// OpenAI-dialect /v1/models listing, and the coding-tool plugins that
-	// bake its numbers in — says the peer's own figure rather than this
-	// computer's, which is the whole difference between a compaction hint
-	// that fits and one that does not (waired-agent#1001).
+	// ContextWindow is the input window the peer declares, 0 when it
+	// publishes none. No row states it: every Waired row is a 200k or a 1M
+	// session whatever computer answers (waired-agent#1396). It rides here
+	// for the caller that decides whether the peer can take a row at all.
 	ContextWindow int
 }
 

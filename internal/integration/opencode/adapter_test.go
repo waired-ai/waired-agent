@@ -79,7 +79,7 @@ func TestApply_WritesPlugin(t *testing.T) {
 		"config.provider.waired",
 		`"@ai-sdk/openai-compatible"`,
 		`baseURL: "http://127.0.0.1:9473/v1"`,
-		`default: { id: "waired", name: "Waired" }`,
+		`default: { id: "waired", name: "Waired", limit: limitFor("default") }`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("plugin missing %q:\n%s", want, s)

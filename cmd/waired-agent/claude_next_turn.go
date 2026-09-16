@@ -8,6 +8,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // nextTurnForClaude answers the one question the Claude Code footer exists to
@@ -53,10 +54,7 @@ func (p *agentInferenceProvider) nextTurnForClaude(ctx context.Context) *managem
 	in.Recorder = nil
 	in.OnPublicNudge = nil
 	in.OnPublicGrantDemand = nil
-	cands, err := router.NewSelector(in).SelectK(ctx, router.Request{
-		Model: router.DefaultModelAlias,
-		Class: state.ClaudeClassMain,
-	}, 1)
+	cands, err := router.NewSelector(in).SelectK(ctx, nextTurnRequest(p.cfg.ClaudeModelRouteDirectives), 1)
 	if err != nil || len(cands) == 0 {
 		return nextTurnAfterFailure(err)
 	}
@@ -65,6 +63,31 @@ func (p *agentInferenceProvider) nextTurnForClaude(ctx context.Context) *managem
 		out.Peer = cands[0].PeerDisplayID
 	}
 	return out
+}
+
+// nextTurnRequest is the turn the footer asks about: a main-conversation turn
+// on a Waired row, with the window floor that row carries.
+//
+// The floor is 200704 because every Waired row without "[1m]" is a 200k
+// session and the computer that answers has to hold one (owner decision
+// 2026-09-16, waired-agent#1396). Without it the footer answered for a turn
+// that carried no floor, and showed green on a host whose only computers
+// declare less, while the very same turn was refused for its window — the
+// contradiction waired-agent#1129 was about, for a different filter. The
+// footer cannot know whether the session is a 1M one, so it asks the smaller
+// question; a 1M session refused for its window still says so on the turn.
+//
+// With the directives switched off Claude Code sends no Waired row, and no
+// floor applies.
+func nextTurnRequest(directives bool) router.Request {
+	req := router.Request{
+		Model: router.DefaultModelAlias,
+		Class: state.ClaudeClassMain,
+	}
+	if directives {
+		req.MinContextWindow = hostfit.ServingWindow200k
+	}
+	return req
 }
 
 // nextTurnAfterFailure renders a selection failure as the footer's segment.

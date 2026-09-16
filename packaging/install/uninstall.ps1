@@ -903,6 +903,7 @@ function Edit-ClaudeLeftovers {
                 $envChanged = $true
                 foreach ($pair in @(@('CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY', '1'),
                                     @('CLAUDE_CODE_AUTO_COMPACT_WINDOW', '200000'),
+                                    @('CLAUDE_CODE_MAX_CONTEXT_TOKENS', '200704'),
                                     @('CLAUDE_CODE_MAX_CONTEXT_TOKENS', '250000'))) {
                     $cur = $envBlock[$pair[0]]
                     if ($cur -is [string] -and $cur -ceq $pair[1]) {

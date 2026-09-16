@@ -25,8 +25,28 @@
 // the FIRST match in the file, and a comment carrying an example URL is the
 // one it would read.
 const BASE_URL = {{ .BaseURLLiteral }};
-const FALLBACK = { default: { id: "waired", name: "Waired" } };
 const DISCOVERY_TIMEOUT_MS = 2000;
+
+// The window OpenCode sizes a conversation to, and compacts against. Every
+// Waired row is one of two sessions, decided by its id and nothing else: a
+// "[1m]" row is CONTEXT_WINDOW_1M, and every other row is CONTEXT_WINDOW,
+// whichever computer answers it. The gateway makes the computer that answers
+// hold at least that many tokens and holds the turn to it (waired-agent#1396).
+//
+// OpenCode's config schema requires `output` beside `context`, and warns on
+// every start without it (waired-agent#1367). Nothing on this host states an
+// output figure, so 0: it is the value OpenCode itself stores when the key is
+// absent, and OpenCode reads it as "not stated" — its own default cap applies
+// either way. Measured on OpenCode 1.18.30: the same resolved model and the
+// same max_tokens with and without it.
+const CONTEXT_WINDOW = {{ .ContextWindowLiteral }};
+const CONTEXT_WINDOW_1M = {{ .ContextWindow1MLiteral }};
+function limitFor(key) {
+  const context = key.toLowerCase().includes("[1m]") ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW;
+  return { context, output: 0 };
+}
+
+const FALLBACK = { default: { id: "waired", name: "Waired", limit: limitFor("default") } };
 
 // The picker shows `waired/<key>`, and the model that leaves on the wire is
 // `id`. The key is the listed id minus its "waired/" head, so what a user
@@ -56,16 +76,12 @@ async function discover() {
     if (!m || !m.waired_route || !m.id) continue;
     const { key, wire } = rowIds(m.id);
     if (!key) continue;
-    // OpenCode's config schema requires `output` beside `context`, and warns
-    // on every start without it (waired-agent#1367). Nothing on this host
-    // states an output figure, so 0: it is the value OpenCode itself stores
-    // when the key is absent, and OpenCode reads it as "not stated" — its
-    // own default cap applies either way. Measured on OpenCode 1.18.30: the
-    // same resolved model and the same max_tokens with and without it.
+    // The window comes from the key, not from the listing's max_input_tokens,
+    // so a row reads the same whichever build of the daemon answered.
     models[key] = {
       id: wire,
       name: m.display_name || m.id,
-      ...(m.max_input_tokens > 0 ? { limit: { context: m.max_input_tokens, output: 0 } } : {}),
+      limit: limitFor(key),
     };
   }
   return Object.keys(models).length ? models : null;

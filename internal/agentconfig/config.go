@@ -1174,7 +1174,7 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 		"install-time choice: run a local inference engine on this node (read once at boot)")
 	fs.BoolVar(&c.Inference.ClaudeModelRouteDirectives, "inference-claude-model-route-directives",
 		c.Inference.ClaudeModelRouteDirectives,
-		"opt-in: expose Waired as /model entries that switch Claude Code's backend + set an honest local window (#52)")
+		"opt-in: expose Waired as /model entries that switch Claude Code's backend + set their 200704-token context window (#52, #1396)")
 	fs.IntVar(&c.Inference.ClaudeModelPeerEntries, "inference-claude-model-peer-entries",
 		c.Inference.ClaudeModelPeerEntries,
 		"how many per-computer rows the /model picker carries alongside the fixed entries (0 = none)")

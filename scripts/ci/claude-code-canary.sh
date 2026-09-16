@@ -24,8 +24,9 @@
 #      side of the contract is pinned by
 #      gateway.TestAnthropicMessages_OverflowMessageCarriesTheDocumentedToken.
 #   4. CLAUDE_CODE_MAX_CONTEXT_TOKENS — the per-session window override the
-#      model-route-directives opt-in (#52) writes so the non-"claude-" local
-#      /model id ("anthropic-waired-local") gets its real local window. It is
+#      model-route-directives opt-in (#52) writes so the Waired /model ids
+#      (none starts with "claude-" since waired-agent#1185) are 200704-token
+#      sessions (waired-agent#1396). It is
 #      honoured only for ids NOT starting with "claude-". If the knob
 #      disappears (or starts applying to "claude-*" ids), the directive
 #      window mechanism in internal/integration/claudemanaged must be

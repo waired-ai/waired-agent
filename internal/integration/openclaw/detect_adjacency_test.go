@@ -22,7 +22,7 @@ import (
 func TestRenderedPluginIsWhatTheReadersRead(t *testing.T) {
 	const base = "http://127.0.0.1:9473"
 	rows := pluginRows(nil)
-	body, err := renderEntry(base, 200704, rows)
+	body, err := renderEntry(base, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestRenderedPluginIsWhatTheReadersRead(t *testing.T) {
 // developer's machine cannot see it. Written here as a plain byte
 // substitution so the Linux run does.
 func TestReadersSurviveCRLFLineEndings(t *testing.T) {
-	body, err := renderEntry("http://127.0.0.1:9473", 200704, pluginRows(nil))
+	body, err := renderEntry("http://127.0.0.1:9473", pluginRows(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

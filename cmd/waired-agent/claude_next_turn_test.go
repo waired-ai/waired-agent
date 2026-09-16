@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // TestNextTurnReason pins the phrases the status-line segment prints inside
@@ -120,5 +122,25 @@ func TestNextTurnForClaude_BusyIsNotCannot(t *testing.T) {
 				t.Errorf("Where = %q, want empty: nothing was selected", got.Where)
 			}
 		})
+	}
+}
+
+// The footer asks about a turn on a Waired row, with the floor that row
+// carries: every row without "[1m]" is a 200k session, so a computer that holds
+// less cannot take the next turn, and the footer must not say it can.
+//
+// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+// waired-agent#1396. With the rows switched off Claude Code sends none, and no
+// floor applies.
+func TestNextTurnRequest(t *testing.T) {
+	on := nextTurnRequest(true)
+	if on.MinContextWindow != hostfit.ServingWindow200k {
+		t.Errorf("MinContextWindow = %d, want the 200k floor every row carries", on.MinContextWindow)
+	}
+	if on.Model != router.DefaultModelAlias || on.Class != state.ClaudeClassMain {
+		t.Errorf("request = %+v, want a main-conversation turn on the default alias", on)
+	}
+	if off := nextTurnRequest(false); off.MinContextWindow != 0 {
+		t.Errorf("MinContextWindow = %d with the rows off, want 0", off.MinContextWindow)
 	}
 }

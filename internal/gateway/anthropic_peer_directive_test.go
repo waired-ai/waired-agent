@@ -78,16 +78,17 @@ func TestAnthropicMessages_PeerDirectiveSurvivesTheModelRemap(t *testing.T) {
 }
 
 // A tier promise and a node choice are different questions about the same
-// id. An id that names ONE computer makes no window demand: naming a machine
-// and then refusing it for its window would refuse the very machine the
-// operator chose. The peer and public rows name a kind of computer and let
-// Waired choose which, so they carry the 200k floor the any-node row does
-// (owner decision 2026-09-16, waired-agent#1395).
+// id. Every Waired row carries the 200k floor, the ones naming one computer
+// included: every row without "[1m]" is a 200k session whichever computer
+// answers it, so the computer the operator named has to hold one too (owner
+// decision 2026-09-16, waired-agent#1396). It used to be that an id naming ONE
+// computer made no window demand (the owner ruling of 2026-08-20,
+// docs/decisions/20260820/0200-model-picker-can-name-a-node.md §4, and
+// waired-agent#1395).
 //
 // PIN: product contract. The rows name where the turn runs
 // (docs/decisions/20260828/0252-the-model-you-pick-is-where-the-turn-runs.md),
-// and the window rule is the owner ruling of 2026-08-20
-// (docs/decisions/20260820/0200-model-picker-can-name-a-node.md §4).
+// and the window rule is the owner decision of 2026-09-16.
 //
 // This test used to assert that ModelWairedLocal names NO node, which was the
 // defect waired-agent#1320: the local id carried no directive, an empty
@@ -95,13 +96,13 @@ func TestAnthropicMessages_PeerDirectiveSurvivesTheModelRemap(t *testing.T) {
 // row that says "This computer" was answered by a peer on a machine set to
 // peer-only. The ids that still name no node are the any-node row (Waired
 // chooses, which is what the row means) and the retired cloud id.
-func TestPeerDirectiveMakesNoWindowDemand(t *testing.T) {
+func TestEveryDirectiveMakesTheSameWindowDemand(t *testing.T) {
 	for _, tc := range []struct {
 		id   string
 		want int
 	}{
-		{ModelWairedLocal, 0},
-		{ModelWairedPeerPrefix + "linux-gpu", 0},
+		{ModelWairedLocal, hostfit.ServingWindow200k},
+		{ModelWairedPeerPrefix + "linux-gpu", hostfit.ServingWindow200k},
 		{ModelWairedPeer, hostfit.ServingWindow200k},
 		{ModelWairedPublic, hostfit.ServingWindow200k},
 	} {

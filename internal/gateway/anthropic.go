@@ -251,7 +251,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// peer and the one place that knows how long the peer took were
 	// different scopes.
 	rr.promptTokens = CountOpenAIPromptTokensApprox(encoded)
-	if win := effectiveContextWindow(h.deps, sel); win > 0 {
+	if win := guardedWindow(h.deps, sel, routeReq.MinContextWindow); win > 0 {
 		if n := rr.promptTokens; n > win {
 			rr.fail(http.StatusBadRequest, "context_overflow")
 			slog.Debug("anthropic context overflow",

@@ -198,22 +198,27 @@ Claude Code summarizes older turns to fit. The session keeps working instead
 of silently losing its beginning. If you briefly see “Prompt is too long”,
 Claude Code recovers on its own.
 
-If it summarizes much earlier or later than you expect, the limit passed to
-Claude Code may have fallen behind after a model switch:
+If it summarizes much earlier or later than you expect, check the limit
+Claude Code was given:
 
 ```sh
 waired claude status
 ```
 
-The **local window** line shows the limit your model handles now next to the
-one Claude Code was started with. If they disagree, run
-`sudo waired claude enable` again (Windows: from an administrator terminal),
-then restart Claude Code.
+The **context window** line shows 200704, the limit of every Waired row
+without `(1M context)`, next to the value in the machine-wide settings Claude
+Code starts with. When that value is `not set`, or an older number marked
+`stale`, Claude Code is working to the wrong limit:
 
-On a computer with no engine of its own, the line reads `none here` and gives
-the limit it takes from another computer instead. Nothing on this computer
-holds a conversation, so the smallest limit it can reach is the honest number.
-For details, see
+```
+context window:     200704  (managed settings: 262144 — stale; Claude Code is being told the wrong window; re-run `sudo waired claude enable`)
+```
+
+Run `sudo waired claude enable` again (Windows: `waired claude enable` from an
+administrator terminal), then restart Claude Code. The limit does not follow
+any computer's model, so switching models does not make it stale. The line is
+not shown when Claude Code is not routed through Waired on this computer, or
+when the Waired `/model` rows are switched off. For details, see
 [Long sessions get compacted](/guides/claude-code/how-turns-are-routed/#long-sessions-get-compacted).
 
 ## The status line does not show up in Claude Code

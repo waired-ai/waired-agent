@@ -13,6 +13,7 @@ import (
 	"text/template"
 
 	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 //go:embed templates/index.mjs.tmpl templates/openclaw.plugin.json templates/package.json
@@ -64,11 +65,21 @@ func providerBaseURL(gatewayBaseURL string) string {
 // pluginRow is one row as the plugin file carries it. The key is the wire id
 // minus its "waired/" head, because that is what OpenClaw hands
 // resolveDynamicModel and what the picker composes its reference from.
+//
+// It carries no window. A row's window follows from its key — 1M for a "[1m]"
+// key, 200k for every other — so the plugin works it out itself, for keys it
+// was never given too (waired-agent#1396). A plugin from before carries one
+// per row, which the reader ignores.
 type pluginRow struct {
-	Key           string `json:"key"`
-	Name          string `json:"name,omitempty"`
-	ContextWindow int    `json:"contextWindow,omitempty"`
+	Key  string `json:"key"`
+	Name string `json:"name,omitempty"`
 }
+
+// pluginContextWindow is CONTEXT_WINDOW in the template: the window of every
+// row without "[1m]" (owner decision 2026-09-16, waired-agent#1396). `waired
+// doctor` reads the line back to tell a current plugin from one an older build
+// wrote with a window of its own.
+const pluginContextWindow = hostfit.ServingWindow200k
 
 // pluginRows projects the gateway's route rows into what the template writes.
 //
@@ -85,7 +96,7 @@ func pluginRows(rows []modelrows.Row) []pluginRow {
 			// <provider>/<model>, so a key has to be the second segment.
 			continue
 		}
-		out = append(out, pluginRow{Key: key, Name: r.DisplayName, ContextWindow: r.ContextWindow})
+		out = append(out, pluginRow{Key: key, Name: r.DisplayName})
 	}
 	if len(out) == 0 {
 		out = append(out, pluginRow{Key: defaultModelKey, Name: "Waired"})
@@ -97,8 +108,9 @@ func pluginRows(rows []modelrows.Row) []pluginRow {
 // own logic. Raise it whenever what a written plugin DOES changes, so the
 // refresh after a link and `waired doctor` rewrite plugins that are still
 // correct row for row but behave the old way. 2: the any-computer row is sent
-// as "waired" (waired-agent#1395).
-const pluginRevision = 2
+// as "waired" (waired-agent#1395). 3: every row's window follows from its key,
+// 200704 or 1048576 (waired-agent#1396).
+const pluginRevision = 3
 
 // modelRefs is the set of picker references the adapter allowlists in
 // agents.defaults.models, derived from the same rows the plugin carries.
@@ -110,10 +122,9 @@ func modelRefs(rows []pluginRow) []string {
 	return out
 }
 
-// renderEntry produces the plugin index.mjs for the given gateway base URL,
-// context window and rows. A window of 0 means "not known" and renders a
-// plugin that declares no contextWindow of its own. Exposed for tests.
-func renderEntry(gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]byte, error) {
+// renderEntry produces the plugin index.mjs for the given gateway base URL and
+// rows. Exposed for tests.
+func renderEntry(gatewayBaseURL string, rows []pluginRow) ([]byte, error) {
 	tmpl, err := template.ParseFS(pluginTemplates, "templates/index.mjs.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("openclaw: parse plugin template: %w", err)
@@ -122,9 +133,6 @@ func renderEntry(gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]
 	baseLit, err := json.Marshal(providerBaseURL(gatewayBaseURL))
 	if err != nil {
 		return nil, err
-	}
-	if contextWindow < 0 {
-		contextWindow = 0
 	}
 	if len(rows) == 0 {
 		rows = pluginRows(nil)
@@ -137,10 +145,11 @@ func renderEntry(gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]
 	}
 	var buf bytes.Buffer
 	data := map[string]string{
-		"BaseURLLiteral":       string(baseLit),
-		"ContextWindowLiteral": strconv.Itoa(contextWindow),
-		"ModelsLiteral":        string(rowsLit),
-		"PluginRevLiteral":     strconv.Itoa(pluginRevision),
+		"BaseURLLiteral":         string(baseLit),
+		"ContextWindowLiteral":   strconv.Itoa(pluginContextWindow),
+		"ContextWindow1MLiteral": strconv.Itoa(hostfit.ServingWindow1M),
+		"ModelsLiteral":          string(rowsLit),
+		"PluginRevLiteral":       strconv.Itoa(pluginRevision),
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("openclaw: render plugin: %w", err)
@@ -151,13 +160,13 @@ func renderEntry(gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]
 // installPlugin renders + writes the three plugin files into
 // <home>/.openclaw/plugins/waired/. Returns the file paths (for the
 // ledger). Idempotent: existing files are overwritten via tmp+rename.
-func installPlugin(home, gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]string, error) {
+func installPlugin(home, gatewayBaseURL string, rows []pluginRow) ([]string, error) {
 	dir := PluginDir(home)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("openclaw: mkdir %s: %w", dir, err)
 	}
 
-	entry, err := renderEntry(gatewayBaseURL, contextWindow, rows)
+	entry, err := renderEntry(gatewayBaseURL, rows)
 	if err != nil {
 		return nil, err
 	}

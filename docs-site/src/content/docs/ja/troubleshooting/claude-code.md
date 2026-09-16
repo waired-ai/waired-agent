@@ -118,15 +118,19 @@ WindowsにWairedをインストールしてWSL2の中でClaude Codeを動かす�
 
 これは想定どおりの正常な動作です。ローカルのモデルはクラウドのモデルより一度に保持できる会話が短いので、WairedはClaude Codeに実際の上限を伝え、Claude Codeは収まるように古いターンを要約します。セッションは、冒頭を黙って失うのではなく動き続けます。一時的に「Prompt is too long」と表示されても、Claude Codeは自動で回復します。
 
-想定よりかなり早く、または遅く要約される場合は、モデルを切り替えたあとにClaude Codeへ伝えた上限が古くなっている可能性があります。
+想定よりかなり早く、または遅く要約される場合は、Claude Codeに伝えた上限を確認します。
 
 ```sh
 waired claude status
 ```
 
-**local window**の行に、いまのモデルが扱える上限と、Claude Codeの起動時に伝えた上限が並びます。食い違っていれば、`sudo waired claude enable`をもう一度実行し（Windowsでは管理者のターミナルで）、Claude Codeを再起動します。
+**context window**の行に、`(1M context)`の付かないWairedの行の上限である200704と、Claude Codeが起動時に読むコンピュータ全体の設定ファイルの値が並びます。設定の値が`not set`のとき、または`stale`の付いた古い数のときは、Claude Codeが違う上限で動いています。
 
-自分の推論エンジンを持たないパソコンでは、この行は`none here`と表示し、代わりにほかのパソコンから借りている上限を示します。このパソコンには会話を保持するものがないので、届く範囲でいちばん小さい上限が正直な数だからです。詳しくは[長いセッションは要約されます](/ja/guides/claude-code/how-turns-are-routed/#long-sessions-get-compacted)を参照してください。
+```
+context window:     200704  (managed settings: 262144 — stale; Claude Code is being told the wrong window; re-run `sudo waired claude enable`)
+```
+
+`sudo waired claude enable`をもう一度実行し（Windowsでは管理者のターミナルで`waired claude enable`）、Claude Codeを再起動します。この上限はどのコンピュータのモデルにも連動しないので、モデルを切り替えても古くなりません。このコンピュータでClaude CodeがWairedを経由していないとき、または`/model`のWairedの行をオフにしているときは、この行は表示されません。詳しくは[長いセッションは要約されます](/ja/guides/claude-code/how-turns-are-routed/#long-sessions-get-compacted)を参照してください。
 
 ## <a id="the-status-line-does-not-show-up-in-claude-code"></a>Claude Codeにステータス行が表示されない
 

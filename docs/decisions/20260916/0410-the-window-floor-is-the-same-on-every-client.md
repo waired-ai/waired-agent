@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md
 supersedes:
   - docs/decisions/20260906/0330-the-model-rows-are-published-through-modelpicker.md
   - docs/decisions/20260822/2116-plugins-declare-the-window-the-host-reports.md
@@ -12,6 +14,8 @@ supersedes:
 
 Accepted。オーナー決定(2026-09-16、waired-ai/waired-agent#1395)。
 次の 3 件を部分的に置き換える。
+
+決定 3 のうち `waired/local` と `waired/peer-<name>` に条件が無いこと、実装者の既定「`CLAUDE_CODE_MAX_CONTEXT_TOKENS` は今回触らない」、Consequences の `max_input_tokens` の値は、同じ日のオーナー決定(waired-ai/waired-agent#1396)で `docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md` に置き換えられた。どの行も 200,704 か 1,048,576 のセッションになる。
 
 - `docs/decisions/20260906/0330-the-model-rows-are-published-through-modelpicker.md` 決定 4 の「public 行に双子は無い」。
 - `docs/decisions/20260822/2116-plugins-declare-the-window-the-host-reports.md` の「プラグインはホストが申告したコンテキストウィンドウを書く」。コンピュータを名指さない行は、ホストの値ではなく行の条件を示す。

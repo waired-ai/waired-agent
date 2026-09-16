@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -120,30 +119,35 @@ func claudeBaseURL(stateDir string) (string, int) {
 }
 
 // claudeModelsTimeout bounds the /v1/models probe. Short on purpose: this runs
-// inside `waired claude enable` and `waired init`, where the agent is normally
-// up and answering in milliseconds — and where a down agent must cost a beat,
-// not a stall. A miss is not fatal (see claudeLocalContextWindow).
+// inside `waired claude enable`, `waired claude disable` and `waired init`,
+// where the agent is normally up and answering in milliseconds — and where a
+// down agent must cost a beat, not a stall. A miss is not fatal (see
+// claudePriorContextWindow).
 const claudeModelsTimeout = 2 * time.Second
 
-// claudeLocalContextWindow reports the input-token window local inference can
-// actually serve on this host, for WriteOptions.LocalContextWindow (#408).
+// claudePriorContextWindow is the CLAUDE_CODE_MAX_CONTEXT_TOKENS a build before
+// waired-agent#1396 would have written on this host: the window its engine
+// serves (#408), or the smallest one it can reach when it has no engine
+// (waired-agent#1246). Nothing writes it any more — every Waired row is a 200k
+// or a 1M session and the variable is 200704 on every host — but a file such a
+// build wrote still carries it, and a scrub has to recognise that value as
+// Waired's rather than an operator's (WriteOptions.PriorContextWindow).
 //
-// The number lives in the daemon (gateway Deps.ContextWindowFor = min of the
-// manifest's native window and the tuning the engine really applied), and the
-// gateway already publishes it: /v1/models stamps it as max_input_tokens on
-// every entry, including the local directive id. So the elevated CLI asks the
-// one surface that already answers this instead of growing a management route
-// for it. 0 means unknown — agent down, no active model, unknown sizing — and
-// the caller must then leave the managed-settings value alone.
-func claudeLocalContextWindow(stateDir string) int {
+// 0 means unknown: agent down, no active model, nothing reachable. The scrub
+// then recognises only the fixed values.
+func claudePriorContextWindow(stateDir string) int {
 	baseURL, _ := claudeBaseURL(stateDir)
-	return claudeLocalWindowAt(baseURL)
+	if w := claudeLocalWindowAt(baseURL); w > 0 {
+		return w
+	}
+	return claudeReachableContextWindow(defaultMgmtAddr)
 }
 
-// claudeLocalWindowAt is claudeLocalContextWindow against an explicit base URL,
-// so the fetch itself is testable against an httptest server rather than behind
-// a function seam that would leave the real implementation unexercised
-// (CLAUDE.md §Test discipline).
+// claudeLocalWindowAt is the window this host's engine serves, read from the
+// Claude listener's /v1/models at an explicit base URL, so the fetch itself is
+// testable against an httptest server rather than behind a function seam that
+// would leave the real implementation unexercised (CLAUDE.md §Test
+// discipline).
 func claudeLocalWindowAt(baseURL string) int {
 	cl := &http.Client{Timeout: claudeModelsTimeout}
 	resp, err := cl.Get(strings.TrimRight(baseURL, "/") + "/v1/models")
@@ -166,10 +170,16 @@ func claudeLocalWindowAt(baseURL string) int {
 // without bound into an elevated process.
 const claudeModelsMaxBody = 1 << 20
 
-// claudeLocalWindowFromModels picks the local directive id's max_input_tokens
+// claudePriorWindowModelID is the listing entry that still states this
+// computer's own window. Older builds read it off the local row, which states
+// 200704 now like every Waired row (waired-agent#1396); the "caller named no
+// model" alias is stamped from the same source that row used to be.
+const claudePriorWindowModelID = "waired/default"
+
+// claudeLocalWindowFromModels picks claudePriorWindowModelID's max_input_tokens
 // out of an Anthropic /v1/models body. Every malformed, missing or zero case
-// collapses to 0 = unknown: this decides what an elevated process tells Claude
-// Code about a window, so guessing is worse than declining.
+// collapses to 0 = unknown: this decides which value an elevated process
+// removes from a machine-wide file, so guessing is worse than declining.
 func claudeLocalWindowFromModels(body []byte) int {
 	var doc struct {
 		Data []struct {
@@ -181,7 +191,7 @@ func claudeLocalWindowFromModels(body []byte) int {
 		return 0
 	}
 	for _, m := range doc.Data {
-		if m.ID == claudecode.DirectiveModelLocal && m.MaxInputTokens > 0 {
+		if m.ID == claudePriorWindowModelID && m.MaxInputTokens > 0 {
 			return m.MaxInputTokens
 		}
 	}
@@ -189,43 +199,41 @@ func claudeLocalWindowFromModels(body []byte) int {
 }
 
 // claudeManagedWriteOptions resolves the managed-settings write options from
-// agent.json — the model-route-directives opt-in (#52) — plus the window local
-// inference actually serves (#408), which sizes CLAUDE_CODE_MAX_CONTEXT_TOKENS
-// for the local /model directive id.
+// agent.json — the model-route-directives opt-in (#52) and the per-computer row
+// count.
 //
-// The window is probed even when directives are OFF: the feature-off scrub
-// recognises waired's value by matching it, so it has to know what this host
-// would have written.
+// The prior window is asked for only when directives are OFF: that is the one
+// case Write removes a value rather than writing 200704, and the scrub
+// recognises an older build's value by matching it. With directives on the
+// write needs nothing from the agent, so it works before anything serves.
 func claudeManagedWriteOptions(stateDir string) claudemanaged.WriteOptions {
-	c := agentconfig.Defaults()
-	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
-	local := claudeLocalContextWindow(stateDir)
+	c := claudeAgentConfig(stateDir)
 	opts := claudemanaged.WriteOptions{
 		ModelRouteDirectives: c.Inference.ClaudeModelRouteDirectives,
-		LocalContextWindow:   local,
 		ModelPeerEntries:     c.Inference.ClaudeModelPeerEntries,
 	}
-	// Only when there is no engine here. A host that serves already has the
-	// exact number for the row most people use, and reading the mesh for a
-	// fallback it would not use is a round trip for nothing.
-	if local == 0 {
-		opts.PeerContextWindow = claudeReachableContextWindow(defaultMgmtAddr)
+	if !opts.ModelRouteDirectives {
+		opts.PriorContextWindow = claudePriorContextWindow(stateDir)
 	}
 	return opts
 }
 
+// claudeAgentConfig is agent.json over the built-in defaults, the source of
+// every Claude Code toggle above.
+func claudeAgentConfig(stateDir string) agentconfig.Config {
+	c := agentconfig.Defaults()
+	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
+	return c
+}
+
 // claudeReachableContextWindow is the SMALLEST input-token window among the
-// computers this one can currently reach, or 0 when it can reach none
-// (waired-agent#1246).
+// computers this one can currently reach, or 0 when it can reach none — the
+// number a build between waired-agent#1246 and #1396 wrote on a computer with
+// no engine of its own.
 //
-// Smallest, because this number sizes one session and the rows it covers are
-// several computers: declaring more than the smallest means a turn is
-// compacted only after the gateway has already refused it, which is the one
-// outcome the variable exists to avoid.
-//
-// Every failure collapses to 0 and writes nothing, the same rule
-// claudeLocalWindowFromModels follows: this decides what an elevated process
-// tells Claude Code about a window, so declining beats guessing.
+// Every failure collapses to 0, the same rule claudeLocalWindowFromModels
+// follows: this decides which value an elevated process removes, so declining
+// beats guessing.
 func claudeReachableContextWindow(mgmtAddr string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), pickerMeshTimeout)
 	defer cancel()
@@ -312,29 +320,24 @@ func managedRemoveIsFatal(err error) bool {
 // leftoverContextWindow returns the CLAUDE_CODE_MAX_CONTEXT_TOKENS a scrub
 // has just left behind, or "" when nothing was left.
 //
-// Only when the window was unknown: with a known window the scrub either
+// Only when the prior window was unknown: with a known one the scrub either
 // recognised the value as ours and removed it, or recognised it as an
-// operator's and kept it on purpose (waired-agent#1174).
-func leftoverContextWindow(window int) string {
-	if window > 0 {
+// operator's and kept it on purpose (waired-agent#1174). The value this build
+// writes is recognised either way.
+func leftoverContextWindow(prior int) string {
+	if prior > 0 {
 		return ""
 	}
 	return claudemanaged.MaxContextTokensAt(claudemanaged.Path())
 }
 
 func runClaudeDisable(stateDir string) error {
-	// The window lets the scrub recognise a host-derived
-	// CLAUDE_CODE_MAX_CONTEXT_TOKENS as ours (#408). Best-effort by design:
-	// disable frequently runs with the agent already stopped, and a 0 here
-	// only means one inert key may survive — see RemoveOptions.
-	opts := claudemanaged.RemoveOptions{LocalContextWindow: claudeLocalContextWindow(stateDir)}
-	if opts.LocalContextWindow == 0 {
-		// The engine-less host wrote a reachable window rather than none
-		// (waired-agent#1246), so the scrub has to be able to recognise that
-		// number too.
-		opts.PeerContextWindow = claudeReachableContextWindow(defaultMgmtAddr)
-	}
-	window := opts.DeclaredContextWindow()
+	// The prior window lets the scrub recognise a value an older build derived
+	// on this host as ours. Best-effort by design: disable frequently runs
+	// with the agent already stopped, and a 0 here only means such a value may
+	// survive — see RemoveOptions.
+	opts := claudemanaged.RemoveOptions{PriorContextWindow: claudePriorContextWindow(stateDir)}
+	window := opts.PriorContextWindow
 	removed, err := claudemanaged.RemoveWithOptions(opts)
 	// waired-agent#1174: with the window unknown the scrub cannot tell our
 	// own value from an operator's, so it keeps it — and the file is
@@ -391,55 +394,30 @@ func runClaudeDisable(stateDir string) error {
 // claudeWindowStatusLine renders the `waired claude status` line comparing the
 // context window Claude Code will be STARTED with (the managed-settings
 // CLAUDE_CODE_MAX_CONTEXT_TOKENS, frozen at its process start) against the one
-// local inference actually serves right now.
+// every Waired row without "[1m]" is: 200704, whichever computer answers
+// (waired-agent#1396).
 //
-// The two can legitimately disagree: only an elevated process may write managed
-// settings (docs/decisions/20260728/1444-…, waired#935), so changing the serving
-// model leaves the value behind until the next `waired claude enable` / init.
-// Before #408 the value was a static 250000 and the disagreement was permanent
-// AND invisible. It stays visible here until waired#1031 fixes the window as an
-// advertised contract and the drift stops existing.
+// It used to compare against the window this computer's engine served, and
+// report the value stale whenever the model changed. The value no longer
+// follows any computer, so the only way it can be wrong is a file written by
+// an older build, or never written — and both are fixed the same way.
 //
-// reachable is the window this host would declare when it has no engine of its
-// own — the smallest one it can reach (waired-agent#1246). Without it this line
-// reported "unknown (agent not answering)" on a perfectly healthy engine-less
-// host, which is both a false diagnosis and a different number from the one
-// `waired claude enable` writes there.
-//
-// Returns "" when neither number is known — an un-routed host has nothing to
-// say here, and a status command should not manufacture a line to fill.
-func claudeWindowStatusLine(goos, managed string, live, reachable int) string {
-	const label = "local window:      "
+// Returns "" when there is nothing to say: Claude Code is not routed here, or
+// the Waired rows are switched off, so no value is expected.
+func claudeWindowStatusLine(goos, managed string, routed, directives bool) string {
+	const label = "context window:    "
+	want := claudemanaged.DirectivesMaxContextTokensValue
 	fix := fmt.Sprintf("re-run `%s`", elevatedCmdline(goos, "waired claude enable"))
-	if live <= 0 && reachable > 0 {
-		// The label stays "local window" because that is what the line is
-		// called on every other host and in the docs; the value says where
-		// the number came from, which is the part that differs.
-		got := fmt.Sprintf("%s none here — %d from another computer", label, reachable)
-		switch {
-		case managed == "":
-			return got + "  (managed settings: not set)"
-		case managed == strconv.Itoa(reachable):
-			return got + fmt.Sprintf("  (managed settings: %s)", managed)
-		default:
-			return got + fmt.Sprintf("  (managed settings: %s — stale; Claude Code is being told the wrong window; %s)",
-				managed, fix)
-		}
-	}
 	switch {
-	case live <= 0 && managed == "":
+	case !routed || !directives:
 		return ""
-	case live <= 0:
-		// Can't verify: report what Claude Code will use and say why we cannot
-		// vouch for it, rather than implying agreement.
-		return fmt.Sprintf("%s unknown (agent not answering)  (managed settings: %s)", label, managed)
+	case managed == want:
+		return fmt.Sprintf("%s %s  (managed settings: %s)", label, want, managed)
 	case managed == "":
-		return fmt.Sprintf("%s %d  (managed settings: not set)", label, live)
-	case managed == strconv.Itoa(live):
-		return fmt.Sprintf("%s %d  (managed settings: %s)", label, live, managed)
+		return fmt.Sprintf("%s %s  (managed settings: not set; %s)", label, want, fix)
 	default:
-		return fmt.Sprintf("%s %d  (managed settings: %s — stale; Claude Code is being told the wrong window; %s)",
-			label, live, managed, fix)
+		return fmt.Sprintf("%s %s  (managed settings: %s — stale; Claude Code is being told the wrong window; %s)",
+			label, want, managed, fix)
 	}
 }
 
@@ -513,16 +491,8 @@ func runClaudeStatus(stateDir string) error {
 	}
 	fmt.Fprintf(stdout, "expected base URL:  %s\n", baseURL)
 	fmt.Fprintf(stdout, "gateway listener:   127.0.0.1:%d (%s)\n", port, listenerLabel(port))
-	// The reachable window is only resolved when there is no local one, the
-	// same order `waired claude enable` writes in — otherwise status would
-	// pay for a mesh read on every host that does not need it.
-	live := claudeLocalContextWindow(stateDir)
-	reachable := 0
-	if live == 0 {
-		reachable = claudeReachableContextWindow(defaultMgmtAddr)
-	}
-	if line := claudeWindowStatusLine(runtime.GOOS,
-		claudemanaged.MaxContextTokensAt(path), live, reachable); line != "" {
+	if line := claudeWindowStatusLine(runtime.GOOS, claudemanaged.MaxContextTokensAt(path),
+		present && current == baseURL, claudeAgentConfig(stateDir).Inference.ClaudeModelRouteDirectives); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
 	fmt.Fprint(stdout, claudeRefreshHookStatusRows(runtime.GOOS, claudemanaged.RefreshHookCommandAt(path)))
