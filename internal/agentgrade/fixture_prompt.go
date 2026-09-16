@@ -1,6 +1,9 @@
 package agentgrade
 
-import _ "embed"
+import (
+	_ "embed"
+	"strings"
+)
 
 // fixtureProjectContext is the session context the probe carries: the
 // kind of accumulated material a coding agent has in hand by the time
@@ -21,8 +24,22 @@ import _ "embed"
 // current source, and that is fine — it is bulk realistic context, not
 // documentation.
 //
+// Line endings are normalised to LF. A Windows checkout with
+// core.autocrlf rewrites the embedded file to CRLF, which changed both
+// the text a model is graded on and FixtureRevision: a probe built that
+// way measured flash-next as failing under revision 1b23db451452 while
+// the same model passed 36 of 36 trials on the committed fixture
+// (2004661dc908) (waired-agent#1371).
+var fixtureProjectContext = normalizeFixtureLineEndings(fixtureProjectContextFile)
+
 //go:embed testdata/session-context.md
-var fixtureProjectContext string
+var fixtureProjectContextFile string
+
+// normalizeFixtureLineEndings turns CRLF into LF, so a fixture reads the
+// same whichever OS checked the repository out.
+func normalizeFixtureLineEndings(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
+}
 
 // fixtureSystemPrompt is the probe's system prompt: a coding-agent
 // system prompt of realistic size and register, authored here.

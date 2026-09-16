@@ -1004,13 +1004,14 @@
           },
           "trials": 12,
           "engine": "ollama",
-          "engine_version": "0.33.3",
+          "engine_version": "0.34.0",
           "engine_tag": "frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "3bf816378e7c",
+          "agent_revision": "81045a2596a2",
           "transport": "unary",
           "host": "amd-unified-128gb",
-          "retrieved": "2026-09-06"
+          "retrieved": "2026-09-17",
+          "notes": "re-measured on ollama 0.34.0 after waired-agent#1371; the stream transport at 12 trials also passed 12/12 on every case"
         }
       }
     }
