@@ -178,6 +178,8 @@ function global:Stub-InvokeWebRequest {
 }
 
 Set-Alias -Name Test-Admin         -Value Stub-TestAdmin         -Scope Global
+# uninstall.ps1's name for the same question (waired-agent#1409).
+Set-Alias -Name Test-IsAdmin       -Value Stub-TestAdmin         -Scope Global
 Set-Alias -Name Detect-Platform    -Value Stub-DetectPlatform    -Scope Global
 Set-Alias -Name Get-Service        -Value Stub-GetService        -Scope Global
 Set-Alias -Name Start-Process      -Value Stub-StartProcess      -Scope Global
@@ -741,6 +743,33 @@ Set-ClaudeLeftovers -Remove
 Invoke-Case -Label '#1398 a clean host still says nothing would be removed' `
     -Params @{ DryRun = $true; Yes = $true } -Env @{ IT_INSTALL_PS1 = $UninstallPs1 } `
     -Assert @('Nothing would be removed', '!left behind', '!still has Waired')
+
+# 14e. #1409 -- a standard user says No to UAC. The per-user steps have already
+#      run by then, so the script says Waired is still installed and how to
+#      finish, instead of the trap's "uninstall failed:". The stub throws the
+#      exception shape the real Start-Process does.
+Invoke-Case -Label '#1409 a declined UAC prompt says Waired is still installed and how to finish' `
+    -Params @{ Yes = $true } -Env @{ IT_INSTALL_PS1 = $UninstallPs1; IT_ELEVATE_THROW = '1' } `
+    -Expect nonzero `
+    -Assert @('Requesting administrator rights',
+              'Warning: The Administrator step didn''t start, so Waired is still installed\.',
+              'Windows reported: This command cannot be run due to the error: The operation was canceled by the user\.',
+              'The steps for your own user account already ran\.',
+              'Re-run and choose Yes, or open an Administrator PowerShell and run this uninstaller there\.',
+              '!uninstall failed:',
+              '!Uninstall finished in the Administrator window')
+
+# 14f. #1407 -- a warning that leaves a settings file for a hand fix isn't
+#      followed by "Nothing would be removed".
+Set-ClaudeLeftovers -Remove
+New-Item -ItemType Directory -Path (Split-Path -Parent $claudeManaged) -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $claudeCorpus 'managed/11-malformed/input.json') -Destination $claudeManaged
+Invoke-Case -Label '#1407 a dry run that only warns about a settings file does not say nothing would be removed' `
+    -Params @{ DryRun = $true; Yes = $true } -Env @{ IT_INSTALL_PS1 = $UninstallPs1 } `
+    -Assert @('managed-settings\.json isn''t JSON the uninstaller can read',
+              'Nothing would be removed, but a file named above may still have Waired''s settings\.',
+              '!Nothing would be removed: Waired')
+Set-ClaudeLeftovers -Remove
 
 } finally {
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue

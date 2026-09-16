@@ -67,6 +67,14 @@ Wairedアプリが開いている場合は、アンインストーラが先に�
 [waired] Waired removed. Local config and state were kept; re-run with --clean to wipe them.
 ```
 
+Windowsでは、まず自分の設定を片付けてから管理者権限を求めます。**いいえ**を選ぶと、次の表示で止まります。
+
+```
+[waired] Warning: The Administrator step didn't start, so Waired is still installed.
+```
+
+Wairedは動いたままです。コマンドをもう一度実行し、**はい**を選んでください。
+
 <Aside type="tip" title="何が行われるかを先に確認する">
 	`--dry-run`（Windowsでは`-DryRun`）を付けると、アンインストーラは何も変えずにすべての手順を表示します。
 </Aside>
@@ -128,13 +136,31 @@ API Error: Connection refused — a firewall or proxy may be blocking it (Connec
 
 アンインストーラは、ステータス行や`/model`のWairedの行など、自分のClaude Codeの設定も片付けますが、対象は実行したユーザーの分だけです。GNOME SoftwareなどのソフトウェアセンターやrootのシェルからWairedを消した場合は、rootではなく、Claude Codeを使っているユーザー自身でアンインストールコマンドを実行してください。Wairedはほかのユーザーのホームフォルダを見に行きません。
 
-Linuxでは、アンインストーラが設定ファイルを編集するのに`python3`が必要です。無い場合はファイルに触れず、次の警告を表示します。
+Linuxでは、アンインストーラは`python3`で設定ファイルを編集します。`python3`が無くても、managed settingsのファイルがWairedの書いた形(1行に1つの設定)のままなら、Claude Codeを失敗させる設定はそのファイルから削除します。Wairedのフックはファイルに残りますが、Wairedが無くなれば何もしません。このとき次の警告を表示します。
 
 ```
-[waired] Warning: /etc/claude-code/managed-settings.json may still point Claude Code at Waired, and there's no python3 on this computer to check it. Remove Waired's settings from it by hand.
+[waired] Warning: Left Waired's hooks (SessionStart) in /etc/claude-code/managed-settings.json. Without python3 the uninstaller couldn't take them out, but they do nothing now that waired is gone. To remove them by hand, delete each hook whose command contains 'waired claude'.
 ```
 
-手で直すには、管理者としてファイルを開き、2つを削除します。値が`http://127.0.0.1:`で始まる`ANTHROPIC_BASE_URL`と、コマンドに`waired claude`を含むフックです。ファイルのほかの内容はそのまま残し、Claude Codeを再起動します。
+managed settingsのファイルがほかの形で書かれている場合は、変更せずに残します。
+
+```
+[waired] Warning: /etc/claude-code/managed-settings.json may still point Claude Code at Waired. There's no python3 on this computer, and the file isn't laid out the way Waired wrote it, so the uninstaller left it unchanged. Remove Waired's settings from it by hand.
+```
+
+`python3`が無い場合、自分の`~/.claude/settings.json`も変更せず、そのファイルを警告で示します。どちらの場合も、アンインストーラは最後に次のように表示します。
+
+```
+[waired] A file named above may still have Waired's settings. Remove them by hand, then restart Claude Code.
+```
+
+managed settingsのファイルを手で直すには、管理者としてファイルを開き、次を削除します。ほかの内容はそのまま残します。
+
+- 値が`http://127.0.0.1:`で始まる`ANTHROPIC_BASE_URL`
+- 値が`waired/subagent`の`CLAUDE_CODE_SUBAGENT_MODEL`
+- コマンドに`waired claude`を含むフック
+
+自分の`~/.claude/settings.json`では、コマンドが`waired`を実行する`statusLine`と、Wairedのモデルを指す`modelPicker`・`model`・`env.CLAUDE_CODE_SUBAGENT_MODEL`を削除します。`model`を削除するか`/model`でほかのモデルを選ぶまで、Claude CodeはWairedのモデルを使おうとし、そのリクエストは失敗します。最後にClaude Codeを再起動します。
 
 | | managed settingsのファイル |
 |---|---|

@@ -354,6 +354,13 @@ func Write(baseURL string) (string, error) {
 
 // WriteWithOptions is Write with the caller's resolved feature toggles (#52).
 func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
+	return writeWithOptionsFor(runtime.GOOS, baseURL, opts)
+}
+
+// writeWithOptionsFor is WriteWithOptions for goos, which decides the hook
+// command's shape. The seam lets a test on any OS produce the bytes a Linux
+// host gets, which the awk copy in uninstall.sh has to read (waired-agent#1407).
+func writeWithOptionsFor(goos, baseURL string, opts WriteOptions) (string, error) {
 	path := resolvePath()
 	if path == "" {
 		return "", ErrUnsupportedOS
@@ -440,7 +447,7 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	// path removes the file instead, so a hook rewriting it would be
 	// maintaining something nothing offers.
 	if opts.ModelRouteDirectives {
-		ensureRefreshHook(runtime.GOOS, obj, opts.ModelPeerEntries)
+		ensureRefreshHook(goos, obj, opts.ModelPeerEntries)
 	} else {
 		removeRefreshHook(obj)
 	}

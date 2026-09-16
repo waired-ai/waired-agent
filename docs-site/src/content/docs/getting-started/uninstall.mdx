@@ -74,6 +74,15 @@ At the end it says:
 [waired] Waired removed. Local config and state were kept; re-run with --clean to wipe them.
 ```
 
+On Windows, the command removes your own settings first and then asks for
+Administrator rights. If you choose **No**, it stops with:
+
+```
+[waired] Warning: The Administrator step didn't start, so Waired is still installed.
+```
+
+Waired keeps running. Run the command again and choose **Yes**.
+
 <Aside type="tip" title="See what it would do first">
 	Add `--dry-run` (`-DryRun` on Windows). The uninstaller prints every step
 	without changing anything.
@@ -158,17 +167,41 @@ from a root shell, run the uninstall command yourself, as the user who uses
 Claude Code and not as root: Waired does not go through other users' home
 folders.
 
-On Linux, the uninstaller needs `python3` to edit the settings file. Without
-it, the file is left alone and the uninstaller warns:
+On Linux, the uninstaller edits the settings files with `python3`. Without
+it, the uninstaller still removes the settings that make Claude Code fail from
+the managed settings file, as long as the file has one setting per line, the
+way Waired writes it. It leaves Waired's hooks in the file, which do nothing
+once Waired is gone, and warns:
 
 ```
-[waired] Warning: /etc/claude-code/managed-settings.json may still point Claude Code at Waired, and there's no python3 on this computer to check it. Remove Waired's settings from it by hand.
+[waired] Warning: Left Waired's hooks (SessionStart) in /etc/claude-code/managed-settings.json. Without python3 the uninstaller couldn't take them out, but they do nothing now that waired is gone. To remove them by hand, delete each hook whose command contains 'waired claude'.
 ```
 
-To fix it by hand, open the file as an administrator and remove two things:
-`ANTHROPIC_BASE_URL` if its value starts with `http://127.0.0.1:`, and any
-hook whose command contains `waired claude`. Leave everything else in the
-file as it is, then restart Claude Code.
+A managed settings file laid out any other way is left unchanged:
+
+```
+[waired] Warning: /etc/claude-code/managed-settings.json may still point Claude Code at Waired. There's no python3 on this computer, and the file isn't laid out the way Waired wrote it, so the uninstaller left it unchanged. Remove Waired's settings from it by hand.
+```
+
+Without `python3`, your own `~/.claude/settings.json` is left unchanged too,
+with a warning that names it. In both cases the uninstaller ends with:
+
+```
+[waired] A file named above may still have Waired's settings. Remove them by hand, then restart Claude Code.
+```
+
+To fix the managed settings file by hand, open it as an administrator and
+remove these, leaving everything else as it is:
+
+- `ANTHROPIC_BASE_URL`, if its value starts with `http://127.0.0.1:`
+- `CLAUDE_CODE_SUBAGENT_MODEL`, if its value is `waired/subagent`
+- any hook whose command contains `waired claude`
+
+In your own `~/.claude/settings.json`, remove `statusLine` if its command runs
+`waired`, and `modelPicker`, `model` and `env.CLAUDE_CODE_SUBAGENT_MODEL` if
+they name a Waired model. Until `model` is removed, or you pick another model
+in `/model`, Claude Code keeps asking for the Waired model and its requests
+fail. Then restart Claude Code.
 
 | | Managed settings file |
 |---|---|

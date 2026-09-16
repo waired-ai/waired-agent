@@ -1,6 +1,7 @@
 package claudemanaged
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -79,6 +80,46 @@ func TestUninstallScriptsKnowEveryManagedOwnershipLiteral(t *testing.T) {
 		if !strings.Contains(corpus, lit) {
 			t.Errorf("no managed corpus case carries %q; add one to packaging/install/testdata/claude-leftovers/managed", lit)
 		}
+	}
+}
+
+// TestManagedCorpusHoldsTodaysLinuxWriterBytes keeps one managed case byte for
+// byte what WriteWithOptions writes on a Linux host with the /model directives
+// on: sorted keys, two-space indent, and ">" and "&" in the hook command
+// escaped as \u003e and \u0026. The hand-written cases spell those
+// characters out, and the awk copy in uninstall.sh reads files line by line
+// (waired-agent#1407), so without this case nothing would show that it reads
+// what Go really writes. WAIRED_UPDATE_CORPUS=1 rewrites the case.
+//
+// PIN: record of today's behaviour -- the writer's output on 2026-09-16.
+func TestManagedCorpusHoldsTodaysLinuxWriterBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed-settings.json")
+	restore := SwapPathForTest(path)
+	defer restore()
+	if _, err := writeWithOptionsFor("linux", "http://127.0.0.1:9472", WriteOptions{
+		ModelRouteDirectives: true, LocalContextWindow: 200704, ModelPeerEntries: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, file, _, _ := runtime.Caller(0)
+	casePath := filepath.Join(filepath.Dir(file), "..", "..", "..", "packaging", "install", "testdata",
+		"claude-leftovers", "managed", "24-linux-writer-bytes", "input.json")
+	if os.Getenv("WAIRED_UPDATE_CORPUS") == "1" {
+		if err := os.WriteFile(casePath, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(casePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s no longer matches what Write produces for Linux; rerun with WAIRED_UPDATE_CORPUS=1 and update its expected file.\n got:\n%s\nwant:\n%s", casePath, got, want)
 	}
 }
 

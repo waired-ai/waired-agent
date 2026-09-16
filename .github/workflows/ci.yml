@@ -777,9 +777,12 @@ jobs:
       - uses: actions/checkout@v5
 
       # busybox is not preinstalled on the hosted image; without it
-      # installtest-dash.sh silently drops its `busybox sh` matrix leg.
-      - name: install busybox (third shell in the dash matrix)
-        run: sudo apt-get install -y busybox
+      # installtest-dash.sh silently drops its `busybox sh` matrix leg. gawk
+      # and busybox awk join the image's mawk for uninstall.sh's awk copy of
+      # the managed-settings rules (waired-agent#1407), which the harness
+      # runs under each awk it finds.
+      - name: install busybox and gawk (third shell, second and third awk)
+        run: sudo apt-get install -y busybox gawk
 
       - name: shellcheck installer scripts
         run: make install-script-lint

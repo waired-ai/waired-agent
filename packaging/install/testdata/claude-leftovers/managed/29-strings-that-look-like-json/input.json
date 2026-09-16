@@ -1,0 +1,11 @@
+{
+  "companyAnnouncements": [
+    "{ not an object",
+    "\"ANTHROPIC_BASE_URL\": \"http://127.0.0.1:9472\",",
+    "ends in a backslash \\"
+  ],
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472",
+    "TOOLS_DIR": "C:\\tools\\"
+  }
+}

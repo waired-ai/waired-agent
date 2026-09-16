@@ -339,6 +339,9 @@ $script:ContractBlocking = @{
     '793' = $true    # waired-agent#793: the uninstall summary describes what happened (FIXED)
     # Blocking from the start: the fix ships in the same PR.
     '1398' = $true   # waired-agent#1398: uninstall removes Claude Code's Waired settings when waired.exe is missing, refused, or old (FIXED)
+    # Blocking from the start: the fix ships in the same PR.
+    '1406' = $true   # waired-agent#1406: the GUI uninstaller unlinks OpenCode / OpenClaw (FIXED)
+    '1409' = $true   # waired-agent#1409: uninstall.ps1's un-elevated parent runs its per-user steps and reports a refused elevation (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -1793,6 +1796,10 @@ function Invoke-AsBasicToken {
 # same, so it lives here once.
 $AdminTestUser  = 'waired-it-admin'
 $StdIntTestUser = 'waired-it-stduser'
+# Its own name rather than $StdIntTestUser's: that account is deleted by arm 1,
+# and a new account under the same name gets a new SID over the old profile
+# folder (waired-agent#1409).
+$StdUninstallUser = 'waired-it-uninst'
 $script:ItUserPw = @{}
 
 function New-ItInteractiveUser {
@@ -1965,6 +1972,15 @@ function New-ItInstallerCopy {
     Copy-Item -LiteralPath (Join-Path $Root 'packaging\install\install.ps1') -Destination $dir -Force
     & icacls $dir /grant '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
     return (Join-Path $dir 'install.ps1')
+}
+
+# The uninstaller, staged the same way for a standard user (waired-agent#1409).
+function New-ItUninstallerCopy {
+    $dir = Join-Path $PubWork 'uninstaller'
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $Root 'packaging\install\uninstall.ps1') -Destination $dir -Force
+    & icacls $dir /grant '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    return (Join-Path $dir 'uninstall.ps1')
 }
 
 function Get-ItInstallerEnv {
@@ -4972,40 +4988,16 @@ if ($ExeVariant) {
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 
         ItStep "ExeVariant: uninstall (unins000.exe /VERYSILENT)"
+        # Invoke-InnoUninstall runs the GUI uninstaller silently and waits until
+        # it, the service and the install directory are gone.
+        #
         # Bounded by POLLING, not -Wait: the Inno uninstaller re-spawns itself
         # as a %TEMP% _iu*.tmp copy (the original exe exits early), and
         # PS 5.1's Start-Process -Wait waits on the whole descendant tree —
         # which is exactly what hung the first CI run for 28 min on the
         # (since fixed) unsuppressed wipe-state MsgBox in waired-setup.iss.
         # Completion signal = the service is unregistered.
-        $unins = Join-Path $InstallDir 'unins000.exe'
-        # (waired-agent#1398) The GUI uninstaller's own route to the leftover:
-        # [UninstallRun] runs `waired.exe claude disable`, and Inno ignores it
-        # when Windows won't start waired.exe. Make it unstartable (a non-PE
-        # file fails CreateProcess the way a Smart App Control refusal does)
-        # and plant what an enabled host carries, so the settings-only pass
-        # that follows it is the only thing that can remove them.
-        $exeLeftoverCorpus = Join-Path $Root 'packaging\install\testdata\claude-leftovers'
-        $exeManaged = Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'
-        $exeUserSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
-        New-Item -ItemType Directory -Path (Split-Path -Parent $exeManaged), (Split-Path -Parent $exeUserSettings) -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $exeLeftoverCorpus 'managed\01-windows-host-waired-gone\input.json') -Destination $exeManaged -Force
-        Copy-Item -LiteralPath (Join-Path $exeLeftoverCorpus 'user-settings\01-windows-host-waired-gone\input.json') -Destination $exeUserSettings -Force
-        Set-Content -LiteralPath (Join-Path $InstallDir 'waired.exe') -Encoding ascii -Value 'not a program'
-        if (Test-Path -LiteralPath $unins) {
-            Start-Process -FilePath $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' | Out-Null
-            $deadline = (Get-Date).AddSeconds(120)
-            while ((Get-Date) -lt $deadline -and (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
-                Start-Sleep -Milliseconds 500
-            }
-            if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "Inno uninstall completed (service unregistered)" }
-            else {
-                Get-Process -Name '_iu*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-                ItBad "Inno uninstall did not complete within 120s (uninstaller killed)"
-            }
-        } else {
-            ItBad "unins000.exe missing in $InstallDir"
-        }
+        #
         # Silent uninstalls keep the state dir by design (waired-setup.iss);
         # sweep the residue — the guest is disposable.
         #
@@ -5019,20 +5011,51 @@ if ($ExeVariant) {
         # So wait for the uninstaller to be gone, then sweep until the directory
         # is, and say so if it never is: those cases assert on an EMPTY install
         # directory and are worth nothing if they start from a dirty one.
-        for ($i = 0; $i -lt 60 -and (Get-Process -Name '_iu*' -ErrorAction SilentlyContinue); $i++) {
-            Start-Sleep -Milliseconds 500
+        function Invoke-InnoUninstall {
+            $unins = Join-Path $InstallDir 'unins000.exe'
+            if (Test-Path -LiteralPath $unins) {
+                Start-Process -FilePath $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' | Out-Null
+                $deadline = (Get-Date).AddSeconds(120)
+                while ((Get-Date) -lt $deadline -and (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+                    Start-Sleep -Milliseconds 500
+                }
+                if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "Inno uninstall completed (service unregistered)" }
+                else {
+                    Get-Process -Name '_iu*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                    ItBad "Inno uninstall did not complete within 120s (uninstaller killed)"
+                }
+            } else {
+                ItBad "unins000.exe missing in $InstallDir"
+            }
+            for ($i = 0; $i -lt 60 -and (Get-Process -Name '_iu*' -ErrorAction SilentlyContinue); $i++) {
+                Start-Sleep -Milliseconds 500
+            }
+            for ($i = 0; $i -lt 60; $i++) {
+                Remove-Item -LiteralPath $StateDir, $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path -LiteralPath $InstallDir)) { break }
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not (Test-Path -LiteralPath $InstallDir)) { ItOk "the install directory is gone after the Inno uninstall" }
+            else {
+                $residue = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue | Select-Object -Expand Name)
+                ItBad "$InstallDir survived the uninstall and 30s of sweeping: $($residue -join ', ')"
+            }
+            if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "service gone after Inno uninstall" } else { ItBad "service survived the Inno uninstall" }
         }
-        for ($i = 0; $i -lt 60; $i++) {
-            Remove-Item -LiteralPath $StateDir, $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
-            if (-not (Test-Path -LiteralPath $InstallDir)) { break }
-            Start-Sleep -Milliseconds 500
-        }
-        if (-not (Test-Path -LiteralPath $InstallDir)) { ItOk "the install directory is gone before the refusal cases" }
-        else {
-            $residue = @(Get-ChildItem -LiteralPath $InstallDir -Force -ErrorAction SilentlyContinue | Select-Object -Expand Name)
-            ItBad "$InstallDir survived the uninstall and 30s of sweeping: $($residue -join ', ')"
-        }
-        if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "service gone after Inno uninstall" } else { ItBad "service survived the Inno uninstall" }
+        # (waired-agent#1398) The GUI uninstaller's own route to the leftover:
+        # [UninstallRun] runs `waired.exe claude disable`, and Inno ignores it
+        # when Windows won't start waired.exe. Make it unstartable (a non-PE
+        # file fails CreateProcess the way a Smart App Control refusal does)
+        # and plant what an enabled host carries, so the settings-only pass
+        # that follows it is the only thing that can remove them.
+        $exeLeftoverCorpus = Join-Path $Root 'packaging\install\testdata\claude-leftovers'
+        $exeManaged = Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'
+        $exeUserSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $exeManaged), (Split-Path -Parent $exeUserSettings) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $exeLeftoverCorpus 'managed\01-windows-host-waired-gone\input.json') -Destination $exeManaged -Force
+        Copy-Item -LiteralPath (Join-Path $exeLeftoverCorpus 'user-settings\01-windows-host-waired-gone\input.json') -Destination $exeUserSettings -Force
+        Set-Content -LiteralPath (Join-Path $InstallDir 'waired.exe') -Encoding ascii -Value 'not a program'
+        Invoke-InnoUninstall
         # (waired-agent#1398) Checked after the uninstaller is gone, which the
         # loops above wait for.
         ItSoft '1398' (-not (Test-Path -LiteralPath $exeManaged)) `
@@ -5101,6 +5124,32 @@ if ($ExeVariant) {
                 Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\where.exe') `
                           -Destination (Join-Path $distDir 'waired-agent.exe') -Force
             })
+
+        # ---- the GUI uninstaller unlinks the coding tools (waired-agent#1406)
+        #
+        # uninstall.ps1 has always run `waired.exe unlink`; the GUI uninstaller
+        # ran `claude disable` and nothing for OpenCode or OpenClaw, so their
+        # Waired plugins outlived an uninstall that had a working waired.exe.
+        # The first uninstall above makes waired.exe unstartable on purpose, so
+        # this needs one of its own: the cases above leave the computer clean,
+        # and nothing after this section expects an install.
+        ItStep "ExeVariant: the GUI uninstaller unlinks OpenCode (waired-agent#1406)"
+        $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!claudeproxy', "/LOG=$Work\innosetup-unlink.log" -Wait -PassThru
+        if ($p.ExitCode -ne 0) {
+            ItBad "WairedSetup exited $($p.ExitCode) reinstalling for the unlink case (see $Work\innosetup-unlink.log)"
+        } else {
+            $ocPluginDir = Join-Path $env:USERPROFILE '.config\opencode\plugin'
+            New-Item -ItemType Directory -Path $ocPluginDir -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $ocPluginDir 'waired.js') -Encoding ascii `
+                -Value '// GENERATED by waired (`waired link opencode`). Planted by installtest-windows.ps1.'
+            Set-Content -LiteralPath (Join-Path $ocPluginDir 'mine.js') -Encoding ascii -Value '// a plugin of the user''s own'
+            Invoke-InnoUninstall
+            ItSoft '1406' (-not (Test-Path -LiteralPath (Join-Path $ocPluginDir 'waired.js'))) `
+                "the GUI uninstaller removed Waired's OpenCode plugin" 'waired-agent'
+            if (Test-Path -LiteralPath (Join-Path $ocPluginDir 'mine.js')) { ItOk "the GUI uninstaller left the user's own OpenCode plugin" }
+            else { ItBad "the GUI uninstaller removed a plugin that wasn't Waired's" }
+            Remove-Item -LiteralPath (Join-Path $env:USERPROFILE '.config\opencode') -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     catch {
         ItBad "ExeVariant threw: $($_.Exception.Message)"
@@ -5399,6 +5448,96 @@ function Show-Path([string]$v) {
         $agentExe = Join-Path $InstallDir 'waired-agent.exe'
         if (Test-Path -LiteralPath $agentExe) { ItOk "the elevated child wrote $agentExe" }
         else { ItBad "the elevated child left no binaries in $InstallDir" }
+
+        # --- arm 1c: uninstall.ps1's un-elevated parent (waired-agent#1409) ---
+        # Every other uninstall in this leg runs from this job, which is
+        # Administrator, so uninstall.ps1 took its already-admin arm and the
+        # per-user steps a real user's uninstall runs BEFORE asking for
+        # Administrator rights never ran un-elevated -- and never under Windows
+        # PowerShell 5.1, since the job is pwsh 7. That path is where 5.1 turned
+        # a native command's first stderr line into a terminating error and cut
+        # `waired.exe claude disable` short (#1398; Invoke-WairedExe since).
+        #
+        # A standard user with ConsentPromptBehaviorUser=0 runs it against the
+        # real install arm 1b just made: the per-user steps run, then UAC
+        # refuses the Administrator step without a human, and the machine-wide
+        # parts must still be there. Nested here so arm 1b's elevated teardown
+        # below still removes the install.
+        if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+            ItStep "uninstall as a standard user under Windows PowerShell 5.1: per-user steps, then a refused elevation (waired-agent#1409)"
+            New-ItInteractiveUser -Name $StdUninstallUser -Group Users
+            $prevUserUninst = Set-UacValue -Name 'ConsentPromptBehaviorUser' -Value 0
+            try {
+                # The environment first: its icacls is what lets the user delete
+                # the files this job plants under the profile-shaped paths.
+                $uEnv = New-ItInteractiveEnv -Name $StdUninstallUser -Base @{}
+                $uClaude = Join-Path $uEnv['USERPROFILE'] '.claude'
+                $uFallback = Join-Path $uEnv['LOCALAPPDATA'] 'waired\claude-fallback'
+                $uPluginDir = Join-Path $uEnv['USERPROFILE'] '.config\opencode\plugin'
+                $uCorpus = Join-Path $Root 'packaging\install\testdata\claude-leftovers'
+                New-Item -ItemType Directory -Path (Join-Path $uClaude 'skills\waired-doctor'), (Join-Path $uClaude 'cache'), `
+                    $uFallback, $uPluginDir -Force | Out-Null
+                Copy-Item -LiteralPath (Join-Path $uCorpus 'user-settings\02-everything-waired-wrote\input.json') -Destination (Join-Path $uClaude 'settings.json') -Force
+                Copy-Item -LiteralPath (Join-Path $uCorpus 'retired-cache\01-windows-host-waired-gone\input.json') -Destination (Join-Path $uClaude 'cache\gateway-models.json') -Force
+                Set-Content -LiteralPath (Join-Path $uClaude 'skills\waired-doctor\SKILL.md') -Encoding ascii -Value 'skill'
+                Set-Content -LiteralPath (Join-Path $uFallback 'session') -Encoding ascii -Value '1'
+                Set-Content -LiteralPath (Join-Path $uPluginDir 'waired.js') -Encoding ascii `
+                    -Value '// GENERATED by waired (`waired link opencode`). Planted by installtest-windows.ps1.'
+                ItLog "arm 1c precondition: machine-wide managed settings present = $(Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'))"
+
+                $uninstCopy = New-ItUninstallerCopy
+                $r = Invoke-AsInteractiveUser -Name $StdUninstallUser -Exe 'powershell.exe' `
+                        -ArgLine "-NoProfile -ExecutionPolicy Bypass -File `"$uninstCopy`" -Yes" `
+                        -Tag 'uninstall-stduser' -Env $uEnv -TimeoutSec 180
+                Write-Host $r.Out
+                if ($r.Exit -eq -1) {
+                    ItBad "the standard-user uninstall never returned within 180s — something is waiting on a prompt: $($r.Out)"
+                } else {
+                    if ($r.Exit -ne 0) { ItOk "a refused elevation fails the uninstall (exit $($r.Exit))" }
+                    else { ItBad "the standard-user uninstall exited 0 although elevation was refused" }
+                    if ($r.Out -match 'Removing per-user Claude / coding-agent integration') {
+                        ItOk "uninstall.ps1 ran the per-user steps with waired.exe as the standard user"
+                    } else {
+                        ItBad "uninstall.ps1 never started the per-user steps with waired.exe"
+                    }
+                    if ($r.Out -match 'Requesting administrator rights') {
+                        ItOk "uninstall.ps1 took its un-elevated arm and reached Invoke-SelfElevate"
+                    } else {
+                        ItBad "uninstall.ps1 never asked for administrator rights — it did not take the un-elevated arm"
+                    }
+                    if ($r.Out -match 'interactive window station') {
+                        ItBad "the refusal came from a missing window station, not from policy — this arm is not testing what it claims"
+                    } else {
+                        ItOk "the refusal happened on a real window station, so it was the policy that denied it"
+                    }
+                    ItSoft '1409' ($r.Out -match "The Administrator step didn't start, so Waired is still installed") `
+                        'a refused elevation says Waired is still installed and how to finish' 'waired-agent'
+                    ItSoft '1409' ($r.Out -notmatch 'uninstall failed:') `
+                        'a refused elevation is reported by uninstall.ps1, not by its last-resort trap' 'waired-agent'
+                    ItSoft '1409' ($r.Out -notmatch "waired\.exe couldn't run|exited with code") `
+                        "waired.exe ran to the end under Windows PowerShell 5.1 as a standard user" 'waired-agent'
+                }
+                $uLeft = @()
+                if ((Get-Content -LiteralPath (Join-Path $uClaude 'settings.json') -Raw -ErrorAction SilentlyContinue) -match 'waired') { $uLeft += '~/.claude/settings.json' }
+                if (Test-Path -LiteralPath (Join-Path $uClaude 'skills\waired-doctor\SKILL.md')) { $uLeft += 'waired-doctor skill' }
+                if (Test-Path -LiteralPath (Join-Path $uClaude 'cache\gateway-models.json')) { $uLeft += 'gateway-models.json' }
+                if (Test-Path -LiteralPath $uFallback) { $uLeft += 'claude-fallback' }
+                if (Test-Path -LiteralPath (Join-Path $uPluginDir 'waired.js')) { $uLeft += 'OpenCode waired.js' }
+                ItSoft '1409' ($uLeft.Count -eq 0) `
+                    "the un-elevated per-user steps removed this user's leftovers (left: $(if ($uLeft) { $uLeft -join ', ' } else { 'none' }))" 'waired-agent'
+                if ((Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $InstallDir 'waired.exe'))) {
+                    ItOk "a refused elevation left the service and the program files in place"
+                } else {
+                    ItBad "the service or waired.exe is gone although the Administrator step was refused"
+                }
+            }
+            finally {
+                Restore-UacValue -Name 'ConsentPromptBehaviorUser' -Previous $prevUserUninst
+                Remove-ItInteractiveUser -Name $StdUninstallUser
+            }
+        } else {
+            ItBad "arm 1b left no install, so the standard-user uninstall (waired-agent#1409) had nothing to run against"
+        }
     }
     finally {
         Restore-UacValue -Name 'ConsentPromptBehaviorAdmin' -Previous $prevAdmin
@@ -5740,7 +5879,15 @@ if ($Tier -ge 2) {
     # unconditional) times three, plus 3 for WairedSetup.exe itself. That run
     # executed 211 with two failures, both the same Inno space-padding defect
     # in the reader, which does not change how many asserts run.
-    $floor = if ($Contract) { 179 } elseif ($EngineOnly) { 81 } else { 78 }
+    #
+    # 179 -> 193 for -Contract alone, by arithmetic on unconditional asserts.
+    # Nine from the standard-user uninstall arm 1c (waired-agent#1409): exit
+    # non-zero, per-user steps started, reached Invoke-SelfElevate, not a
+    # window-station refusal, the declined-elevation report, no trap line,
+    # waired.exe ran to the end, the leftovers are gone, the install is still
+    # there. Five from the GUI uninstaller's unlink case (waired-agent#1406):
+    # Invoke-InnoUninstall's three, the Waired plugin gone, the user's own kept.
+    $floor = if ($Contract) { 193 } elseif ($EngineOnly) { 81 } else { 78 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

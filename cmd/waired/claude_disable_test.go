@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"testing"
@@ -21,6 +22,10 @@ func TestManagedRemoveIsFatal(t *testing.T) {
 		{"nil is not fatal", nil, false},
 		{"permission tolerated", fs.ErrPermission, false},
 		{"wrapped permission tolerated", &os.PathError{Op: "open", Path: "x", Err: fs.ErrPermission}, false},
+		// secrets.WriteFile's shape, which a rewrite returns (waired-agent#1409).
+		{"fmt-wrapped permission tolerated", fmt.Errorf("secrets: create temp in %s: %w", "dir",
+			&os.PathError{Op: "createtemp", Path: "dir", Err: fs.ErrPermission}), false},
+		{"fmt-wrapped other error is fatal", fmt.Errorf("secrets: rename: %w", errors.New("disk full")), true},
 		{"other error is fatal", errors.New("disk full"), true},
 	}
 	for _, tc := range cases {
