@@ -151,6 +151,8 @@ func TestQuantByName(t *testing.T) {
 		{"AWQ-int4", 4.5, 4, true},
 		{"awq", 4.5, 4, true},
 		{"MXFP4", 4.25, 4, true},
+		{"W4A16", 4.5, 4, true},
+		{"nvfp4", 4.5, 4, true},
 		{"Q5_K_M", 5.69, 5, true},
 		{"Q6_K", 6.57, 6, true},
 		{"Q8_0", 8.5, 8, true},

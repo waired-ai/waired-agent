@@ -8,7 +8,8 @@
   "license": "apache-2.0",
   "context_length": 262144,
   "default_variant": {
-    "ollama": "q4-gguf"
+    "ollama": "q4-gguf",
+    "vllm": "w4a16"
   },
   "capabilities": [
     "chat",
@@ -17,7 +18,9 @@
   ],
   "runtime": {
     "preferred": "ollama",
-    "fallback": []
+    "fallback": [
+      "vllm"
+    ]
   },
   "variants": [
     {
@@ -67,6 +70,44 @@
       "source": {
         "type": "ollama",
         "tag": "qwen3.5:9b-q4_K_M"
+      }
+    },
+    {
+      "variant_id": "w4a16",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
+      "format": "safetensors",
+      "quantization": "W4A16",
+      "runtime_support": [
+        "vllm"
+      ],
+      "estimated_weight_gb": 11.44,
+      "min_vram_mb": 23552,
+      "quality_tier": 53,
+      "param_count": 9000000000,
+      "quantization_tier": 4,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "RedHatAI/Qwen3.5-9B-quantized.w4a16",
+        "revision": "a398088c4228b0ae0c8c78df88fd1e4bf445f068"
+      },
+      "active_params": 0,
+      "kv_bytes_per_token_fp16": 32768,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 4096,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "vllm": "stable"
+        },
+        "amd": {
+          "vllm": "experimental"
+        },
+        "mac": {
+          "mlx": "unsupported"
+        }
       }
     }
   ],

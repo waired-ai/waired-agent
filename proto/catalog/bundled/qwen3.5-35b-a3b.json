@@ -8,7 +8,8 @@
   "license": "apache-2.0",
   "context_length": 262144,
   "default_variant": {
-    "ollama": "q4-gguf"
+    "ollama": "q4-gguf",
+    "vllm": "gptq-int4"
   },
   "capabilities": [
     "chat",
@@ -17,7 +18,9 @@
   ],
   "runtime": {
     "preferred": "ollama",
-    "fallback": []
+    "fallback": [
+      "vllm"
+    ]
   },
   "variants": [
     {
@@ -68,6 +71,44 @@
       "source": {
         "type": "ollama",
         "tag": "qwen3.5:35b-a3b-q4_K_M"
+      }
+    },
+    {
+      "variant_id": "gptq-int4",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
+      "format": "safetensors",
+      "quantization": "GPTQ-int4",
+      "runtime_support": [
+        "vllm"
+      ],
+      "estimated_weight_gb": 24.42,
+      "min_vram_mb": 38912,
+      "quality_tier": 74,
+      "param_count": 35000000000,
+      "quantization_tier": 4,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4",
+        "revision": "3af5ca2972faf6de1fd6f4efc4d8d319ca751e8b"
+      },
+      "active_params": 3300000000,
+      "kv_bytes_per_token_fp16": 20480,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 2048,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "vllm": "stable"
+        },
+        "amd": {
+          "vllm": "experimental"
+        },
+        "mac": {
+          "mlx": "unsupported"
+        }
       }
     }
   ],

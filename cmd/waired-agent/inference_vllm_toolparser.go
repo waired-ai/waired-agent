@@ -113,6 +113,18 @@ var vllmToolParserByModelID = map[string]string{
 	"qwen3.5-2b":   vllmParserQwen3XML, // Qwen/Qwen3.5-2B
 	"qwen3.5-4b":   vllmParserQwen3XML, // Qwen/Qwen3.5-4B
 
+	// The 4-bit vLLM builds of waired-ai/waired#1427. Their chat
+	// templates were read at the pinned revisions (2026-09-17):
+	// RedHatAI/Qwen3.5-9B-quantized.w4a16, cyankiwi/Qwen3.5-27B-AWQ-4bit
+	// and Qwen/Qwen3.5-35B-A3B-GPTQ-Int4 carry chat_template.jinja
+	// byte-identical to Qwen/Qwen3.5-4B's, and
+	// nvidia/Qwen3.6-35B-A3B-NVFP4 byte-identical to Qwen/Qwen3.6-27B's —
+	// the same <function=…> markup the rows above consume.
+	"qwen3.5-9b":      vllmParserQwen3XML, // RedHatAI/Qwen3.5-9B-quantized.w4a16
+	"qwen3.5-27b":     vllmParserQwen3XML, // cyankiwi/Qwen3.5-27B-AWQ-4bit
+	"qwen3.5-35b-a3b": vllmParserQwen3XML, // Qwen/Qwen3.5-35B-A3B-GPTQ-Int4
+	"qwen3.6-35b-a3b": vllmParserQwen3XML, // nvidia/Qwen3.6-35B-A3B-NVFP4
+
 	// The gpt-oss rows (docs §"OpenAI OSS Models (`openai`)") went with
 	// waired-ai/waired-agent#1400, which retired both with no successor.
 

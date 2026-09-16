@@ -465,20 +465,22 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// subject is the picker with the engine already forced, which
 			// is what an explicit `--prefer vllm` does.
 			//
-			// waired-agent#575 added those builds, and this row is the
-			// one they do NOT reach: qwen3.5-0.8b/bf16 measured a floor
-			// of 8192 MB and this card advertises 8000. The smallest
-			// build in the line still needs more than an 8 GB card has
-			// once 200,704 tokens of KV are reserved — so 8 GB remains
-			// an ollama host, and says so here rather than being left
-			// to be inferred from the rows below.
+			// waired-agent#575 added those builds, and they did not reach
+			// this row: qwen3.5-0.8b/bf16 measured a floor of 8192 MB and
+			// this card advertises 8000. waired-ai/waired#1427's 4-bit
+			// build does: kaitchup/Qwen3.5-0.8B-autoround-W4A16 carries an
+			// ESTIMATED floor of 7168 MB (the window rule plus 2 GiB, the
+			// rule that reproduces #575's three measured floors). Record
+			// of today's catalog; the figure is not measured on an 8 GB
+			// card.
 			name: "8GB NVIDIA dGPU (RTX 3060/4060), vllm forced",
 			hw: hardware.Profile{
 				RAMTotalGB: 32,
 				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4060", VRAMTotalMB: 8000}},
 			},
-			engine:    "vllm",
-			wantNoFit: true,
+			engine:      "vllm",
+			wantModel:   "qwen3.5-0.8b",
+			wantVariant: "w4a16",
 		},
 		{
 			// waired-agent#575: the first row the new builds reach.

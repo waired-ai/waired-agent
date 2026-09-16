@@ -59,6 +59,15 @@ var quants = []Quant{
 	{Name: "GPTQ-int4", BPW: 4.5, Tier: 4},
 	{Name: "Q4_0", BPW: 4.5, Tier: 4},
 	{Name: "MXFP4", BPW: 4.25, Tier: 4},
+	// Weight-only int4 (compressed-tensors pack-quantized, AutoRound) and
+	// NVFP4 (4-bit floats, one FP8 scale per 16 weights). Like AWQ/GPTQ,
+	// the checkpoints keep some tensors at higher precision — nvidia's
+	// Qwen NVFP4 builds keep attention and the linear-attention
+	// projections in FP8 — so the shipped variants take their weight from
+	// the repository's safetensors total, not from this table
+	// (waired-ai/waired#1427).
+	{Name: "W4A16", BPW: 4.5, Tier: 4},
+	{Name: "NVFP4", BPW: 4.5, Tier: 4},
 	{Name: "Q3_K_M", BPW: 3.91, Tier: 3},
 	{Name: "UD-Q3_K_XL", BPW: 3.90, Tier: 3},
 	{Name: "UD-Q2_K_XL", BPW: 3.51, Tier: 2},
@@ -88,6 +97,10 @@ func normalizeQuant(s string) string {
 		return "Q4_0"
 	case "MXFP4":
 		return "MXFP4"
+	case "W4A16", "INT4-W4A16", "W4A16-INT4":
+		return "W4A16"
+	case "NVFP4", "NVFP4-W4A16":
+		return "NVFP4"
 	case "Q3_K_M", "Q3-K-M", "Q3KM":
 		return "Q3_K_M"
 	case "Q2_K", "Q2-K", "Q2K":

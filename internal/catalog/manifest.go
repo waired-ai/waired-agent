@@ -12,8 +12,6 @@
 package catalog
 
 import (
-	"strings"
-
 	protocatalog "github.com/waired-ai/waired-agent/proto/catalog"
 )
 
@@ -78,12 +76,6 @@ func BundledManifestsIncludingInternal() ([]Manifest, error) {
 // whose ModelAliases contains name. Empty `name` always misses.
 func LookupByAlias(name string, manifests []Manifest) (Manifest, bool) {
 	return protocatalog.LookupByAlias(name, manifests)
-}
-
-// isAWQ mirrors the (unexported) proto/catalog helper for this
-// package's bundled-catalog invariant tests.
-func isAWQ(q string) bool {
-	return strings.Contains(strings.ToUpper(q), "AWQ")
 }
 
 // contains is a small helper used by tests.

@@ -17,7 +17,7 @@ Wairedは、ノートパソコンからマルチGPUのサーバーまでをカ�
 
 1. **推論エンジン別：OllamaかvLLMか。** OSとGPUで、どちらの推論エンジンがモデルを動かすかが決まります。自分の節だけを読んでください。
    - **Ollama**：macOS、Windows、Linux、CPUだけのパソコン、VRAMの少ないGPUや内蔵GPU。GGUF（量子化）のビルドです。見るべき値はシステムRAMです。
-   - **vLLM**：Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー。safetensorsのビルドで、量子化したもの（fp8、mxfp4、nvfp4）と量子化していないもの（bf16）があります。見るべき値はGPUのVRAMです。
+   - **vLLM**：Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー。safetensorsのvariant（量子化ビルド）で、量子化したもの（fp8、nvfp4、w4a16、gptq-int4）と量子化していないもの（bf16）があります。見るべき値はGPUのVRAMです。
 
    両方の推論エンジン向けのビルドがあるモデルの系統は、両方の節に載ります。
 
