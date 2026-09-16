@@ -109,6 +109,13 @@ func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, vari
 		GPUMemoryUtilization: p.cfg.VLLMGPUMemoryUtilization,
 		TensorParallelSize:   resolveVLLMTensorParallel(p.cfg.VLLMTensorParallel, hw, p.logger),
 		KVCacheDType:         kvCacheDType,
+		// No SpeculativeConfig, and deliberately not the serving engine's
+		// MTP draft (router.VLLMSpeculative, waired-ai/waired#1432). The
+		// probe classifies the HOST against a line calibrated on engines
+		// that draft nothing, and classifies ollama hosts on the same
+		// scale; a draft here would move this host's figure by the probe
+		// model's acceptance rate rather than by its hardware.
+		//
 		// The probe engine gets the same ceiling the serving one does. On
 		// a hybrid-mamba model vLLM's default of 256 is a start-up
 		// refusal rather than a concurrency choice (waired-agent#1298),
