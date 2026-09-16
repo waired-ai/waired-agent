@@ -1677,6 +1677,24 @@ else
   log "SKIPPED (not a pass): no python3 here, so the #1398 corpus did not run"
 fi
 
+# 11a'. The awk copy a Linux host without python3 gets for the managed file
+#       (waired-agent#1407), once per awk on this host. The comparison itself
+#       needs python3, so it rides the same gate; CI installs gawk and busybox
+#       next to the runner's mawk.
+if command -v python3 >/dev/null 2>&1; then
+  if corpus_out="$(UNINSTALL_SH="$UNINSTALL_SH" bash "$ROOT/scripts/dev/claude-leftovers-corpus.sh" awk 2>&1)"; then
+    ok "uninstall.sh's awk copy of the managed rules matches the corpus ($(printf '%s\n' "$corpus_out" | tail -1))"
+  else
+    printf '%s\n' "$corpus_out" | grep -v '^ok' >&2
+    fail "uninstall.sh's awk copy of the managed rules disagrees with the corpus (#1407)"
+  fi
+  if [ -n "${CI:-}" ]; then
+    for impl in mawk gawk busybox; do
+      command -v "$impl" >/dev/null 2>&1 || fail "$impl is missing on a CI runner, so the awk copy did not run under it (#1407)"
+    done
+  fi
+fi
+
 # The end-to-end cases need a managed settings file somewhere a non-root run
 # can write. The one path is swapped in a copy of the script, after checking
 # the literal is really there, so the swap cannot silently do nothing.
@@ -1751,17 +1769,102 @@ if [ -f "$cl_tmp/uninstall.sh" ] && command -v python3 >/dev/null 2>&1; then
     fail "an uninstall without the binary left per-user Claude Code settings behind (#1398)"
   fi
 
-  # 11d. No python3: say which file to fix by hand, rather than nothing.
+  # 11d. No python3 (waired-agent#1407): the managed file still loses the
+  #      settings that make Claude Code fail, the hooks left behind are named,
+  #      and the per-user file, which only python3 can edit, is named for a
+  #      hand fix.
   mkdir -p "$cl_tmp/nopython"
   printf '#!/bin/sh\nexit 1\n' >"$cl_tmp/nopython/python3"
   chmod +x "$cl_tmp/nopython/python3"
   cl_plant
   out="$(cl_run "PATH=$cl_tmp/nopython:$PATH" -- --dry-run)"
-  if printf '%s' "$out" | grep -qF "managed/managed-settings.json may still point Claude Code at Waired"; then
-    ok "without python3 the uninstall names the managed settings file to fix by hand (#1398)"
+  missing=""
+  for want in "Removing Waired's settings from $cl_tmp/managed/managed-settings.json (ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS)" \
+              "Left Waired's hooks (SessionStart) in $cl_tmp/managed/managed-settings.json" \
+              "home/.claude/settings.json may still point Claude Code at Waired, and there's no python3" \
+              "A file named above may still have Waired's settings."; do
+    printf '%s' "$out" | grep -qF "$want" || missing="$missing [$want]"
+  done
+  if [ -z "$missing" ] && ! printf '%s' "$out" | grep -q 'Nothing would be removed' \
+     && cmp -s "$cl_corpus/managed/02-posix-current-form/input.json" "$cl_tmp/managed/managed-settings.json"; then
+    ok "without python3 a dry run previews the managed settings the awk copy removes and names what it leaves (#1407)"
   else
     printf '%s\n' "$out" >&2
-    fail "without python3 the uninstall said nothing about the managed settings file (#1398)"
+    fail "without python3 the dry run is missing:${missing:- nothing, but it changed a file or said nothing would be removed} (#1407)"
+  fi
+
+  # 11f. No python3, for real, once per awk: the sudo stub runs the awk
+  #      wrapper (and only that), so the managed file really changes here.
+  #      Go's own Linux bytes go in; the env keeps only the host's window, the
+  #      hooks stay, and the file keeps its mode.
+  mkdir -p "$cl_tmp/execsudo"
+  printf '#!/bin/sh\ncase "$1" in sh) exec "$@" ;; esac\nexec "%s/sudo" "$@"\n' "$STUBDIR" >"$cl_tmp/execsudo/sudo"
+  chmod +x "$cl_tmp/execsudo/sudo"
+  cl_plant_managed() { # cl_plant_managed <corpus case>: only a managed file, nothing per-user
+    rm -rf "$cl_tmp/home" "$cl_tmp/managed"
+    mkdir -p "$cl_tmp/managed" "$cl_tmp/home"
+    cp "$cl_corpus/managed/$1/input.json" "$cl_tmp/managed/managed-settings.json"
+    chmod 644 "$cl_tmp/managed/managed-settings.json"
+  }
+  for impl in mawk gawk busybox; do
+    command -v "$impl" >/dev/null 2>&1 || continue
+    mkdir -p "$cl_tmp/awk-$impl"
+    if [ "$impl" = busybox ]; then
+      printf '#!/bin/sh\nexec busybox awk "$@"\n' >"$cl_tmp/awk-$impl/awk"
+    else
+      printf '#!/bin/sh\nexec %s "$@"\n' "$impl" >"$cl_tmp/awk-$impl/awk"
+    fi
+    chmod +x "$cl_tmp/awk-$impl/awk"
+    cl_plant_managed 24-linux-writer-bytes
+    out="$(cl_run "PATH=$cl_tmp/nopython:$cl_tmp/execsudo:$cl_tmp/awk-$impl:$PATH" -- --yes)"
+    verdict="$(python3 - "$cl_tmp/managed/managed-settings.json" <<'PY'
+import json, os, stat, sys
+p = sys.argv[1]
+try:
+    doc = json.load(open(p))
+except (OSError, ValueError) as e:
+    print("not JSON any more: %s" % e); sys.exit(0)
+if doc.get("env") != {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200704"}:
+    print("env is %s" % doc.get("env")); sys.exit(0)
+if "SessionStart" not in doc.get("hooks", {}):
+    print("the hooks went too"); sys.exit(0)
+mode = stat.S_IMODE(os.stat(p).st_mode)
+print("ok" if mode == 0o644 else "mode is %o" % mode)
+PY
+)"
+    if [ "$verdict" = ok ] && printf '%s' "$out" | grep -qF "Left Waired's hooks (SessionStart)" \
+       && printf '%s' "$out" | grep -qF "Left CLAUDE_CODE_MAX_CONTEXT_TOKENS=200704"; then
+      ok "without python3 ($impl) the uninstall takes the loopback URL out of Go's own managed file and keeps the rest (#1407)"
+    else
+      printf '%s\n' "$out" >&2
+      fail "without python3 ($impl) the managed file came out wrong: $verdict (#1407)"
+    fi
+  done
+
+  # 11g. No python3, a managed file in a layout Go never writes: left byte for
+  #      byte, named for a hand fix, and the summary doesn't claim there was
+  #      nothing to remove.
+  cl_plant_managed 22-compact-one-line
+  out="$(cl_run "PATH=$cl_tmp/nopython:$cl_tmp/execsudo:$PATH" -- --yes)"
+  if cmp -s "$cl_corpus/managed/22-compact-one-line/input.json" "$cl_tmp/managed/managed-settings.json" \
+     && printf '%s' "$out" | grep -qF "isn't laid out the way Waired wrote it" \
+     && printf '%s' "$out" | grep -qF "but a file named above may still have Waired's settings" \
+     && ! printf '%s' "$out" | grep -q 'Nothing to remove'; then
+    ok "without python3 an unfamiliar managed file is left alone and named, not reported as nothing to remove (#1407)"
+  else
+    printf '%s\n' "$out" >&2
+    fail "without python3 an unfamiliar managed file was changed, or the summary said nothing to remove (#1407)"
+  fi
+
+  # 11h. The same host, dry run.
+  cl_plant_managed 22-compact-one-line
+  out="$(cl_run "PATH=$cl_tmp/nopython:$PATH" -- --dry-run)"
+  if printf '%s' "$out" | grep -qF "Nothing would be removed, but a file named above may still have Waired's settings" \
+     && ! printf '%s' "$out" | grep -qF "Nothing would be removed: Waired isn't installed"; then
+    ok "a dry run that only warns about a settings file doesn't say Waired isn't installed and stop there (#1407)"
+  else
+    printf '%s\n' "$out" >&2
+    fail "a dry run that warned about a settings file still said nothing would be removed (#1407)"
   fi
 
   # 11e. With the binary present, a dry run shows `claude disable` and does not

@@ -1,0 +1,5 @@
+{
+  "env": {
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200704"
+  }
+}

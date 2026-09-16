@@ -502,7 +502,10 @@ detect_os() {
 # Two programs because POSIX sh cannot edit JSON: Python on Linux, and
 # JavaScript for Automation on macOS, which every Mac has (python3 there may be
 # the stub that asks to install developer tools). A Linux host without python3
-# gets a warning that names the file instead of a repair.
+# (minimal Debian and Ubuntu images have none) gets a third, in awk, for the
+# managed file only: it takes out the settings that make Claude Code fail
+# while the file is still laid out the way Waired writes it, and leaves the
+# rest, hooks included, to a warning that names the file (waired-agent#1407).
 
 # claude_leftovers_py prints the Python copy of the rules.
 #   python3 -I -c "$(claude_leftovers_py)" plan|apply managed|user|cache <path>
@@ -974,11 +977,297 @@ claude_leftovers_jxa() {
 JXA
 }
 
+# claude_leftovers_awk prints the awk copy of the managed file's env rules, for
+# Linux without python3. awk can't parse JSON, so it reads only the layout Go's
+# json.MarshalIndent writes, one member per line, checks that layout line by
+# line against a stack, and edits by deleting whole lines and moving a comma:
+# no string or number is rewritten, and the result has to pass the same check.
+# Anything else is "state unrecognised". It removes what RemoveWithOptions
+# removes from the top-level env; the hooks stay, and on Linux they were
+# always written behind `command -v waired`, so they do nothing once waired is
+# gone. Output adds "left hooks.<Event>" lines to claude_leftovers_py's.
+claude_leftovers_awk() {
+    cat <<'AWK'
+    # mode=plan prints what would change, mode=emit prints the edited file,
+    # mode=check prints whether the file is in the layout this program reads.
+    BEGIN { Q = sprintf("%c", 1); n = 0 }
+    { n++; L[n] = $0 }
+    END {
+        if (mode == "check") {
+            v = (parse(L, n) ? "state valid" : "state unrecognised")
+            print v
+            exit 0
+        }
+        if (parse(L, n) == 0 || pick() == 0) {
+            print "state unrecognised"
+            exit 0
+        }
+        leftover = hooksleft()
+        m = 0
+        for (i = 1; i <= n; i++) {
+            if (DROP[i] == 0) { m++; OUT[m] = L[i]; continue }
+            if (DROP[i] == 2 || CM[i] == 1) continue
+            # The last member of an object went: the one before it loses
+            # its comma. The line before is an opener or ends with one.
+            for (j = m; j >= 1; j--) if (OUT[j] ~ /[^ \t]/) break
+            if (j < 1) continue
+            s = OUT[j]
+            sub(/[ \t]+$/, "", s)
+            if (substr(s, length(s), 1) == ",") OUT[j] = substr(s, 1, length(s) - 1)
+        }
+        state = "unchanged"
+        if (gone > 0) state = (rootempty ? "delete" : "rewrite")
+        if (parse(OUT, m) == 0) {
+            print "state unrecognised"
+            exit 0
+        }
+        if (mode == "emit") {
+            for (i = 1; i <= m; i++) print OUT[i]
+            exit 0
+        }
+        print "state " state
+        if (gone > 0) printf "%s", removedlines
+        if (gone > 0 && keptline != "") print "kept " keptline
+        printf "%s", leftover
+        exit 0
+    }
+
+    # scan reads one line. Strings become Q in SK and their raw text goes to
+    # SV[1..NS]; it returns 0 for anything outside the JSON token set.
+    function scan(s,    j, len, c, e, k, h, instr, buf) {
+        SK = ""; NS = 0; instr = 0; buf = ""
+        len = length(s)
+        for (j = 1; j <= len; j++) {
+            c = substr(s, j, 1)
+            if (instr) {
+                if (c == "\\") {
+                    e = substr(s, j + 1, 1)
+                    if (e == "u") {
+                        for (k = 2; k <= 5; k++) {
+                            h = substr(s, j + k, 1)
+                            if (h == "" || index("0123456789abcdefABCDEF", h) == 0) return 0
+                        }
+                        buf = buf substr(s, j, 6)
+                        j += 5
+                    } else if (e != "" && index("\"\\/bfnrt", e) > 0) {
+                        buf = buf c e
+                        j++
+                    } else return 0
+                } else if (c == "\"") {
+                    instr = 0; NS++; SV[NS] = buf; SK = SK Q
+                } else if (c < " ") {
+                    return 0
+                } else buf = buf c
+            } else if (c == "\"") {
+                instr = 1; buf = ""
+            } else if (c == " " || c == "\t") {
+                SK = SK " "
+            } else if (c < " ") {
+                return 0
+            } else SK = SK c
+        }
+        if (instr) return 0
+        gsub(/ +/, " ", SK)
+        sub(/^ /, "", SK)
+        sub(/ $/, "", SK)
+        gsub(/ ?: ?/, ":", SK)
+        gsub(/ ?, ?/, ",", SK)
+        return 1
+    }
+
+    function isval(v) {
+        if (v == Q || v == "true" || v == "false" || v == "null" || v == "{}" || v == "[]") return 1
+        return v ~ /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
+    }
+
+    # classify sets CK to blank, open, close, keyopen, member, elem or bad,
+    # with CKEY, CVT (the value token), CVAL, CCOMMA and CCH beside it.
+    function classify(s,    t, rest) {
+        CK = "bad"; CKEY = ""; CVT = ""; CVAL = ""; CCOMMA = 0; CCH = ""
+        if (scan(s) == 0) return
+        t = SK
+        if (t == "") { CK = "blank"; return }
+        if (substr(t, length(t), 1) == ",") { CCOMMA = 1; t = substr(t, 1, length(t) - 1) }
+        if (t ~ / /) return
+        if (t == "{" || t == "[") { if (CCOMMA == 0) { CK = "open"; CCH = t }; return }
+        if (t == "}" || t == "]") { CK = "close"; CCH = t; return }
+        if (substr(t, 1, 2) == Q ":") {
+            rest = substr(t, 3)
+            CKEY = SV[1]
+            if (rest == "{" || rest == "[") { if (CCOMMA == 0) { CK = "keyopen"; CCH = rest }; return }
+            if (isval(rest)) { CK = "member"; CVT = rest; if (rest == Q) CVAL = SV[2] }
+            return
+        }
+        if (isval(t)) { CK = "elem"; CVT = t }
+    }
+
+    # parse checks A[1..cnt] line by line against a stack: one member or
+    # element per line, commas between siblings only, openers and closers
+    # matched, a single root object. It records each line's facts in K, KEY,
+    # VT, VAL, CM, CH, DEP (the depth of the object or array it sits in) and
+    # P2 / P3 (the keys that opened depths 2 and 3).
+    function parse(A, cnt,    i, sp, need, top) {
+        sp = 0; need = 0
+        for (i = 1; i <= cnt; i++) {
+            classify(A[i])
+            K[i] = CK; KEY[i] = CKEY; VT[i] = CVT; VAL[i] = CVAL; CM[i] = CCOMMA; CH[i] = CCH
+            DEP[i] = sp; P2[i] = ""; P3[i] = ""
+            if (sp >= 2) P2[i] = OKEY[2]
+            if (sp >= 3) P3[i] = OKEY[3]
+            if (CK == "bad") return 0
+            if (CK == "blank") continue
+            if (need == 4) return 0
+            if (need == 0) {
+                if (CK != "open" || CCH != "{") return 0
+                sp = 1; CTX[1] = "o"; OKEY[1] = ""; need = 1
+                continue
+            }
+            top = CTX[sp]
+            if (CK == "close") {
+                if (need == 2) return 0
+                if ((CCH == "}" && top != "o") || (CCH == "]" && top != "a")) return 0
+                sp--
+                if (sp == 0) {
+                    if (CCOMMA) return 0
+                    need = 4
+                } else need = (CCOMMA ? 2 : 3)
+                continue
+            }
+            if (need == 3) return 0
+            if (CK == "open" || CK == "elem") {
+                if (top != "a") return 0
+            } else if (top != "o") return 0
+            if (CK == "open" || CK == "keyopen") {
+                sp++
+                CTX[sp] = (CCH == "{" ? "o" : "a")
+                OKEY[sp] = (CK == "keyopen" ? CKEY : "")
+                need = 1
+                continue
+            }
+            need = (CCOMMA ? 2 : 3)
+        }
+        return need == 4
+    }
+
+    function isstr(i) { return i > 0 && K[i] == "member" && VT[i] == Q }
+
+    function drop(i, how, name) {
+        DROP[i] = how
+        gone++
+        removedlines = removedlines "removed " name "\n"
+    }
+
+    # pick marks the lines to take out of the top-level env object, the
+    # rules claudemanaged.RemoveWithOptions applies to it.
+    function pick(    i, envs, eo, ec, kids, top, lu, ls, ld, la, lm, cu, cs, cd, ca, cm) {
+        gone = 0; removedlines = ""; keptline = ""; rootempty = 0
+        envs = 0; eo = 0; ec = 0; top = 0
+        for (i = 1; i <= n; i++) {
+            DROP[i] = 0
+            if (DEP[i] != 1 || (K[i] != "member" && K[i] != "keyopen")) continue
+            top++
+            if (index(KEY[i], "\\") > 0) return 0
+            if (KEY[i] != "env") continue
+            envs++
+            if (K[i] == "keyopen" && CH[i] == "{") eo = i
+        }
+        if (envs > 1) return 0
+        if (eo == 0) return 1
+        for (i = eo + 1; i <= n; i++) if (K[i] == "close" && DEP[i] == 2) { ec = i; break }
+        kids = 0; lu = 0; ls = 0; ld = 0; la = 0; lm = 0; cu = 0; cs = 0; cd = 0; ca = 0; cm = 0
+        for (i = eo + 1; i < ec; i++) {
+            if (DEP[i] != 2 || (K[i] != "member" && K[i] != "keyopen")) continue
+            kids++
+            if (index(KEY[i], "\\") > 0) return 0
+            if (KEY[i] == "ANTHROPIC_BASE_URL") { cu++; lu = i }
+            else if (KEY[i] == "CLAUDE_CODE_SUBAGENT_MODEL") { cs++; ls = i }
+            else if (KEY[i] == "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY") { cd++; ld = i }
+            else if (KEY[i] == "CLAUDE_CODE_AUTO_COMPACT_WINDOW") { ca++; la = i }
+            else if (KEY[i] == "CLAUDE_CODE_MAX_CONTEXT_TOKENS") { cm++; lm = i }
+            else continue
+            if (K[i] == "member" && index(VAL[i], "\\") > 0) return 0
+        }
+        if (cu > 1 || cs > 1 || cd > 1 || ca > 1 || cm > 1) return 0
+        if (isstr(lu) && index(VAL[lu], "http://127.0.0.1:") == 1) {
+            drop(lu, 1, "ANTHROPIC_BASE_URL")
+            if (isstr(ld) && VAL[ld] == "1") drop(ld, 1, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY")
+            if (isstr(la) && VAL[la] == "200000") drop(la, 1, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+            if (isstr(lm) && VAL[lm] == "250000") drop(lm, 1, "CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+            else if (isstr(lm)) keptline = "CLAUDE_CODE_MAX_CONTEXT_TOKENS=" VAL[lm]
+        }
+        if (isstr(ls) && VAL[ls] == "waired/subagent") drop(ls, 1, "CLAUDE_CODE_SUBAGENT_MODEL")
+        # An env with nothing left goes too, as Go and the other copies
+        # collapse it; then only its closer's comma matters.
+        if (gone > 0 && gone == kids) {
+            for (i = eo; i < ec; i++) if (DROP[i] == 1 || i == eo) DROP[i] = 2
+            DROP[ec] = 1
+            if (top == 1) rootempty = 1
+        }
+        return 1
+    }
+
+    # hooksleft names the hook events that still run a Waired command.
+    function hooksleft(    i, stop, start, out) {
+        stop = 0; start = 0; out = ""
+        for (i = 1; i <= n; i++) {
+            if (K[i] != "member" || KEY[i] != "command" || VT[i] != Q || P2[i] != "hooks") continue
+            if (P3[i] == "Stop" && index(VAL[i], "waired claude _fallback-hook") > 0) stop = 1
+            if (P3[i] == "SessionStart" && (index(VAL[i], "waired claude _picker write --from-managed") > 0 || index(VAL[i], "waired claude _models-cache write --from-managed") > 0)) start = 1
+        }
+        if (stop) out = out "left hooks.Stop\n"
+        if (start) out = out "left hooks.SessionStart\n"
+        return out
+    }
+AWK
+}
+
+# claude_leftovers_awk_sh prints the sh that runs it, with claude_leftovers_py's
+# command line, so it runs under sudo as one command:
+#   sh -c "$(claude_leftovers_awk_sh)" sh "$(claude_leftovers_awk)" plan|apply managed <path>
+claude_leftovers_awk_sh() {
+    cat <<'SH'
+    set -eu
+    prog=$1
+    action=$2
+    kind=$3
+    path=$4
+    LC_ALL=C
+    export LC_ALL
+    # Only the managed file, only a regular file, and nothing with a NUL
+    # byte in it, which some awks stop reading at.
+    if [ "$kind" != managed ] || [ ! -f "$path" ] || [ -L "$path" ] ||
+        [ $(( $(tr -d '\000' <"$path" | wc -c) )) -ne $(( $(wc -c <"$path") )) ]; then
+        echo 'state unrecognised'
+        exit 0
+    fi
+    plan=$(awk -v mode=plan "$prog" "$path")
+    printf '%s\n' "$plan"
+    [ "$action" = apply ] || exit 0
+    case $plan in
+        'state delete'*) rm -f "$path"; exit 0 ;;
+        'state rewrite'*) ;;
+        *) exit 0 ;;
+    esac
+    mode=$(stat -L -c %a "$path")
+    tmp=$(mktemp "$(dirname "$path")/.waired-XXXXXX")
+    trap 'rm -f "$tmp"' EXIT
+    awk -v mode=emit "$prog" "$path" >"$tmp"
+    [ "$(awk -v mode=check "$prog" "$tmp")" = 'state valid' ]
+    chmod "$mode" "$tmp"
+    mv -f "$tmp" "$path"
+    trap - EXIT
+SH
+}
+
 # How many steps took out settings Waired left behind, so print_done can tell
 # "Waired removed" from "Waired was already gone, and Claude Code still pointed
 # at it".
 CLAUDE_LEFTOVERS=0
 CLAUDE_WRAPPER=0
+# How many settings files were left for a hand fix. A warning above names each
+# one, so print_done must not follow it with "Nothing to remove"
+# (waired-agent#1407).
+CLAUDE_UNCHECKED=0
 
 # claude_managed_path is claudemanaged's managedSettingsPath for this OS.
 claude_managed_path() {
@@ -1048,12 +1337,20 @@ claude_leftover_edit() {
     [ -f "$_cle_path" ] || return 0
     grep -q -e waired -e '127\.0\.0\.1' "$_cle_path" 2>/dev/null || return 0
     _cle_tool="$(claude_json_tool)"
+    # Without python3 the managed file, the one that makes Claude Code fail,
+    # still gets the awk copy (waired-agent#1407).
+    if [ -z "$_cle_tool" ] && [ "$_cle_kind" = managed ] && [ "$OS_KIND" != darwin ] &&
+        command -v awk >/dev/null 2>&1; then
+        _cle_tool='awk'
+    fi
     if [ -z "$_cle_tool" ]; then
+        CLAUDE_UNCHECKED=$((CLAUDE_UNCHECKED + 1))
         common_warn "$_cle_path may still point Claude Code at Waired, and there's no python3 on this computer to check it. Remove Waired's settings from it by hand."
         return 0
     fi
     case "$_cle_tool" in
         osascript) _cle_prog="$(claude_leftovers_jxa)"; set -- osascript -l JavaScript -e "$_cle_prog" ;;
+        awk)       _cle_prog="$(claude_leftovers_awk)"; set -- sh -c "$(claude_leftovers_awk_sh)" sh "$_cle_prog" ;;
         *)         _cle_prog="$(claude_leftovers_py)";  set -- python3 -I -c "$_cle_prog" ;;
     esac
     _cle_pre="$(claude_as "$_cle_as")"
@@ -1063,16 +1360,26 @@ claude_leftover_edit() {
     [ -r "$_cle_path" ] && _cle_look=""
     # shellcheck disable=SC2086  # the prefix is a command and its arguments
     if ! _cle_out="$($_cle_look "$@" plan "$_cle_kind" "$_cle_path" 2>&1)"; then
+        CLAUDE_UNCHECKED=$((CLAUDE_UNCHECKED + 1))
         common_warn "Couldn't check $_cle_path ($_cle_out). If it still has Waired's settings, remove them by hand."
         return 0
     fi
     _cle_state="$(printf '%s\n' "$_cle_out" | sed -n 's/^state //p')"
+    # Only the awk copy leaves hooks: "left hooks.<Event>" lines.
+    _cle_left="$(printf '%s\n' "$_cle_out" | awk '/^left hooks\./{ sub(/^left hooks\./, ""); printf "%s%s", (n++ ? ", " : ""), $0 }')"
     case "$_cle_state" in
         rewrite|delete) ;;
         unreadable)
+            CLAUDE_UNCHECKED=$((CLAUDE_UNCHECKED + 1))
             common_warn "$_cle_path isn't JSON the uninstaller can read, so it was left unchanged. If it still has Waired's settings, remove them by hand."
             return 0 ;;
-        *) return 0 ;;
+        unrecognised)
+            CLAUDE_UNCHECKED=$((CLAUDE_UNCHECKED + 1))
+            common_warn "$_cle_path may still point Claude Code at Waired. There's no python3 on this computer, and the file isn't laid out the way Waired wrote it, so the uninstaller left it unchanged. Remove Waired's settings from it by hand."
+            return 0 ;;
+        *)
+            claude_warn_hooks_left "$_cle_path" "$_cle_left"
+            return 0 ;;
     esac
     _cle_removed="$(printf '%s\n' "$_cle_out" | awk '/^removed /{ sub(/^removed /, ""); printf "%s%s", (n++ ? ", " : ""), $0 }')"
     printf '%s\n' "$_cle_out" | grep -q '^wrapper$' && CLAUDE_WRAPPER=1
@@ -1085,13 +1392,27 @@ claude_leftover_edit() {
     fi
     # shellcheck disable=SC2086
     if ! claude_leftovers_run "$_cle_state $_cle_path" $_cle_pre "$@" apply "$_cle_kind" "$_cle_path" >/dev/null; then
+        # claude_leftovers_run counted the step before it ran; nothing was
+        # removed, so print_done must not say it was.
+        DID_COUNT=$((DID_COUNT - 1))
+        CLAUDE_LEFTOVERS=$((CLAUDE_LEFTOVERS - 1))
+        CLAUDE_UNCHECKED=$((CLAUDE_UNCHECKED + 1))
         common_warn "Couldn't change $_cle_path. Remove Waired's settings from it by hand."
         return 0
     fi
     printf '%s\n' "$_cle_out" | sed -n 's/^kept //p' | while IFS= read -r _cle_kept; do
         common_warn "Left $_cle_kept in $_cle_path. It couldn't be confirmed as Waired's, so remove it by hand if you didn't set it."
     done
+    claude_warn_hooks_left "$_cle_path" "$_cle_left"
     return 0
+}
+
+# claude_warn_hooks_left <path> <events> names the hooks the awk copy left in
+# the managed file, when there are any.
+claude_warn_hooks_left() {
+    [ -n "$2" ] || return 0
+    CLAUDE_UNCHECKED=$((CLAUDE_UNCHECKED + 1))
+    common_warn "Left Waired's hooks ($2) in $1. Without python3 the uninstaller couldn't take them out, but they do nothing now that waired is gone. To remove them by hand, delete each hook whose command contains 'waired claude'."
 }
 
 # claude_leftover_rm <path> removes a file or directory only Waired wrote, as
@@ -1543,7 +1864,15 @@ print_done() {
     [ "$DRY_RUN" = 1 ] && _tag='[dry-run] '
 
     if [ "$DID_COUNT" -eq 0 ]; then
-        if [ "$DRY_RUN" = 1 ]; then
+        # A warning above named a settings file left for a hand fix, so
+        # "Nothing to remove" would contradict it (waired-agent#1407).
+        if [ "$CLAUDE_UNCHECKED" -gt 0 ]; then
+            if [ "$DRY_RUN" = 1 ]; then
+                common_log "${_tag}Nothing would be removed, but a file named above may still have Waired's settings. Remove them by hand, then restart Claude Code."
+            else
+                common_log "Waired wasn't installed on this computer, but a file named above may still have Waired's settings. Remove them by hand, then restart Claude Code."
+            fi
+        elif [ "$DRY_RUN" = 1 ]; then
             common_log "${_tag}Nothing would be removed: Waired isn't installed on this computer."
         else
             common_log "Nothing to remove: Waired wasn't installed on this computer."
@@ -1559,6 +1888,7 @@ print_done() {
         else
             common_log "Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect."
         fi
+        print_done_unchecked
         return 0
     fi
 
@@ -1584,6 +1914,14 @@ print_done() {
     else
         common_log "No Waired registration was found on this computer, so nothing was deregistered."
     fi
+    print_done_unchecked
+}
+
+# print_done_unchecked ends the summary with the hand fix a warning above
+# asked for, so it isn't lost behind "Waired removed" (waired-agent#1407).
+print_done_unchecked() {
+    [ "$CLAUDE_UNCHECKED" -gt 0 ] || return 0
+    common_log "A file named above may still have Waired's settings. Remove them by hand, then restart Claude Code."
 }
 
 main() {
