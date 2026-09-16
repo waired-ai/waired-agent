@@ -145,7 +145,7 @@ No GPU to hand? Dispatch the lane and download its report:
 gh workflow run installtest-inference.yml -f os=none -f agentgrade_model=<ollama tag>
 ```
 
-What the two gates ask:
+What the three gates ask:
 
 - `catalog-tool agentgrade --check --require-pass` — can this model drive
   a coding agent's tool-call format? Measured, never assumed from
@@ -158,6 +158,18 @@ What the two gates ask:
   Code turn, because Claude Code puts a `role:"system"` at the END of
   `messages[]` and that model's renderer refused it. **A model that
   refuses a shape is one we do not offer**; there is no exemption.
+- `catalog-tool turnspeeds --check` — how long does one request take on
+  the reference host class? When a computer measures its model over the
+  line, Waired offers the first ranked model that fits and is at least 5%
+  faster there (#1400), so a variant with no recorded seconds is never
+  offered. The records come from the product's own measurement, repeated:
+  on the host class, select the variant, let the automatic measurement
+  finish, run `waired runtimes benchmark` three more times, and copy
+  `state.json` after each run. Then fold the copies in with
+  `catalog-tool turnspeeds --import <state.json>... --host <class>
+  --backend <backend> --agent-revision <sha> --retrieved <YYYY-MM-DD>`,
+  which keeps a variant only with three or more measurements at the
+  32,768-token depth and the 200,704-token window.
 
 A model no runner can host is declared in `agentgrade.json`'s
 `unmeasurable` map with a reason — a stated decision rather than
