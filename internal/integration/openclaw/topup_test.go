@@ -3,6 +3,7 @@ package openclaw
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,88 +12,105 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration/modelrows"
 )
 
-// swapWindow replaces the gateway seam for one test.
-func swapWindow(t *testing.T, n int) {
+// writeOlderPlugin installs what a build before waired-agent#1396 left: the
+// current template with the window it was told and the revision before this
+// one. Built from the current template rather than a hand-written file, so the
+// lines the readers match are the real ones.
+func writeOlderPlugin(t *testing.T, opts integration.ApplyOptions, window int) {
 	t.Helper()
-	prev := contextWindowFn
-	contextWindowFn = func(context.Context, string, string) int { return n }
-	t.Cleanup(func() { contextWindowFn = prev })
-}
-
-// PRODUCT CONTRACT (waired-agent#1029): a plugin written before this host
-// could say what it serves is filled in once it can.
-//
-// The window is written ONCE, by the CLI, at link time — and `waired init`
-// applies the integrations before anything is serving, so on a fresh install
-// the gateway cannot be asked and the plugin correctly declares nothing
-// (docs/decisions/20260822/2116: "a wrong number is worse than none").
-// Nothing ever went back, so the host stayed on OpenClaw's own default
-// forever. Observed on a vLLM host whose gateway had been answering 124928
-// for as long as the engine had been up.
-func TestTopUpContextWindow_FillsInAWindowThePluginNeverKnew(t *testing.T) {
-	opts := newOpts(t)
-	swapWindow(t, 0) // the wizard's moment: nothing is serving yet
-	a := New()
-	if err := a.Apply(context.Background(), opts); err != nil {
+	if err := New().Apply(context.Background(), opts); err != nil {
 		t.Fatal(err)
-	}
-	if declared, ok := DeclaredContextWindow(opts.HomeDir); !ok || declared != 0 {
-		t.Fatalf("declared=%d ok=%v, want the undeclared plugin this fixture is about", declared, ok)
-	}
-
-	swapWindow(t, 124928) // the engine is up now
-	got, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
-	if err != nil || !changed || got != 124928 {
-		t.Fatalf("TopUpContextWindow = (%d, %v, %v), want (124928, true, nil)", got, changed, err)
 	}
 	body, err := os.ReadFile(PluginEntryFile(opts.HomeDir))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "const CONTEXT_WINDOW = 124928;") {
-		t.Errorf("the plugin still does not declare the window:\n%s", body)
+	old := strings.Replace(string(body), "const CONTEXT_WINDOW = 200704;", "const CONTEXT_WINDOW = "+strconv.Itoa(window)+";", 1)
+	old = strings.Replace(old, "const PLUGIN_REV = "+strconv.Itoa(pluginRevision)+";", "const PLUGIN_REV = "+strconv.Itoa(pluginRevision-1)+";", 1)
+	if old == string(body) {
+		t.Fatal("fixture: the window and revision lines were not found")
 	}
-	// The rest of the plugin is untouched — this rewrites one number, not
-	// the integration.
-	if !strings.Contains(string(body), providerBaseURL(opts.GatewayBaseURL)) {
-		t.Error("the top-up lost the provider baseURL")
+	if err := os.WriteFile(PluginEntryFile(opts.HomeDir), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// The three cases that must do nothing, each for its own reason. A top-up
-// that fired on any of them would be worse than the gap it closes.
+// PRODUCT CONTRACT (waired-agent#1029, #1396): a plugin an older build wrote is
+// brought to what this build writes — 200704 for every row without "[1m]" —
+// without a re-link. Two windows such a build declared: none, when it linked
+// before anything served, and the window the gateway stated at the time, which
+// on a vLLM host was the engine's own (124928 measured on 0.0.3-rc6).
+func TestTopUpContextWindow_RewritesAPluginAnOlderBuildWrote(t *testing.T) {
+	for _, old := range []int{0, 124928, 262144} {
+		t.Run(strconv.Itoa(old), func(t *testing.T) {
+			swapRowsFn(t, nil)
+			opts := newOpts(t)
+			writeOlderPlugin(t, opts, old)
+
+			got, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
+			if err != nil || !changed || got != 200704 {
+				t.Fatalf("TopUpContextWindow = (%d, %v, %v), want (200704, true, nil)", got, changed, err)
+			}
+			body, err := os.ReadFile(PluginEntryFile(opts.HomeDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), "const CONTEXT_WINDOW = 200704;") {
+				t.Errorf("the plugin still declares its old window:\n%s", body)
+			}
+			if got := declaredRevision(opts.HomeDir); got != pluginRevision {
+				t.Errorf("revision after the top-up = %d, want %d", got, pluginRevision)
+			}
+			// The rest of the plugin is untouched.
+			if !strings.Contains(string(body), providerBaseURL(opts.GatewayBaseURL)) {
+				t.Error("the top-up lost the provider baseURL")
+			}
+		})
+	}
+}
+
+// A plugin of the current revision that declares another window — edited by
+// hand, since this build never writes one — is rewritten too: the revision
+// alone is not what says the window is right.
+func TestTopUpContextWindow_RewritesAnotherWindowAtTheCurrentRevision(t *testing.T) {
+	swapRowsFn(t, nil)
+	opts := newOpts(t)
+	if err := New().Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(PluginEntryFile(opts.HomeDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(string(body), "const CONTEXT_WINDOW = 200704;", "const CONTEXT_WINDOW = 131072;", 1)
+	if err := os.WriteFile(PluginEntryFile(opts.HomeDir), []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
+	if err != nil || !changed || got != 200704 {
+		t.Fatalf("TopUpContextWindow = (%d, %v, %v), want (200704, true, nil)", got, changed, err)
+	}
+	if declared, _ := DeclaredContextWindow(opts.HomeDir); declared != 200704 {
+		t.Errorf("declared = %d after the top-up, want 200704", declared)
+	}
+}
+
+// The cases that must do nothing, each for its own reason.
 func TestTopUpContextWindow_LeavesItAlone(t *testing.T) {
 	t.Run("no plugin installed", func(t *testing.T) {
+		swapRowsFn(t, nil)
 		opts := newOpts(t)
-		swapWindow(t, 200704)
 		got, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
 		if err != nil || changed || got != 0 {
 			t.Fatalf("= (%d, %v, %v), want (0, false, nil) — nothing to top up", got, changed, err)
 		}
 	})
 
-	t.Run("the gateway cannot answer", func(t *testing.T) {
+	t.Run("already current, the gateway not answering", func(t *testing.T) {
+		// The daemon is down: a list nobody could read is not a reason to
+		// rewrite a plugin that is right.
+		swapRowsFn(t, nil)
 		opts := newOpts(t)
-		swapWindow(t, 200704)
-		if err := New().Apply(context.Background(), opts); err != nil {
-			t.Fatal(err)
-		}
-		// The daemon is down now: a gateway that cannot answer must never
-		// BLANK a declaration that was right.
-		swapWindow(t, 0)
-		got, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
-		if err != nil || changed || got != 200704 {
-			t.Fatalf("= (%d, %v, %v), want (200704, false, nil)", got, changed, err)
-		}
-		body, _ := os.ReadFile(PluginEntryFile(opts.HomeDir))
-		if !strings.Contains(string(body), "const CONTEXT_WINDOW = 200704;") {
-			t.Errorf("an unanswerable gateway rewrote the plugin:\n%s", body)
-		}
-	})
-
-	t.Run("already correct", func(t *testing.T) {
-		opts := newOpts(t)
-		swapWindow(t, 200704)
 		if err := New().Apply(context.Background(), opts); err != nil {
 			t.Fatal(err)
 		}
@@ -111,8 +129,8 @@ func TestTopUpContextWindow_LeavesItAlone(t *testing.T) {
 	})
 
 	t.Run("a hand-edited plugin without the line", func(t *testing.T) {
+		swapRowsFn(t, nil)
 		opts := newOpts(t)
-		swapWindow(t, 200704)
 		if err := New().Apply(context.Background(), opts); err != nil {
 			t.Fatal(err)
 		}
@@ -120,26 +138,24 @@ func TestTopUpContextWindow_LeavesItAlone(t *testing.T) {
 			[]byte("// somebody's own plugin\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		swapWindow(t, 124928)
 		if _, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL); err != nil || changed {
 			t.Fatalf("changed=%v err=%v — a plugin waired did not write is not ours to correct", changed, err)
 		}
 	})
 }
 
-// A row's window is compared, not only its key: a computer that switched to a
-// model with a different window keeps its row, and the plugin used to keep the
-// old number until the next link (waired-agent#1395).
-func TestTopUpContextWindow_RewritesARowWhoseWindowAloneChanged(t *testing.T) {
+// A row carries no window, so a computer that switched to a model with a
+// different window changes nothing in the plugin: its row is still a 200k
+// session (waired-agent#1396). A row that appears does.
+func TestTopUpContextWindow_RowsAreComparedByKeyAndName(t *testing.T) {
 	opts := newOpts(t)
-	swapWindow(t, 200704)
-	row := func(win int) []modelrows.Row {
-		return []modelrows.Row{
+	rows := func(win int, extra ...modelrows.Row) []modelrows.Row {
+		return append([]modelrows.Row{
 			{DirectiveModel: claudecode.DirectiveModel{ID: "waired/default", DisplayName: "Waired"}, ContextWindow: 200704},
 			{DirectiveModel: claudecode.DirectiveModel{ID: "waired/peer-linux-gpu", DisplayName: "Waired peer: linux-gpu"}, ContextWindow: win},
-		}
+		}, extra...)
 	}
-	swapRowsFn(t, row(262144))
+	swapRowsFn(t, rows(200704))
 	if err := New().Apply(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
@@ -147,78 +163,66 @@ func TestTopUpContextWindow_RewritesARowWhoseWindowAloneChanged(t *testing.T) {
 		t.Fatalf("a freshly written plugin audits as %v: %s", got.Status, got.Detail)
 	}
 
-	swapRowsFn(t, row(1048576))
-	if got := auditContextWindow(context.Background(), opts); got.Status != integration.StatusWarn {
-		t.Errorf("a row whose window changed audits as %v: %s", got.Status, got.Detail)
+	swapRowsFn(t, rows(1048576))
+	if got := auditContextWindow(context.Background(), opts); got.Status != integration.StatusOK {
+		t.Errorf("a row whose stated window alone changed audits as %v: %s", got.Status, got.Detail)
 	}
-	_, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
-	if err != nil || !changed {
+	if _, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL); err != nil || changed {
+		t.Fatalf("changed=%v err=%v, want the plugin left as it is", changed, err)
+	}
+
+	swapRowsFn(t, rows(200704, modelrows.Row{
+		DirectiveModel: claudecode.DirectiveModel{ID: "waired/default[1m]", DisplayName: "Waired (1M context)"},
+		ContextWindow:  1048576,
+	}))
+	if got := auditContextWindow(context.Background(), opts); got.Status != integration.StatusWarn {
+		t.Errorf("a new row audits as %v: %s", got.Status, got.Detail)
+	}
+	if _, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL); err != nil || !changed {
 		t.Fatalf("changed=%v err=%v, want the plugin rewritten", changed, err)
 	}
 	body, _ := os.ReadFile(PluginEntryFile(opts.HomeDir))
-	if !strings.Contains(string(body), `"key":"peer-linux-gpu","name":"Waired peer: linux-gpu","contextWindow":1048576`) {
-		t.Errorf("the row still carries its old window:\n%s", body)
+	if !strings.Contains(string(body), `{"key":"default[1m]","name":"Waired (1M context)"}`) {
+		t.Errorf("the new row did not reach the plugin:\n%s", body)
 	}
 }
 
-// A plugin an older template wrote is rewritten even when every row still
-// matches: what changed is what it sends (waired-agent#1395 — the any-computer
-// row is sent as "waired").
-func TestTopUpContextWindow_RewritesAnOlderRevision(t *testing.T) {
-	opts := newOpts(t)
-	swapWindow(t, 200704)
-	if err := New().Apply(context.Background(), opts); err != nil {
-		t.Fatal(err)
-	}
-	body, err := os.ReadFile(PluginEntryFile(opts.HomeDir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// What a revision-1 plugin looks like: no PLUGIN_REV line. Replaced
-	// without its line ending, which is CRLF in a Windows build's embed.
-	old := strings.Replace(string(body), "const PLUGIN_REV = 2;", "", 1)
-	if old == string(body) {
-		t.Fatal("fixture: the revision line was not found")
-	}
-	if err := os.WriteFile(PluginEntryFile(opts.HomeDir), []byte(old), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if got := auditContextWindow(context.Background(), opts); got.Status != integration.StatusWarn {
-		t.Errorf("an older plugin audits as %v: %s", got.Status, got.Detail)
-	}
-	_, changed, err := TopUpContextWindow(context.Background(), opts.HomeDir, opts.GatewayBaseURL)
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v, want the older plugin rewritten", changed, err)
-	}
-	if got := declaredRevision(opts.HomeDir); got != pluginRevision {
-		t.Errorf("revision after the top-up = %d, want %d", got, pluginRevision)
-	}
-}
-
-// The drift `waired doctor` reports, and the three ways it must stay quiet.
+// The drift `waired doctor` reports, and the ways it must stay quiet.
 func TestAuditContextWindow(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		written    int // -1 = do not install a plugin
-		live       int
+		older      int // -1 = current plugin, -2 = no plugin
+		sameRev    bool
 		wantStatus integration.Status
 		wantSubstr string
 	}{
-		{"declared and current", 200704, 200704, integration.StatusOK, "200704 tokens"},
-		{"declared nothing, the host now serves a window", 0, 124928, integration.StatusWarn, "declares no window"},
-		{"declared a stale window", 200704, 124928, integration.StatusWarn, "declares 200704"},
-		{"the gateway cannot be asked", 200704, 0, integration.StatusOK, "did not report a window"},
-		{"no plugin at all", -1, 200704, integration.StatusOK, "no plugin"},
+		{"current", -1, false, integration.StatusOK, "200704 tokens"},
+		{"no plugin at all", -2, false, integration.StatusOK, "no plugin"},
+		{"written by an older version", 124928, false, integration.StatusWarn, "older version of Waired"},
+		// The two window findings, reached with the revision line current: a
+		// plugin edited by hand, since this build never writes either.
+		{"declares no window", 0, true, integration.StatusWarn, "declares no window for waired/default; Waired now gives it 200704 tokens"},
+		{"declares another window", 124928, true, integration.StatusWarn, "declares 124928 tokens for waired/default; Waired now gives it 200704"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			swapRowsFn(t, nil)
 			opts := newOpts(t)
-			if tc.written >= 0 {
-				swapWindow(t, tc.written)
+			switch {
+			case tc.older == -1:
 				if err := New().Apply(context.Background(), opts); err != nil {
 					t.Fatal(err)
 				}
+			case tc.older >= 0:
+				writeOlderPlugin(t, opts, tc.older)
+				if tc.sameRev {
+					body, _ := os.ReadFile(PluginEntryFile(opts.HomeDir))
+					cur := strings.Replace(string(body), "const PLUGIN_REV = "+strconv.Itoa(pluginRevision-1)+";",
+						"const PLUGIN_REV = "+strconv.Itoa(pluginRevision)+";", 1)
+					if err := os.WriteFile(PluginEntryFile(opts.HomeDir), []byte(cur), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
-			swapWindow(t, tc.live)
 			got := auditContextWindow(context.Background(), opts)
 			if got.Status != tc.wantStatus {
 				t.Errorf("status = %v, want %v (detail: %s)", got.Status, tc.wantStatus, got.Detail)

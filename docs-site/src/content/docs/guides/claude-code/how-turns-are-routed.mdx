@@ -22,19 +22,19 @@ line saying which computer it means.
 | Row | Second line | Which computer answers |
 |---|---|---|
 | **Waired** | *Any of your computers* | Whichever of your computers Waired chooses. This is the ordinary row. |
-| **Waired local** | *This computer* | Always this computer, whatever it can hold. Not offered on a computer with no inference engine. |
+| **Waired local** | *This computer* | Always this computer. Not offered on a computer with no inference engine. |
 | **Waired peer** | *Another of your computers* | Always one of your other computers, never this one. Pick it on a laptop that should stay quiet. |
 | **Waired public share** | *Someone else's computer* | A computer another Waired user is lending out. Offered only after you turn [Public Share](/public-share/) on. |
 | **Waired peer: studio-desktop** | The model it is running | That computer, and only that computer. One row per computer that can answer right now. |
 
-For the rows where Waired chooses the computer, **Waired**, **Waired peer**
-and **Waired public share**, a computer is used only when it is running a
-model with room for a 200,000-token conversation. Most can. A computer serving
-a smaller window, such as one where vLLM sized the window down to fit the
-GPU's VRAM, is not used for those rows. It still answers **Waired local** on
-itself and its own **Waired peer: &lt;name&gt;** row, and those rows state that
-computer's own window. Which of your computers is chosen is decided by
-`waired worker`. See [Choose which computer answers](/guides/routing/).
+Every Waired row is answered only by a computer with a context window of at
+least 200,704 tokens, or 1,048,576 on a `(1M context)` twin. That includes
+**Waired local** and the **Waired peer: &lt;name&gt;** rows. Most computers
+can. A computer serving a smaller window, such as one where vLLM sized the
+window down to fit the GPU's VRAM, answers none of the Waired rows, not even
+**Waired local** on itself: a turn on that row fails and says why. Where
+Waired chooses the computer, `waired worker` decides which one. See
+[Choose which computer answers](/guides/routing/).
 
 The rows are written into your own `~/.claude/settings.json` (on Windows,
 `%USERPROFILE%\.claude\settings.json`) under `modelPicker`. If that file
@@ -73,7 +73,8 @@ things to know:
   appears in the next `claude` you start. If you pick a computer that has
   since gone away, the turn fails and names it.
 - **Only computers that can answer right now are listed.** A computer that is
-  off, still downloading, or has no engine is left out.
+  off, still downloading, has no engine, or holds less than 200,704 tokens is
+  left out.
 
 ## The (1M context) twins
 
@@ -85,21 +86,22 @@ says why. It never runs in a smaller window without telling you. **Waired
 public share** gets its twin when a public computer you may use declares a
 1M window; public computers publish their window like any other. A computer
 whose owner turned off **Serve main conversation** earns no twin, because the
-twin is what a main conversation is sent on.
+twin is what a main conversation is sent on. A row without the suffix stays a
+200,704-token session, even when the computer that answers it holds 1M.
 
 ## Long sessions get compacted
 
 Models hold less conversation at once than the cloud does, so Claude Code
-compacts older turns to fit. On a Waired row, the limit it works to is the
-context window this computer's engine holds, passed on by
-`sudo waired claude enable`. A `(1M context)` row works to 1M. If you switch
-this computer to a different model later, run `sudo waired claude enable`
-again so the new limit is passed on. `waired claude status` shows both
-numbers and says when they disagree.
+compacts older turns to fit. The limit it works to is 200,704 tokens on every
+Waired row without `(1M context)`, and 1,048,576 on the `(1M context)` rows,
+whichever computer answers. `sudo waired claude enable` passes the 200,704 on
+to Claude Code. It stays the same when a computer switches models, so there is
+nothing to run again. `waired claude status` says whether Claude Code was told
+it.
 
-A prompt too long for the computer that answers comes back as
-`prompt is too long`, and Claude Code compacts and retries on its own. That
-is the session continuing, not failing.
+A prompt longer than the row's limit comes back as `prompt is too long`, even
+when the computer that answers holds more, and Claude Code compacts and
+retries on its own. That is the session continuing, not failing.
 
 ## When a turn cannot run
 
@@ -117,7 +119,7 @@ window in the message. Here on the **Waired** row, when every computer that
 could take the turn serves less than 200,704 tokens:
 
 ```
-API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 Pick an Anthropic model if you want that turn in the cloud. Run

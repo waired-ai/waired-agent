@@ -45,7 +45,7 @@ func TestRenderPlugin(t *testing.T) {
 		`baseURL: "http://127.0.0.1:9473/v1"`,
 		// The any-computer row, sent as the id Claude Code sends
 		// (waired-agent#1395).
-		`default: { id: "waired", name: "Waired" }`,
+		`default: { id: "waired", name: "Waired", limit: limitFor("default") }`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered plugin missing %q:\n%s", want, s)
@@ -93,7 +93,7 @@ func TestRenderPlugin_ReadsTheRowsFromTheGateway(t *testing.T) {
 		// A failed read is "not known": the one row that needs no facts about
 		// a mesh is what this integration offered before.
 		"|| FALLBACK",
-		`default: { id: "waired", name: "Waired" }`,
+		`default: { id: "waired", name: "Waired", limit: limitFor("default") }`,
 		// Each row is sent under its wire id, not the listed one: the
 		// any-computer row and its twin are listed as waired/default and
 		// waired/default[1m] but carry their floor only as "waired" and
@@ -128,11 +128,39 @@ func TestRenderPlugin_LimitCarriesTheOutputKeyOpenCodeRequires(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(body)
-	if !strings.Contains(s, "limit: { context: m.max_input_tokens, output: 0 }") {
+	if !strings.Contains(s, "return { context, output: 0 };") {
 		t.Errorf("rendered plugin does not write output beside context:\n%s", s)
 	}
-	if strings.Count(s, "limit: {") != 1 {
-		t.Errorf("want exactly one limit entry, the one with output:\n%s", s)
+}
+
+// Every Waired row is one of two sessions, decided by its id: 1048576 tokens
+// for a "[1m]" row, 200704 for every other, whichever computer answers it. The
+// plugin works that out from the key rather than reading max_input_tokens, and
+// the fallback row it offers when the gateway cannot be reached carries it too.
+//
+// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+// waired-agent#1396. It inverts the listing-driven window of
+// waired-agent#1306 / #1395, under which a row whose computer stated no window
+// carried none and OpenCode sized it by its own default.
+func TestRenderPlugin_EveryRowsWindowFollowsItsKey(t *testing.T) {
+	body, err := renderPlugin("http://127.0.0.1:9473")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	for _, want := range []string{
+		"const CONTEXT_WINDOW = 200704;",
+		"const CONTEXT_WINDOW_1M = 1048576;",
+		`const context = key.toLowerCase().includes("[1m]") ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW;`,
+		"limit: limitFor(key),",
+		`limit: limitFor("default")`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rendered plugin missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "m.max_input_tokens") {
+		t.Errorf("a row's window is still read off the listing:\n%s", s)
 	}
 }
 

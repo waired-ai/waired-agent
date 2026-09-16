@@ -102,28 +102,27 @@ func TestOpenAIModels_ListsTheRouteRows(t *testing.T) {
 	if !local.WairedRoute || local.DisplayName != "Waired local" {
 		t.Errorf("local row = %+v", local)
 	}
-	// A row that names one computer states THAT computer's window, not this
-	// one's — the difference between a compaction hint that fits and one that
-	// does not (waired-agent#1001).
-	if local.MaxInputTokens != 131072 {
-		t.Errorf("local row window = %d, want the row's own 131072", local.MaxInputTokens)
+	// Every row states the session it is — 200704, or 1048576 for a twin —
+	// never a computer's own window, this one's or the one it names
+	// (waired-agent#1396). The rows naming one computer used to state that
+	// computer's (waired-agent#1001, #1395).
+	if local.MaxInputTokens != hostfit.ServingWindow200k {
+		t.Errorf("local row window = %d, want 200704", local.MaxInputTokens)
 	}
-	if peer := byID["waired/peer-linux-gpu"]; peer.MaxInputTokens != 200704 || !peer.WairedRoute {
-		t.Errorf("peer row = %+v, want the peer's own window and the marker", peer)
+	if peer := byID["waired/peer-linux-gpu"]; peer.MaxInputTokens != hostfit.ServingWindow200k || !peer.WairedRoute {
+		t.Errorf("peer row = %+v, want 200704 and the marker", peer)
 	}
-	// A row where Waired chooses the computer states the floor routing holds
-	// it to — never this host's own window, which is what it used to say
-	// (waired-agent#1395).
+	if big := byID["waired/peer-big-box"]; big.MaxInputTokens != hostfit.ServingWindow200k {
+		t.Errorf("a 1M computer's own row = %+v, want 200704: its twin is the 1M session", big)
+	}
 	if any.MaxInputTokens != hostfit.ServingWindow200k {
 		t.Errorf("any-node window = %d, want the 200k floor it routes by", any.MaxInputTokens)
 	}
 	if p := byID[claudecode.DirectiveModelPeer]; p.MaxInputTokens != hostfit.ServingWindow200k {
 		t.Errorf("peer row window = %d, want the 200k floor", p.MaxInputTokens)
 	}
-	// A computer that states no window gets no number: this host's would be
-	// a claim about a machine that had not made it.
-	if q, ok := byID["waired/peer-quiet-box"]; !ok || q.MaxInputTokens != 0 {
-		t.Errorf("undeclared computer row = %+v (listed %v), want it listed with no window", q, ok)
+	if q, ok := byID["waired/peer-quiet-box"]; !ok || q.MaxInputTokens != hostfit.ServingWindow200k {
+		t.Errorf("row = %+v (listed %v), want 200704", q, ok)
 	}
 
 	// The same twins Claude Code's /model shows, each right after its row, and
@@ -223,13 +222,12 @@ func TestApplyRouteDirective(t *testing.T) {
 		wantModel     string
 		wantWindow    int
 	}{
-		// The same floors the Claude listener routes by (owner decision
-		// 2026-09-16, waired-agent#1395): 200k where Waired chooses the
-		// computer, nothing where the row names one, 1M on every twin.
+		// The same floors the Claude listener routes by: 200k on every row,
+		// 1M on every twin (owner decision 2026-09-16, waired-agent#1396).
 		{"the any-node row demands the 200k floor", claudecode.DirectiveModelAny, true, "", router.DefaultModelAlias, hostfit.ServingWindow200k},
-		{"the local row names this computer and demands nothing", claudecode.DirectiveModelLocal, true, claudecode.DirectiveModelLocal, router.DefaultModelAlias, 0},
+		{"the local row names this computer and demands the floor", claudecode.DirectiveModelLocal, true, claudecode.DirectiveModelLocal, router.DefaultModelAlias, hostfit.ServingWindow200k},
 		{"the peer row names another and demands the floor", claudecode.DirectiveModelPeer, true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, hostfit.ServingWindow200k},
-		{"a per-peer row names one and demands nothing", "waired/peer-linux-gpu", true, "waired/peer-linux-gpu", router.DefaultModelAlias, 0},
+		{"a per-peer row names one and demands the floor", "waired/peer-linux-gpu", true, "waired/peer-linux-gpu", router.DefaultModelAlias, hostfit.ServingWindow200k},
 		{"the public row names someone else's and demands the floor", claudecode.DirectiveModelPublic, true, claudecode.DirectiveModelPublic, router.DefaultModelAlias, hostfit.ServingWindow200k},
 		{"a pre-#1185 spelling still routes", "claude-waired-peer", true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, hostfit.ServingWindow200k},
 		{"a tier spelled into the id is a window demand", claudecode.Tier1M(claudecode.DirectiveModelAny), true, "", router.DefaultModelAlias, hostfit.ServingWindow1M},

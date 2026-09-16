@@ -56,10 +56,12 @@ const anthropicModelsPrefix = "/anthropic/v1/models/"
 // started enforcing an assumed window for catalog-unknown ids: every
 // "claude-"-headed row silently ran in a 200k session and put a notice on
 // screen saying the id "isn't described by this version's model catalog".
-// With no head at all, every row takes the variable — one number, this
-// computer's, approximate for a peer and exact for the local row — and the
-// notice is gone. The number is a compaction hint either way; what actually
-// refuses an over-long prompt is this gateway's own 400
+// With no head at all, every row takes the variable and the notice is gone.
+// The variable was this computer's window, approximate for a peer and exact
+// for the local row; since waired-agent#1396 it is 200704 on every host,
+// because every row without "[1m]" is a 200k session whichever computer
+// answers it (RequiredWindowFor). What actually refuses an over-long prompt
+// is this gateway's own 400
 // (docs/decisions/20260714/0241-drop-static-auto-compact-window-pin.md).
 const (
 	// ModelWairedAny names any Waired node — this computer or a peer,
@@ -246,10 +248,10 @@ func RoutedDirectiveModels() []DirectiveModel {
 // trip only in `anthropic-beta: context-1m-*` — see RequiredWindowForRequest.
 func Tier1M(id string) string { return id + tierMarker1M }
 
-// anthropicModelList builds the deduped model list. The advertised window
-// comes from Deps.ContextWindowFor, which resolves dynamic aliases and
-// unknown claude-* ids to the device-active model (so waired/default and
-// the claude-* ids Claude Code selects both carry the real local window).
+// anthropicModelList builds the deduped model list. A Waired row states the
+// session it is (RequiredWindowFor). Every other id's window comes from
+// Deps.ContextWindowFor, which resolves dynamic aliases to the device-active
+// model, so waired/default carries this computer's own window.
 func (h *HandlerSet) anthropicModelList() []anthropicModel {
 	created := time.Now().UTC().Format(time.RFC3339)
 	out := []anthropicModel{}
@@ -263,16 +265,22 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 		}
 		seen[id] = struct{}{}
 		m := anthropicModel{Type: "model", ID: id, DisplayName: display, CreatedAt: created}
-		if h.deps.ContextWindowFor != nil {
+		switch {
+		case RequiredWindowFor(id) > 0:
+			// A Waired row states the session it is — 200704 unless it is a
+			// 1M twin, the number CLAUDE_CODE_MAX_CONTEXT_TOKENS gives Claude
+			// Code — not this computer's window, which no Waired row is sized
+			// by (waired-agent#1396).
+			m.MaxInputTokens = RequiredWindowFor(id)
+		case h.deps.ContextWindowFor != nil:
 			m.MaxInputTokens = h.deps.ContextWindowFor(id)
 		}
 		out = append(out, m)
 	}
 	// #52: reserved route-directive ids first, so they are prominent in the
 	// /model picker. Opt-in via agentconfig; only advertised on the Claude
-	// intercept surface. add() stamps each with ContextWindowFor (harmless —
-	// Claude Code sizes the window from the id string, not this field); the
-	// honest local window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS instead.
+	// intercept surface. Claude Code sizes the session from the id and
+	// CLAUDE_CODE_MAX_CONTEXT_TOKENS, not from the field add() stamps.
 	if h.deps.ClaudeModelDirectives {
 		for _, d := range DirectiveModels() {
 			add(d.ID, d.DisplayName)
@@ -297,10 +305,9 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 // questions about the same id — one is a promise the serving node must
 // keep, the other is which node serves at all — and a directive can be
 // one without being the other. Peer and public are both: they choose a
-// kind of computer AND promise a window, because neither names the one
-// machine that answers (waired-agent#1395). The local and per-computer ids
-// are only the first: naming one machine and then demanding a window of it
-// would refuse turns on the very machine the operator chose.
+// kind of computer. Every Waired id also promises a window
+// (RequiredWindowFor, waired-agent#1396), so that is no longer what tells the
+// two questions apart.
 //
 // The local pin IS one of these, since waired-agent#1320. It used not to be,
 // on the ground that it "resolves to this device without a routing preference
@@ -360,20 +367,29 @@ func NormalizeModelID(modelID string) string {
 }
 
 // RequiredWindowFor is the input-token window a request for modelID obliges
-// the serving computer to hold, or 0 when the id makes no such promise
-// (waired#1031). It is the one table both listeners route by: Claude Code on
-// the Claude listener, and OpenCode and OpenClaw on the OpenAI-dialect one
-// (owner decision 2026-09-16, waired-agent#1395).
+// the serving computer to hold, and the session the row gives the client, or
+// 0 when the id is not a Waired row (waired#1031). It is the one table both
+// listeners route by: Claude Code on the Claude listener, and OpenCode and
+// OpenClaw on the OpenAI-dialect one.
+//
+// Every Waired row is one of two sessions, decided by its id alone (owner
+// decision 2026-09-16, waired-agent#1396):
 //
 //   - Any "[1m]" spelling: 1M. Picking the twin IS the demand.
-//   - The rows where Waired chooses the computer — any of yours, another of
-//     yours, a public one: 200k. Claude Code sizes their sessions as 200k
-//     conversations, and the OpenAI-dialect listing states 200k for them, so
-//     the computer that answers has to be able to hold one.
-//   - The rows naming one computer — this one, or a peer by name: nothing.
-//     Naming a machine and then demanding a window of it would refuse turns
-//     on the very machine the operator chose, and those rows state that
-//     machine's own window instead.
+//   - Every other Waired row — any of yours, this computer, another of yours,
+//     a public one, a computer by name: 200k. Even when the computer that
+//     answers holds 1M, the row is a 200k session: Claude Code is told 200704
+//     for all of them (CLAUDE_CODE_MAX_CONTEXT_TOKENS), and the OpenAI-dialect
+//     listing and the plugins state 200704 for them, so the computer that
+//     answers has to hold at least that, and the turn is held to it
+//     (guardedWindow).
+//
+// The rows naming one computer used to carry no floor and state that
+// computer's own window, on the reasoning that naming a machine and then
+// demanding a window of it would refuse turns on the very machine the
+// operator chose (waired-agent#1395). With one number for the whole client,
+// that window could not reach the session anyway, and a computer that cannot
+// hold 200,704 tokens does not serve a Waired row at all.
 //
 // Since Claude Code strips "[1m]" on the wire, a 1M spelling from it reaches
 // us bare and this function cannot see the tier — RequiredWindowForRequest
@@ -387,23 +403,7 @@ func RequiredWindowFor(modelID string) int {
 	if strings.Contains(strings.ToLower(modelID), tierMarker1M) {
 		return hostfit.ServingWindow1M
 	}
-	if isChosenNodeDirective(modelID) {
-		return hostfit.ServingWindow200k
-	}
-	return 0
-}
-
-// isChosenNodeDirective reports whether the id is a row where Waired chooses
-// the computer — the any-node, peer or public row, in any spelling — as
-// opposed to one naming a single machine.
-func isChosenNodeDirective(modelID string) bool {
-	switch NormalizeModelID(modelID) {
-	case ModelWairedAny, ModelWairedAnyLegacy, ModelWairedAnyOldest,
-		ModelWairedPeer, ModelWairedPeerLegacy,
-		ModelWairedPublic, ModelWairedPublicLegacy:
-		return true
-	}
-	return false
+	return hostfit.ServingWindow200k
 }
 
 // isWairedDirective reports whether the id is one of the reserved /model ids,

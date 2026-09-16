@@ -1427,3 +1427,26 @@ func effectiveContextWindow(deps Deps, sel router.Selection) int {
 	}
 	return deps.ContextWindowFor(sel.ModelID)
 }
+
+// guardedWindow is the window the #623 guard holds a turn to: what the
+// answering engine serves (effectiveContextWindow), and never more than the
+// session the row gave the client. rowWindow is the request's floor
+// (Request.MinContextWindow, RequiredWindowFor), 0 for a request that is not
+// a Waired row.
+//
+// Every Waired row is a 200k or a 1M session whatever computer answers it
+// (owner decision 2026-09-16, waired-agent#1396). The floor makes the answering
+// computer hold at least the row's window; this is the other half. Without it
+// a 200k row answered by a computer that holds 1M let a prompt run past the
+// 200,704 tokens the client was told, and the client, which compacts against
+// that number, would be carrying a conversation it did not know it had.
+//
+// An unknown engine window (0) takes the row's: the floor already made the
+// answering computer declare at least that.
+func guardedWindow(deps Deps, sel router.Selection, rowWindow int) int {
+	win := effectiveContextWindow(deps, sel)
+	if rowWindow > 0 && (win <= 0 || win > rowWindow) {
+		return rowWindow
+	}
+	return win
+}

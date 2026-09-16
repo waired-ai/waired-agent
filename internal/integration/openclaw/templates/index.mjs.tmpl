@@ -28,19 +28,15 @@ const BASE_URL = {{ .BaseURLLiteral }};
 const PLUGIN_REV = {{ .PluginRevLiteral }};
 const SYNTHETIC_KEY = "waired-local";
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-// The window the gateway stated for waired/default when the plugin was written
-// (max_input_tokens). It is 0 when the gateway could not be asked — during
-// `waired init`, before anything is serving — and then the field is left out
-// so OpenClaw uses its own default. A wrong number is worse than none: a value
-// below what the answering computer holds makes OpenClaw compact on the first
-// turn (#1001), one above it lets a prompt through that the computer refuses.
-// Only waired/default falls back to it, for a plugin written before the rows.
+// The window OpenClaw sizes a conversation to, and compacts against. Every
+// Waired row is one of two sessions, decided by its key and nothing else: a
+// "[1m]" row is CONTEXT_WINDOW_1M, and every other row is CONTEXT_WINDOW,
+// whichever computer answers it — including a key this plugin has never heard
+// of. The gateway makes the computer that answers hold at least that many
+// tokens and holds the turn to it (waired-agent#1396).
 const CONTEXT_WINDOW = {{ .ContextWindowLiteral }};
-// One entry per row the gateway offered: {key, name, contextWindow}. Each row
-// carries the window the gateway states for it — the floor routing holds a
-// row to where Waired picks the computer, and the computer's own window where
-// the row names one. A computer that states none carries none, rather than
-// borrowing another row's number (waired-agent#1395).
+const CONTEXT_WINDOW_1M = {{ .ContextWindow1MLiteral }};
+// One entry per row the gateway offered: {key, name}.
 const MODELS = {{ .ModelsLiteral }};
 
 function rowFor(key) {
@@ -63,6 +59,10 @@ function wireId(key) {
   return "waired/" + key;
 }
 
+function windowFor(key) {
+  return key.toLowerCase().includes("[1m]") ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW;
+}
+
 function wairedModel(key) {
   const row = rowFor(key);
   const model = {
@@ -74,13 +74,10 @@ function wairedModel(key) {
     reasoning: false,
     input: ["text"],
     cost: COST,
+    contextWindow: windowFor(key),
     maxTokens: 8192,
     compat: { supportsTools: true, supportsUsageInStreaming: true },
   };
-  const window = row ? row.contextWindow || 0 : key === "default" ? CONTEXT_WINDOW : 0;
-  if (window > 0) {
-    model.contextWindow = window;
-  }
   return model;
 }
 

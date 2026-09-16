@@ -608,6 +608,7 @@ def edit(kind, text):
                 env_changed = True
                 for key, value in (("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1"),
                                    ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000"),
+                                   ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "200704"),
                                    ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "250000")):
                     if is_str(env.get(key)) and env[key] == value:
                         del env[key]
@@ -838,6 +839,7 @@ claude_leftovers_jxa() {
                     envChanged = true;
                     var pairs = [['CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY', '1'],
                         ['CLAUDE_CODE_AUTO_COMPACT_WINDOW', '200000'],
+                        ['CLAUDE_CODE_MAX_CONTEXT_TOKENS', '200704'],
                         ['CLAUDE_CODE_MAX_CONTEXT_TOKENS', '250000']];
                     for (i = 0; i < pairs.length; i++) {
                         if (has(env, pairs[i][0]) && env[pairs[i][0]] === pairs[i][1]) {
@@ -1192,7 +1194,7 @@ claude_leftovers_awk() {
             drop(lu, 1, "ANTHROPIC_BASE_URL")
             if (isstr(ld) && VAL[ld] == "1") drop(ld, 1, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY")
             if (isstr(la) && VAL[la] == "200000") drop(la, 1, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
-            if (isstr(lm) && VAL[lm] == "250000") drop(lm, 1, "CLAUDE_CODE_MAX_CONTEXT_TOKENS")
+            if (isstr(lm) && (VAL[lm] == "200704" || VAL[lm] == "250000")) drop(lm, 1, "CLAUDE_CODE_MAX_CONTEXT_TOKENS")
             else if (isstr(lm)) keptline = "CLAUDE_CODE_MAX_CONTEXT_TOKENS=" VAL[lm]
         }
         if (isstr(ls) && VAL[ls] == "waired/subagent") drop(ls, 1, "CLAUDE_CODE_SUBAGENT_MODEL")

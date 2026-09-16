@@ -2,6 +2,7 @@
 status: accepted
 superseded_by:
   - docs/decisions/20260916/0410-the-window-floor-is-the-same-on-every-client.md
+  - docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md
 ---
 
 # `/model` の Waired 行は `modelPicker` で出し、id から `claude-` を外す (20260906 03:30)

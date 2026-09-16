@@ -89,25 +89,18 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 	// (modelrows.Rows), so one machine reads the same on both surfaces
 	// (waired-agent#1395).
 	//
-	// max_input_tokens is the window the row states, which is the one routing
-	// guarantees for it (modelrows.Row.ContextWindow). Only the local row
-	// falls back to this host's own figure when its declaration is missing —
-	// it is the one row this host answers. A per-computer row whose computer
-	// declares nothing omits the field: filling it with this host's window,
-	// as every undeclared row used to be, stated a number about a machine
-	// that had not said it.
+	// max_input_tokens is the session the row is — 200704, or 1048576 for a
+	// "[1m]" twin (modelrows.Row.ContextWindow) — which routing holds the
+	// answering computer and the turn to (waired-agent#1396). It is never a
+	// computer's own window: no Waired row is sized by one.
 	for _, r := range h.routeDirectiveRows() {
 		if _, dup := seen[r.ID]; dup {
 			continue
 		}
 		seen[r.ID] = struct{}{}
-		win := r.ContextWindow
-		if win == 0 && r.ID == ModelWairedLocal {
-			win = window(r.ID)
-		}
 		out = append(out, model{
 			ID: r.ID, Object: "model", Created: created, OwnedBy: "waired",
-			MaxInputTokens: win, WairedRoute: true,
+			MaxInputTokens: r.ContextWindow, WairedRoute: true,
 			DisplayName: r.DisplayName, Description: r.Description,
 		})
 	}
@@ -289,7 +282,10 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	// what this engine is actually sized for right now — the quantity a
 	// truncation depends on, and the right one for the serving half.
 	// 0 means "unknown" and fails open.
-	if win := effectiveContextWindow(h.deps, sel); win > 0 {
+	//
+	// Held to the row's own session as well when the id was a Waired row
+	// (guardedWindow, waired-agent#1396).
+	if win := guardedWindow(h.deps, sel, routeReq.MinContextWindow); win > 0 {
 		if n := CountOpenAIPromptTokensApprox(body); n > win {
 			rr.fail(http.StatusBadRequest, "context_overflow")
 			slog.Debug("openai context overflow", "model", sel.ModelID, "tokens", n, "window", win)

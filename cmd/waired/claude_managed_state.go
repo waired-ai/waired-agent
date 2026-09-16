@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"runtime"
-	"strconv"
 
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 )
@@ -42,35 +41,36 @@ type claudeWindowFacts struct {
 	// did not write is not ours to add keys to.
 	routed bool
 	// directives: agent.json's ClaudeModelRouteDirectives (#52). The window key
-	// exists to size waired's own local /model directive id and means nothing
-	// with directives off.
+	// exists to size waired's own /model rows and means nothing with
+	// directives off.
 	directives bool
 	// elevated: only an elevated process may write the machine-wide file.
 	elevated bool
 	// managed: CLAUDE_CODE_MAX_CONTEXT_TOKENS as it stands on disk.
 	managed string
-	// live: what the gateway advertises right now. 0 = unknown, and an unknown
-	// window is never written — a stale honest number beats a fresh guess.
-	live int
 }
 
-// claudeWindowTopUpNeeded decides whether init should fill in
-// CLAUDE_CODE_MAX_CONTEXT_TOKENS on its way out (waired-agent#796).
+// claudeWindowTopUpNeeded decides whether CLAUDE_CODE_MAX_CONTEXT_TOKENS has to
+// be set to 200704 on the way out of init, `waired link` or doctor's repair.
 func claudeWindowTopUpNeeded(f claudeWindowFacts) bool {
 	return f.routed && f.directives && f.elevated &&
-		f.live > 0 && f.managed != strconv.Itoa(f.live)
+		f.managed != claudemanaged.DirectivesMaxContextTokensValue
 }
 
-// topUpClaudeWindow closes the second half of waired-agent#796. The browser
-// wizard applies the Claude Code route before the model download
-// (waired-agent#311), so the window is unresolvable at write time and the key is
-// correctly left out; by the time init reaches its closing card the model is
-// ready and /v1/models can answer, so the number exists and can be recorded.
+// topUpClaudeWindow sets CLAUDE_CODE_MAX_CONTEXT_TOKENS to 200704 on a routed
+// host whose managed settings say anything else (waired-agent#1396).
 //
-// Warn-only. Sign-in has already succeeded, and a missing window key does not
-// stop Claude Code — the gateway's per-request overflow guard still protects the
-// real window. Failing init over it would trade a cosmetic gap for a broken
-// install.
+// Two kinds of host need it. One routed by an older build carries the window
+// that build derived — this computer's, or the smallest it could reach — and
+// every Waired row without "[1m]" is a 200k session now. One routed by the
+// browser wizard of an older build carries nothing, because the route was
+// applied before anything served and that build would not write a window it
+// could not ask for (waired-agent#796, #311).
+//
+// Warn-only. Sign-in has already succeeded, and a wrong window key does not
+// stop Claude Code — the gateway's per-request overflow guard still holds the
+// turn to its row. Failing init over it would trade a cosmetic gap for a
+// broken install.
 func topUpClaudeWindow(stateDir string) {
 	opts := claudeManagedWriteOptions(stateDir)
 	path := claudemanaged.Path()
@@ -79,11 +79,10 @@ func topUpClaudeWindow(stateDir string) {
 		directives: opts.ModelRouteDirectives,
 		elevated:   isElevatedFn(),
 		managed:    claudemanaged.MaxContextTokensAt(path),
-		live:       opts.DeclaredContextWindow(),
 	}) {
 		return
 	}
-	if _, err := claudemanaged.SetMaxContextTokensAt(path, opts.DeclaredContextWindow()); err != nil {
+	if _, err := claudemanaged.SetMaxContextTokensAt(path); err != nil {
 		fmt.Fprintf(stderr, "Warning: couldn't record the Claude Code context window (%v). %s\n",
 			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 	}

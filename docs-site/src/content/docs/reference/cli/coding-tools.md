@@ -69,7 +69,7 @@ managed settings:   /etc/claude-code/managed-settings.json (present)
 ANTHROPIC_BASE_URL: http://127.0.0.1:9472
 expected base URL:  http://127.0.0.1:9472
 gateway listener:   127.0.0.1:9472 (listening)
-local window:       200704  (managed settings: 200704)
+context window:     200704  (managed settings: 200704)
 /model rows:        6 rows
                     /home/you/.claude/settings.json
 statusline:         waired segment installed
@@ -84,7 +84,7 @@ waired node:        auto (this device or a mesh peer)   (change with `waired wor
 |---|---|
 | `managed settings:` | The machine-wide file, and whether it is present. |
 | `ANTHROPIC_BASE_URL:` | What the file points at. `(not set)` when routing is off, or `unreadable. This file isn't JSON Waired can parse.` |
-| `local window:` | The context window this computer's engine holds, next to the one passed to Claude Code. The row says when they disagree. On a computer with no engine, it reads `none here` and gives the limit taken from another computer. |
+| `context window:` | 200704, the context window of every Waired row without `(1M context)`, next to the value in the managed settings Claude Code starts with. `not set`, or another number marked `stale`, ends with `` re-run `sudo waired claude enable` ``. Not shown when Claude Code is not routed through Waired on this computer, or when the Waired `/model` rows are switched off. |
 | `/model rows:` | How many Waired rows are in your settings file, or `not written`, `left alone` (the file lists rows of its own), or `unreadable`. |
 | `statusline:` | `waired segment installed`, `wrapping your existing statusLine`, `not waired (custom: …)`, `not installed`, or `installed but shadowed here by <file> (<scope> scope)`. |
 | `subagents:` | `follow their own model`, `on Waired`, or `left alone. CLAUDE_CODE_SUBAGENT_MODEL=<value> isn't Waired's`. |

@@ -14,6 +14,9 @@
 // still owns is how a row is RENDERED: Claude Code's writer puts the id and
 // the two lines into modelPicker, and the OpenAI-dialect listing adds the
 // window as max_input_tokens.
+//
+// The window a row states is the session it is, 200704 or 1048576, and never
+// a computer's own figure (owner decision 2026-09-16, waired-agent#1396).
 package modelrows
 
 import (
@@ -35,8 +38,10 @@ type Facts struct {
 	// found on a real host during rc5 — the row was offered on a machine
 	// that answers nothing, and picking it failed every turn).
 	LocalServes bool
-	// LocalWindow is the input window this computer's engine is loaded with,
-	// 0 when it has not said. It is the honest number for the local row.
+	// LocalWindow is the input window this computer declares, 0 when it
+	// declares none. Only its tier matters here: whether the local row gets
+	// a 1M twin (LocalWindow1M). The row itself states 200704 whatever it is
+	// (waired-agent#1396).
 	LocalWindow int
 	// LocalWindow1M, PeerWindow1M and PublicWindow1M say whether this
 	// computer, one of this operator's other computers (a teammate's
@@ -71,18 +76,14 @@ type Row struct {
 	// Tier1M marks the "[1m]" twin itself.
 	Tier1M bool
 	// ContextWindow is the window the row states, and it is exactly what
-	// routing guarantees for it (gateway.RequiredWindowFor):
+	// routing guarantees for it (gateway.RequiredWindowFor): 1M for a twin,
+	// 200k for every other row, including the ones naming one computer. The
+	// computer that answers has to hold at least that, and the turn is held
+	// to it (owner decision 2026-09-16, waired-agent#1396).
 	//
-	//   - a twin: 1M, the floor its id carries;
-	//   - a row where Waired chooses the computer (any, peer, public): 200k,
-	//     the floor those ids carry;
-	//   - a row naming one computer (local, per-computer): that computer's
-	//     declared window, 0 when it declares none — those rows carry no
-	//     floor, so the machine's own figure is the only honest one.
-	//
-	// It used to be 0 on every row not naming one machine, and the
-	// OpenAI-dialect listing filled that 0 with the REQUESTING computer's
-	// window, which nothing enforced (waired-agent#1395).
+	// The rows naming one computer used to state that computer's own window
+	// and carry no floor (waired-agent#1395). Claude Code is given one number
+	// for every row, so that window never reached its session.
 	ContextWindow int
 }
 
@@ -112,7 +113,7 @@ func Rows(f Facts) []Row {
 			if !f.LocalServes {
 				continue
 			}
-			add(Row{DirectiveModel: d, Window1M: f.LocalWindow1M, ContextWindow: f.LocalWindow})
+			add(Row{DirectiveModel: d, Window1M: f.LocalWindow1M, ContextWindow: hostfit.ServingWindow200k})
 		case claudecode.DirectiveModelPeer:
 			add(Row{DirectiveModel: d, Window1M: f.PeerWindow1M, ContextWindow: hostfit.ServingWindow200k})
 		case claudecode.DirectiveModelPublic:
@@ -129,7 +130,7 @@ func Rows(f Facts) []Row {
 		}
 	}
 	for _, r := range claudecode.PeerDirectiveModels(f.Peers, f.PeerLimit) {
-		add(Row{DirectiveModel: r.DirectiveModel, Window1M: r.Window1M, ContextWindow: r.ContextWindow})
+		add(Row{DirectiveModel: r.DirectiveModel, Window1M: r.Window1M, ContextWindow: hostfit.ServingWindow200k})
 	}
 	return out
 }
@@ -138,7 +139,9 @@ func Rows(f Facts) []Row {
 //
 // Only serving peers get a row. A row for a computer that cannot answer is a
 // menu entry whose selection fails, and a picker cannot render one as
-// disabled. The others are still in Peers, marked NotServing, because their
+// disabled. A computer that declares less than 200,704 tokens, or nothing,
+// cannot answer any Waired row — every one is at least a 200k session — so it
+// gets no row either (waired-agent#1396). The others are still in Peers, marked NotServing, because their
 // names decide which ids need a hash — and PeerForDirective, which resolves
 // an id against every peer, has to reach the same ids.
 //
@@ -180,6 +183,9 @@ func FactsFromSnapshot(snap *inferencemesh.Snapshot, limit int, publicShareOn bo
 		pv := snap.Peers[from[i]]
 		public := inferencemesh.IsPublicGrant(pv.Grant)
 		if public && !publicShareOn {
+			peers[i].NotServing = true
+		}
+		if declaredWindow(pv) < hostfit.ServingWindow200k {
 			peers[i].NotServing = true
 		}
 		if pv.InferenceState != nil && pv.InferenceState.ExcludeMain {

@@ -41,9 +41,9 @@ func swapRowsFn(t *testing.T, rows []modelrows.Row) *string {
 // OpenClaw 2026.9.4 (2026-09-12).
 func TestApply_WritesTheGatewaysRowsToBothPlaces(t *testing.T) {
 	base := swapRowsFn(t, []modelrows.Row{
-		row("waired/default", "Waired", 0),
-		row("waired/local", "Waired local", 131072),
-		row("waired/peer", "Waired peer", 0),
+		row("waired/default", "Waired", 200704),
+		row("waired/local", "Waired local", 200704),
+		row("waired/peer", "Waired peer", 200704),
 		row("waired/peer-linux-gpu", "Waired peer: linux-gpu", 200704),
 	})
 	opts := newOpts(t)
@@ -61,10 +61,12 @@ func TestApply_WritesTheGatewaysRowsToBothPlaces(t *testing.T) {
 	s := string(body)
 	// The rows are keyed by the id minus its "waired/" head, because that is
 	// what OpenClaw hands resolveDynamicModel.
-	if !strings.Contains(s, `{"key":"peer-linux-gpu","name":"Waired peer: linux-gpu","contextWindow":200704}`) {
-		t.Errorf("the peer row did not reach the plugin with its own window:\n%s", s)
+	// No window rides with a row: the plugin works it out from the key
+	// (waired-agent#1396).
+	if !strings.Contains(s, `{"key":"peer-linux-gpu","name":"Waired peer: linux-gpu"}`) {
+		t.Errorf("the peer row did not reach the plugin:\n%s", s)
 	}
-	if !strings.Contains(s, `{"key":"local","name":"Waired local","contextWindow":131072}`) {
+	if !strings.Contains(s, `{"key":"local","name":"Waired local"}`) {
 		t.Errorf("the local row did not reach the plugin:\n%s", s)
 	}
 

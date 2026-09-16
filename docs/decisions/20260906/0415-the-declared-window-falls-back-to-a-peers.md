@@ -1,11 +1,13 @@
 ---
-status: accepted
+status: superseded
+superseded_by:
+  - docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md
 ---
 
 # 宣言する窓は、エンジンが無ければ届く窓に落とす (20260906 04:15)
 
 ## Status
-Accepted
+Superseded — オーナー決定(2026-09-16、waired-ai/waired-agent#1396)で、`CLAUDE_CODE_MAX_CONTEXT_TOKENS` はどのホストでも 200704 に固定された(`docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md`)。エンジンの有無で書く値を変える理由が無くなった。この記録が書いた値は、所有の判定でだけ認識し続ける。
 
 ## Context
 

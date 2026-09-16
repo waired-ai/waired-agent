@@ -1,0 +1,7 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200704",
+    "DISABLE_TELEMETRY": "1"
+  }
+}

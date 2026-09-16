@@ -10,6 +10,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -385,6 +386,8 @@ func TestNodeDirectivePref_EveryOfferedRowPinsItsOwnComputer(t *testing.T) {
 	serving := func(id, name string) inferencemesh.PeerView {
 		v := peerSnapshot("big:32b").Peers[0]
 		v.DeviceID, v.DeviceName = id, name
+		// A computer gets a row only at the 200k tier (waired-agent#1396).
+		v.InferenceState.ContextWindow = hostfit.ServingWindow200k
 		return v
 	}
 	team := func(v inferencemesh.PeerView, owner string) inferencemesh.PeerView {

@@ -59,7 +59,7 @@ func TestUninstallScriptsKnowEveryManagedOwnershipLiteral(t *testing.T) {
 		baseURLKey, loopbackPrefix,
 		discoveryKey,
 		autoCompactWindowKey, legacyAutoCompactWindowValue,
-		maxContextTokensKey, legacyDirectivesMaxContextTokensValue,
+		maxContextTokensKey, legacyDirectivesMaxContextTokensValue, DirectivesMaxContextTokensValue,
 		subagentModelKey, SubagentModelID,
 		stopHookEvent, sessionStartHookEvent,
 	}
@@ -97,7 +97,7 @@ func TestManagedCorpusHoldsTodaysLinuxWriterBytes(t *testing.T) {
 	restore := SwapPathForTest(path)
 	defer restore()
 	if _, err := writeWithOptionsFor("linux", "http://127.0.0.1:9472", WriteOptions{
-		ModelRouteDirectives: true, LocalContextWindow: 200704, ModelPeerEntries: 5,
+		ModelRouteDirectives: true, ModelPeerEntries: 5,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestEverythingWriteAddsIsSomethingTheScriptsRemove(t *testing.T) {
 	restore := SwapPathForTest(path)
 	defer restore()
 	if _, err := WriteWithOptions("http://127.0.0.1:9472", WriteOptions{
-		ModelRouteDirectives: true, LocalContextWindow: 250000, ModelPeerEntries: 3,
+		ModelRouteDirectives: true, ModelPeerEntries: 3,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -94,23 +94,15 @@ func (a *adapter) Apply(ctx context.Context, opts integration.ApplyOptions) erro
 	// row this integration shipped before, which needs no facts about a mesh.
 	rows := pluginRows(rowsFn(ctx, GatewayBaseURL(opts.GatewayBaseURL)))
 
-	// The window this host can actually serve, asked of the gateway rather
-	// than assumed: the plugin used to declare a constant, and OpenClaw
-	// compacted its context on the first turn of every session when that
-	// constant sat below the real figure (#1001). 0 means the gateway could
-	// not be asked, and the plugin then declares no window at all. It is the
-	// fallback for a row that carries no window of its own.
-	contextWindow := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefPrefix+defaultModelKey)
-
-	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL, contextWindow, rows)
+	// The windows need nothing from the gateway: every row is 200704 tokens,
+	// or 1048576 for a "[1m]" row, whichever computer answers it
+	// (waired-agent#1396). They used to be asked of it, and a plugin written
+	// before anything served declared none (#1001, #1029).
+	pluginFiles, err := installPlugin(opts.HomeDir, opts.GatewayBaseURL, rows)
 	if err != nil {
 		return err
 	}
-	if contextWindow > 0 {
-		logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s, context window %d)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL), contextWindow)
-	} else {
-		logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s; context window unknown, leaving it to OpenClaw's default)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL))
-	}
+	logger.Infof("openclaw: wrote plugin %s (provider 'waired' -> %s, context window %d)", PluginDir(opts.HomeDir), providerBaseURL(opts.GatewayBaseURL), pluginContextWindow)
 
 	configPath := ConfigFile(opts.HomeDir)
 	m, raw, existed, err := readConfigObject(configPath)
@@ -312,17 +304,18 @@ func (a *adapter) Uninstall(_ context.Context, opts integration.ApplyOptions) er
 // something says it is fixable (waired-agent#1298).
 const ContextWindowSubject = "openclaw context window"
 
-// auditContextWindow compares the window the installed plugin declares with
-// the one this host's gateway reports now, and then the rest of what the
-// plugin was written from: the rows, whose windows are per row, and the
-// revision of the template that wrote it (waired-agent#1395). All three are
-// one finding under one subject because they have one fix — `waired doctor
-// --fix` re-links, which rewrites the file — and the subject is what earns
-// the repair prompt.
+// auditContextWindow checks what the installed plugin was written from: the
+// revision of the template that wrote it (waired-agent#1395), the rows the
+// gateway offers, and the window it declares, which is 200704 for every
+// plugin this build writes (waired-agent#1396). All three are one finding
+// under one subject because they have one fix — `waired doctor --fix`
+// re-links, which rewrites the file — and the subject is what earns the repair
+// prompt.
 //
-// A gateway that cannot answer is not a finding: `waired doctor` runs on
-// hosts with the daemon down, and reporting drift from a number nobody could
-// read would be an assertion about a comparison that never happened.
+// A gateway that cannot answer is not a finding about the rows: `waired
+// doctor` runs on hosts with the daemon down, and reporting drift from a list
+// nobody could read would be an assertion about a comparison that never
+// happened.
 func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) integration.AuditFinding {
 	const subject = ContextWindowSubject
 	declared, ok := DeclaredContextWindow(opts.HomeDir)
@@ -345,20 +338,13 @@ func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) inte
 			Detail: "the plugin's list of Waired models is out of date",
 		}
 	}
-	live := contextWindowFn(ctx, GatewayBaseURL(opts.GatewayBaseURL), modelRefPrefix+defaultModelKey)
+	live := pluginContextWindow
 	switch {
-	case live <= 0:
-		return integration.AuditFinding{
-			Status: integration.StatusOK, Subject: subject,
-			Detail: "this computer did not report a window; leaving the plugin as it is",
-		}
 	case declared == live:
 		return integration.AuditFinding{
 			Status: integration.StatusOK, Subject: subject,
 			Detail: fmt.Sprintf("%d tokens", live),
 		}
-	// The live figure is what Waired states for waired/default, which is that
-	// row's 200k floor since waired-agent#1395, not this computer's own window.
 	case declared == 0:
 		return integration.AuditFinding{
 			Status: integration.StatusWarn, Subject: subject,
