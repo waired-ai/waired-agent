@@ -808,8 +808,8 @@ func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 // computer" was already the honest phrasing — the clause is a fact about
 // the manifest, and running it under a different engine does not move it.
 //
-// The clause about THIS host — would the engine clamp the window below
-// the coding target here — is NOT in this entry point. It reads the
+// The clause about THIS host — would the KV pool here hold less than the
+// coding target — is NOT in this entry point. It reads the
 // per-device GPU list, which this signature cannot carry, so it lives in
 // VLLMRecommendModelOnHost below; the vLLM sizing it needs moved into this
 // package for that (waired-agent#1061). This one remains the honest answer
@@ -825,8 +825,8 @@ func VLLMRecommendModel(_ catalog.Manifest, _ catalog.Variant, _ Host) Verdict {
 }
 
 // VLLMRecommendModelOnHost is VLLMRecommendModel plus the clause about
-// THIS host: would the engine have to clamp the window below the coding
-// target here (waired-agent#1061)?
+// THIS host: would the KV pool here hold less than the coding target
+// (waired-agent#1061)?
 //
 // It is the vLLM answer to clause 3 of OllamaRecommendModel, and it took a
 // second entry point because the arithmetic reads the per-device GPU list

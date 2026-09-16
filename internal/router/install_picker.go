@@ -19,9 +19,10 @@ import (
 // 10*log10(params) - 5*log10(footprint) (#518), so a tier floor over it
 // is a size cutoff written the long way round, and the one measurement
 // that could have ranked those models — the agent-grade harness — is not
-// monotone in size across them. Refusal is now what waired#1056 says it
-// is: certain OOM (hostfit.OllamaCapacityFit) and the #624 native
-// window, both of which RankModels already applies.
+// monotone in size across them. Refusal is certain OOM
+// (hostfit.OllamaCapacityFit) and, on vLLM, a KV pool that cannot hold
+// the 200,704-token window (waired-agent#1434), both of which RankModels
+// already applies.
 //
 // ok=false with a nil error means nothing fits this host at all
 // (RankModels returned ErrHardwareInsufficient) and the caller skips

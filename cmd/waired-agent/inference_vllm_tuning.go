@@ -23,6 +23,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/version"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // computeVLLMTuning sizes --max-model-len for one (manifest, variant,
@@ -33,11 +34,29 @@ import (
 // engine will run (router.VLLMSpeculative); an MTP draft's layers and
 // memory come out of the window (waired-ai/waired#1432).
 //
-// Unknown sizing inputs keep the manifest window with no warning
-// (pre-#675 behaviour: never guess). Known inputs whose padded weights
-// alone exceed the budget also keep the manifest window — a shorter
-// window cannot save that case — but carry a startup-will-likely-fail
-// warning so the abort is diagnosable before it happens.
+// The window is one of the two this product serves, and nothing between
+// them (owner decision 2026-09-16, waired-agent#1396; #1434):
+//
+//   - 1,048,576 when the model's own window reaches it and the KV pool
+//     holds it;
+//   - 200,704 when the model's own window and the KV pool reach that;
+//   - otherwise the pool's estimate, and the host cannot serve the model:
+//     ModelTuning.WindowFits is false, the warning says so, and
+//     DeclaredContextWindow declares nothing, so no Waired row routes
+//     here. Recommendation does not pick such a build
+//     (modelrank's vLLM window gate); this is the defensive answer for one
+//     that got here anyway, an explicit pin or a changed GPU.
+//
+// It used to serve the model's native window whenever the pool covered it
+// (262,144 for most models) and any 1024-aligned clamp below that, and the
+// mesh saw those numbers as they were.
+//
+// Unknown sizing inputs serve 200,704 — capped at the model's own window
+// for one below it, which only CI's internal_only model is — rather than
+// the native window: never guess upward. Known inputs whose padded weights
+// alone exceed the budget serve the same and carry a
+// startup-will-likely-fail warning, so the abort is diagnosable before it
+// happens.
 func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tp int, gpuMemUtil float64, kvFactor float64, spec router.VLLMSpeculation) (int, infruntime.ModelTuning) {
 	mt := infruntime.ModelTuning{ModelID: m.ModelID, VariantID: v.VariantID,
 		SpeculativeMethod: spec.Method, SpeculativeTokens: spec.Tokens}
@@ -46,10 +65,9 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 		// Unknown sizing inputs are not evidence against the host —
 		// permissive, like VLLMServesContextFloor. The exception is the
 		// warning branch: with every input known, est<=0 means the
-		// padded weights alone overflow the budget, and a window the
-		// engine will likely fail to start with is not one to declare
-		// (WindowFits=false keeps it off the mesh).
-		mt.ContextLength = m.ContextLength
+		// padded weights alone overflow the budget.
+		win := vllmUnsizedWindow(m)
+		mt.ContextLength = win
 		mt.WindowFits = true
 		if v.EstimatedWeightGB > 0 && v.KVBytesPerTokenFP16 > 0 && gpuMemUtil > 0 && hasNVIDIAGPU(hw) {
 			mt.WindowFits = false
@@ -57,31 +75,58 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 				"model weights (~%.1f GB plus activations) exceed the vLLM GPU memory budget at gpu-memory-utilization=%.2f, TP=%d; engine startup will likely fail — see engine.log",
 				v.EstimatedWeightGB, gpuMemUtil, tp)
 		}
-		return m.ContextLength, mt
+		return win, mt
 	}
-	// A real estimate: the window exported below is one the KV-pool
-	// arithmetic says this host holds (vLLM clamps rather than spills),
-	// so it is a proven window either way.
-	mt.WindowFits = true
-	if m.ContextLength > 0 && est >= m.ContextLength {
-		mt.ContextLength = m.ContextLength
-		return m.ContextLength, mt
+	if win := vllmTierWindow(m, est); win > 0 {
+		// A window the KV-pool arithmetic says this host holds (vLLM
+		// clamps rather than spills), so a proven one.
+		mt.ContextLength = win
+		mt.WindowFits = true
+		return win, mt
 	}
 
+	// The pool cannot hold the 200k session.
 	mt.ContextLength = est
-	native := "unknown"
-	if m.ContextLength > 0 {
-		native = strconv.Itoa(m.ContextLength)
-	}
-	mt.Warning = fmt.Sprintf(
-		"context window clamped to %d tokens (model native %s) so the KV cache fits GPU memory at gpu-memory-utilization=%.2f, TP=%d",
-		est, native, gpuMemUtil, tp)
-	if est < router.EffectiveContextFloor(m) {
-		// Same tone as the ollama sub-floor note: informational — a
-		// clamped window is a working configuration, not an error.
-		mt.Warning += "; below the ~200k coding-agent context target — long sessions will truncate or compact"
-	}
+	mt.WindowFits = false
+	mt.Warning = fmt.Sprintf(vllmBelowTierWarning, est, gpuMemUtil, tp)
 	return est, mt
+}
+
+// vllmBelowTierWarning is the ModelTuning warning for a build whose KV pool
+// holds less than the 200k session on this host. Shown as an engine notice
+// on `waired status` and in `waired runtimes ls`. Written with the doc-writer
+// skill (owner pre-approval, 2026-09-17).
+const vllmBelowTierWarning = "KV cache holds a context window of %d tokens for this model at gpu-memory-utilization=%.2f, TP=%d, under the 200,704 every Waired row needs, so no Waired row will use this computer — pick a smaller model or raise gpu-memory-utilization"
+
+// vllmTierWindow is the tier this build serves given the KV pool's estimate:
+// 1048576 or 200704, capped by the model's own window, or 0 when the pool
+// cannot hold the model at 200704. A model whose own window is under 200704 —
+// only CI's internal_only one — is served at its own window when the pool
+// holds it (owner answer 2026-09-16 on waired-agent#1396).
+func vllmTierWindow(m catalog.Manifest, est int) int {
+	native := m.ContextLength
+	switch {
+	case native >= hostfit.ServingWindow1M && est >= hostfit.ServingWindow1M:
+		return hostfit.ServingWindow1M
+	case (native <= 0 || native >= hostfit.ServingWindow200k) && est >= hostfit.ServingWindow200k:
+		return hostfit.ServingWindow200k
+	case native > 0 && native < hostfit.ServingWindow200k && est >= native:
+		return native
+	}
+	return 0
+}
+
+// vllmUnsizedWindow is the window a build is served at when the KV pool
+// cannot be estimated: the 200k tier, or the model's own window when that is
+// smaller, and 0 (the engine's default) when the manifest names none.
+func vllmUnsizedWindow(m catalog.Manifest) int {
+	if m.ContextLength > 0 && m.ContextLength < hostfit.ServingWindow200k {
+		return m.ContextLength
+	}
+	if m.ContextLength <= 0 {
+		return 0
+	}
+	return hostfit.ServingWindow200k
 }
 
 // vllmServeFlagsSupported reports whether the installed venv is new

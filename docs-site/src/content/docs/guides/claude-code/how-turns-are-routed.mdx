@@ -30,8 +30,8 @@ line saying which computer it means.
 Every Waired row is answered only by a computer with a context window of at
 least 200,704 tokens, or 1,048,576 on a `(1M context)` twin. That includes
 **Waired local** and the **Waired peer: &lt;name&gt;** rows. Most computers
-can. A computer serving a smaller window, such as one where vLLM sized the
-window down to fit the GPU's VRAM, answers none of the Waired rows, not even
+can. A computer serving a smaller window, such as one whose VRAM cannot hold
+200,704 tokens with the model it runs, answers none of the Waired rows, not even
 **Waired local** on itself: a turn on that row fails and says why. Where
 Waired chooses the computer, `waired worker` decides which one. See
 [Choose which computer answers](/guides/routing/).

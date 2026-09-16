@@ -23,7 +23,7 @@ Claude Codeのターンは、`/model`で選んだモデルが指す場所で実�
 | **Waired public share** | *Someone else's computer* | 別のWairedユーザーが貸し出しているパソコン。[パブリック共有](/ja/public-share/)をオンにしたあとでだけ表示されます。 |
 | **Waired peer: studio-desktop** | 動かしているモデル | そのパソコンだけ。いま答えられるパソコンごとに1行ずつ表示されます。 |
 
-Wairedの行に答えるのは、200,704トークン以上のコンテキストウィンドウを持つコンピュータだけです。`(1M context)`付きの行では1,048,576トークン以上です。**Waired local**と**Waired peer: &lt;名前&gt;**の行も同じです。ほとんどのコンピュータはこの条件を満たします。それより小さいコンテキストウィンドウのコンピュータ、たとえばGPUのVRAMに収まるようvLLMがコンテキストウィンドウを小さくしたコンピュータは、Wairedのどの行にも答えません。そのコンピュータ自身の**Waired local**も同じで、その行のターンは失敗して理由を表示します。Wairedがコンピュータを選ぶ場合、どれを選ぶかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
+Wairedの行に答えるのは、200,704トークン以上のコンテキストウィンドウを持つコンピュータだけです。`(1M context)`付きの行では1,048,576トークン以上です。**Waired local**と**Waired peer: &lt;名前&gt;**の行も同じです。ほとんどのコンピュータはこの条件を満たします。それより小さいコンテキストウィンドウのコンピュータ、たとえば動かしているモデルで200,704トークンをVRAMに保持できないコンピュータは、Wairedのどの行にも答えません。そのコンピュータ自身の**Waired local**も同じで、その行のターンは失敗して理由を表示します。Wairedがコンピュータを選ぶ場合、どれを選ぶかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
 これらの行は、自分の`~/.claude/settings.json`（Windowsでは`%USERPROFILE%\.claude\settings.json`）の`modelPicker`に書き込まれます。このファイルに自分で書いた`modelPicker`の行がすでにある場合、Wairedはそれに触れず、何も書き込みません。`waired claude status`の`/model rows:`の行に`left alone`と表示されます。
 

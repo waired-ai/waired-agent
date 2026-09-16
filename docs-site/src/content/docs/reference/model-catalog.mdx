@@ -83,9 +83,12 @@ ships. Smaller GPUs are listed first. On computers with several identical
 NVIDIA GPUs, vLLM shards the model across them, so their combined VRAM counts
 toward the requirement. On recent NVIDIA GPUs, Ada and Hopper and newer,
 Waired serves the KV cache in fp8, which roughly doubles the context window
-that fits in the same VRAM. If a model's full context window still does not
-fit your GPU memory, Waired serves it with a reduced window and says so in
-`waired status` and `waired doctor` instead of failing to start.
+that fits in the same VRAM. vLLM serves one of two context windows:
+1,048,576 tokens when the model's own window reaches it and your VRAM holds
+it, otherwise 200,704, even for a model whose own window is larger. A model
+your VRAM cannot hold at 200,704 tokens is not chosen for this computer; if
+you pin it anyway, the engine starts, but this computer answers no Waired
+row, and `waired status` says why.
 
 ### vLLM · Dense
 

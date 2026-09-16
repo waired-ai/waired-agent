@@ -29,9 +29,10 @@ import (
 //   - Host gate (vllm path): the floor window's KV (fp8 on Ada+, else
 //     fp16) plus activation-padded weights must fit the default
 //     gpu-memory-utilization budget at the auto tensor-parallel size.
-//     vLLM has no spill semantics — an unfittable window is clamped at
-//     serve time — so this gate is a plain window comparison with no
-//     spill allowance.
+//     vLLM has no spill semantics, so this gate is a plain window
+//     comparison with no spill allowance. A build that fails it is not
+//     served: the serve tuning declares no window for it and
+//     auto-selection does not pick it (waired-agent#1434).
 
 // CodingAgentSelectionFloorTokps is the decode throughput (tok/s,
 // shallow-context boot benchmark, TRUE decode: engine counters or the

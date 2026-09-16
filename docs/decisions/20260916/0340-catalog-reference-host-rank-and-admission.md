@@ -2,6 +2,8 @@
 status: accepted
 supersedes:
   - docs/decisions/20260820/1130-step-down-walks-the-selection-ladder.md
+superseded_by:
+  - docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md
 ---
 
 # qwen3.8 を 35B-A3B の上に置き、段下げの行き先は参照機での実測で選び、カタログは参照機に載るものに限る (20260916 03:40)
@@ -10,6 +12,8 @@ supersedes:
 Accepted。オーナー判断 2026-09-16（waired-ai/waired#1357 の L107、comment 5686058325）。`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md` の裁定 13（「tier の順序は dense と MoE のどちらを上にするか、L107 が決める」）への答え。実装は waired-ai/waired-agent#1400。同日（2026-09-16）、#1400 の実装計画を確認する場でオーナーが 4 点に答え、決定 2・3 を詰め、決定 4・5 を足した。
 
 次の記録を**部分的に狭める（覆さない）**。記録の `## Status` に鏡の一文を置いた。
+
+`docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md`(オーナー決定 2026-09-16、waired-ai/waired-agent#1434)が、決定 4 の「残すのは」のうち「vLLM の `--max-model-len` による切り詰め」を置き換える。vLLM は 200,704 か 1,048,576 で配信し、KV プールが 200,704 を保てないビルドはコンテキストウィンドウを宣言しない。同じ箇所のほかの 2 つ(まだ宣言していないエンジン、granite4-350m)は残る。
 
 - `docs/decisions/20260820/1130-step-down-walks-the-selection-ladder.md`: 決定 1 の受け入れ判定「baseline より厳密に軽い」（`footprintCmp`）を、「参照機での 1 リクエストの秒数が active の variant より小さい」に置き換える。ランク順で最初の候補を返すこと、active と同じモデルを除くこと（#754）、決定 2（tier 差を出さない）はそのまま有効。
 

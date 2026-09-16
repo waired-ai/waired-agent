@@ -55,7 +55,7 @@ Mac、Windows、CPUだけのパソコン、VRAMの少ないGPUや内蔵GPU向け
 
 ## <a id="vllm-models"></a>vLLM向けモデル
 
-Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー向けです。メモリの列は、そのモデルのいちばん小さいsafetensorsのビルドに必要な最小のGPUのVRAMです。小さいGPU向けが先に並びます。同じNVIDIAのGPUを複数枚持つパソコンでは、vLLMがモデルを複数枚に分割するので、合計のVRAMが要件に数えられます。AdaとHopper以降の最近のNVIDIAのGPUでは、WairedはKVキャッシュをfp8で提供し、同じVRAMに収まるコンテキストウィンドウが約2倍になります。それでもモデルのコンテキストウィンドウ全体がGPUのメモリに収まらない場合、Wairedは起動に失敗するのではなく、短いウィンドウで提供して`waired status`と`waired doctor`にその旨を表示します。
+Linux上のNVIDIA（CUDA）とAMD（ROCm）の単体GPUを持つサーバー向けです。メモリの列は、そのモデルのいちばん小さいsafetensorsのビルドに必要な最小のGPUのVRAMです。小さいGPU向けが先に並びます。同じNVIDIAのGPUを複数枚持つパソコンでは、vLLMがモデルを複数枚に分割するので、合計のVRAMが要件に数えられます。AdaとHopper以降の最近のNVIDIAのGPUでは、WairedはKVキャッシュをfp8で提供し、同じVRAMに収まるコンテキストウィンドウが約2倍になります。vLLMが提供するコンテキストウィンドウは2通りだけです。モデル自身のコンテキストウィンドウが1,048,576トークンに届き、VRAMがそれを保持できるときは1,048,576トークン、それ以外は200,704トークンで、モデル自身のコンテキストウィンドウがそれより大きくても同じです。VRAMが200,704トークンを保持できないモデルは、このパソコンには選ばれません。それでも自分で指定して動かすと、エンジンは起動しますが、このパソコンはWairedのどの行にも答えず、`waired status`がその理由を表示します。
 
 ### <a id="vllm--dense"></a>vLLM · Dense
 

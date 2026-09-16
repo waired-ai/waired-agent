@@ -540,9 +540,10 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// else the build's own MTP head when the catalog gives it a draft
 	// length (waired-ai/waired#1432).
 	spec := router.VLLMSpeculative(variant, p.cfg.VLLMSpeculativeNgram, p.cfg.VLLMDisableMTP, serveFlags)
-	// #675: clamp --max-model-len to what the utilization budget fits
-	// instead of forwarding the manifest window verbatim (an unfittable
-	// window aborts vLLM startup — no spill-style degradation exists).
+	// #675, #1434: --max-model-len is 200,704 or 1,048,576, whichever the
+	// utilization budget holds, rather than the manifest window (an
+	// unfittable window aborts vLLM startup — no spill-style degradation
+	// exists). computeVLLMTuning has the cases outside the two.
 	maxLen, tuning := computeVLLMTuning(manifest, variant, hwProfile, tp, p.cfg.VLLMGPUMemoryUtilization, kvFactor, spec)
 	if tuning.Warning != "" {
 		p.logger.Warn("vllm context sizing", "model", manifest.ModelID,

@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md
 ---
 
 # 容量ゲートは「実際に serve する窓」で価格付けする (20260808 19:07)
@@ -11,6 +13,8 @@ Accepted。2026-08-03 のオーナー決定（waired-ai/waired#1056 決定 1、`
 だけ」というルールは維持し、**「serve できる」の定義を変える**。結果として
 `OllamaCapacityFit` の価格付け対象が、見積もりが縮めた窓から**製品が実際に serve
 する窓**へ移る。これは同決定の下で明示的に選ばれていた挙動の反転にあたる。
+
+`docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md`(オーナー決定 2026-09-16、waired-ai/waired-agent#1434)が 2 か所を置き換える。決定 1 の「rung 未満のモデルについてはモデル自身の窓」が当てはまるのは、CI 専用の `internal_only` のモデルだけになる。上の「拒否は確実な OOM だけ」は、vLLM の自動選択では維持されない。KV プールが 200,704 を保てないビルドは選ばない。
 
 ## Context
 

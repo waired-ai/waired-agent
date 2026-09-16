@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -461,7 +462,7 @@ func TestRuntimeStatusFor_VLLMCarriesTuning(t *testing.T) {
 	adapter.SetAppliedTuning(infruntime.ModelTuning{
 		ModelID: "gpt-oss-20b", VariantID: "mxfp4",
 		ContextLength: 59392,
-		Warning:       "context window clamped to 59392 tokens (model native 131072) so the KV cache fits GPU memory at gpu-memory-utilization=0.85, TP=1",
+		Warning:       fmt.Sprintf(vllmBelowTierWarning, 59392, 0.85, 1),
 	})
 	p.registry.Register(adapter)
 	p.setVLLM(adapter)
@@ -470,8 +471,8 @@ func TestRuntimeStatusFor_VLLMCarriesTuning(t *testing.T) {
 	if entry.ContextLength != 59392 {
 		t.Errorf("ContextLength = %d, want 59392", entry.ContextLength)
 	}
-	if !strings.Contains(entry.TuningWarning, "clamped") {
-		t.Errorf("TuningWarning = %q, want the clamp note", entry.TuningWarning)
+	if !strings.Contains(entry.TuningWarning, "under the 200,704") {
+		t.Errorf("TuningWarning = %q, want the below-200,704 note", entry.TuningWarning)
 	}
 }
 

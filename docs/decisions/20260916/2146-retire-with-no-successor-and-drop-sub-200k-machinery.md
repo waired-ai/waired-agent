@@ -2,6 +2,8 @@
 status: accepted
 supersedes:
   - docs/decisions/20260804/1943-retire-a-catalog-entry-with-a-successor-map.md
+superseded_by:
+  - docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md
 ---
 
 # 退役は後継なしでもよく、200k に満たないモデルのための機構は撤廃する (20260916 21:46)
@@ -13,6 +15,8 @@ Accepted。オーナー判断 2026-09-16。waired-ai/waired-agent#1400 の実装
 オーナーの言葉（原文）: 「gpt-ossを退役させ後継なしでいい。またこれで不要になる、200kにコンテクストサイズが満たないモデルをclaude codeなどで使ったときの注意を促す機構など関連する機構も撤廃したい」
 
 次の記録を**部分的に**置き換える。記録の `## Status` に鏡の一文を置いた。
+
+`docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md`(オーナー決定 2026-09-16、waired-ai/waired-agent#1434)が、「残るもの」の 1 つ目のうち「vLLM の `--max-model-len` による切り詰め」を置き換える。vLLM は 200,704 か 1,048,576 で配信し、KV プールが 200,704 を保てないビルドはコンテキストウィンドウを宣言しない。まだ宣言していないエンジン(0)と granite4-350m(32k)は残る。
 
 - `docs/decisions/20260804/1943-retire-a-catalog-entry-with-a-successor-map.md` §1 の「退役は必ず後継を名指す」（`retired_test.go` が強制していた）。後継は任意になる。ほかはそのまま有効: 事実は proto に・置換ポリシーはエージェントに、指示 / 観測の区別（§3）、名前は永久に予約、新しいピンを書く口への 409。
 

@@ -332,12 +332,12 @@ func vllmMaxModelLen(
 // VLLMServesContextFloor is the host gate for the vllm path: can this
 // (manifest, variant) serve its effective floor window within the
 // default gpu-memory-utilization budget at the auto tensor-parallel
-// size? Sized by VLLMMaxModelLen — the same estimator the serve-time
-// clamp uses, so selection and serving agree. Unknown sizing inputs and
-// hosts with no NVIDIA GPU reported pass permissively (the capacity gate
-// owns the VRAM rejection and the serve-time clamp is the backstop),
-// same philosophy as the rest of this package. There is no spill
-// allowance: vLLM clamps the window instead of spilling.
+// size? Sized by VLLMMaxModelLen — the same estimator the serve tuning
+// uses, so selection and serving agree. Unknown sizing inputs and hosts
+// with no NVIDIA GPU reported pass permissively (the capacity gate owns
+// the VRAM rejection, and the serve tuning declares no window for a build
+// whose pool falls short, waired-agent#1434), same philosophy as the rest
+// of this package. There is no spill allowance: vLLM does not spill.
 //
 // The floor comes from OllamaEffectiveContextFloor despite the name:
 // that function is min(ServingWindow200k, m.ContextLength), a fact about
