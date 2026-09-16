@@ -135,3 +135,54 @@ func TestVLLMMTPReserveCoversTheMeasuredCost(t *testing.T) {
 		}
 	}
 }
+
+// A draft the product writes onto a tag runs only where the load with it
+// fits the device; a draft the tag publishes runs everywhere, because
+// ollama reads it from the tag (waired-ai/waired#1433).
+func TestOllamaDraftTokensWritesTheDraftOnlyWhereItFits(t *testing.T) {
+	q2 := bundledVariantForTest(t, "qwen3.8-27b", "q2-gguf")
+	if q2.GGUF == nil || q2.GGUF.NextNLayers == 0 || q2.GGUF.DraftMaxTokens != 0 {
+		t.Skipf("fixture changed: %+v", q2.GGUF)
+	}
+	stamped := q2
+	stamped.MTPDraftTokens = 2
+	published := q2
+	pg := *q2.GGUF
+	pg.DraftMaxTokens = 2
+	published.GGUF = &pg
+
+	// The two Macs M9 ran on, as their profilers report them.
+	mac16 := Host{RAMTotalGB: 16, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 12288, VRAM0MB: 16384, GPUVendor: "apple"}
+	mac48 := Host{RAMTotalGB: 48, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 36864, VRAM0MB: 49152, GPUVendor: "apple"}
+	cpu := Host{RAMTotalGB: 64}
+	const window = 200704
+	for _, c := range []struct {
+		name string
+		v    catalog.Variant
+		h    Host
+		want int
+	}{
+		// Measured on the 16 GB Mac: 38/66 layers and 4 tokens/s without
+		// the draft, 24/66 and 0.11 tokens/s with it.
+		{"written, 16 GB Mac, spills", stamped, mac16, 0},
+		// Measured on the 48 GB Mac: 66/66 layers with the draft.
+		{"written, 48 GB Mac, fits", stamped, mac48, 2},
+		{"written, no GPU", stamped, cpu, 0},
+		{"published, 16 GB Mac", published, mac16, 2},
+		{"none", q2, mac48, 0},
+	} {
+		got := OllamaDraftTokens(c.v, c.h, catalog.KVCacheQ4_0, window, 1)
+		if got != c.want {
+			t.Errorf("%s: draft %d, want %d", c.name, got, c.want)
+		}
+		mem := OllamaEstimateMemory(c.v, c.h, catalog.KVCacheQ4_0, window, 1)
+		if (mem.DraftMB > 0) != (c.want > 0) {
+			t.Errorf("%s: estimate prices a draft of %d MiB for a draft of %d tokens", c.name, mem.DraftMB, c.want)
+		}
+	}
+	// Where the written draft does not run, the load is priced as the tag
+	// without one, number for number.
+	if a, b := OllamaEstimateMemory(stamped, mac16, catalog.KVCacheQ4_0, window, 1), OllamaEstimateMemory(q2, mac16, catalog.KVCacheQ4_0, window, 1); a != b {
+		t.Errorf("16 GB Mac: withheld draft priced %+v, no draft %+v", a, b)
+	}
+}

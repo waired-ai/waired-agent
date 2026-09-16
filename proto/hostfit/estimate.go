@@ -191,9 +191,49 @@ func OllamaEstimateMemory(v catalog.Variant, h Host, kvType string, window, para
 	return ollamaEstimateMemoryAt(v, h, kvType, window, parallel, ollamaUBatchTokens)
 }
 
+// OllamaDraftTokens is the MTP draft length ollama runs for v on h at this
+// window and slot count, and so the one OllamaEstimateMemory prices.
+//
+// A draft the tag publishes itself (GGUFLayout.DraftMaxTokens) runs on
+// every host: ollama reads it from the tag. A draft the product writes
+// onto the tag (Variant.MTPDraftTokens, waired-ai/waired#1433) is written
+// only where the whole load, draft included, fits the device budget, and
+// 0 is returned everywhere else. The draft's own context moves layers off
+// the device, and a load that spills gets slower with a draft, not faster:
+// measured with ollama 0.34.0 on a 16 GB Apple M4, Qwen3.8-27B UD-Q2_K_XL
+// at a 200,704-token window already kept 38 of 66 layers on the GPU and
+// decoded 4 tokens/s; with draft_num_predict 2 it kept 24 and decoded
+// 0.11 tokens/s. The agent writes the draft by the same rule, so what is
+// priced is what runs.
+func OllamaDraftTokens(v catalog.Variant, h Host, kvType string, window, parallel int) int {
+	return ollamaDraftTokensAt(v, h, kvType, window, parallel, ollamaUBatchTokens)
+}
+
+func ollamaDraftTokensAt(v catalog.Variant, h Host, kvType string, window, parallel, ubatch int) int {
+	draft := catalog.MTPDraftTokens(v)
+	if draft <= 0 || v.GGUF == nil || v.GGUF.DraftMaxTokens > 0 {
+		return draft
+	}
+	budget := h.OllamaVRAMBudgetMB()
+	if !h.HasGPU() || budget <= 0 {
+		return 0
+	}
+	if ollamaEstimateMemoryDraft(v, h, kvType, window, parallel, ubatch, draft).DeviceMB() > budget {
+		return 0
+	}
+	return draft
+}
+
 // ollamaEstimateMemoryAt is OllamaEstimateMemory at a given ubatch, so the
 // estimate can be held to logged loads that ran with a larger one.
 func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, parallel, ubatch int) OllamaMemory {
+	return ollamaEstimateMemoryDraft(v, h, kvType, window, parallel, ubatch,
+		ollamaDraftTokensAt(v, h, kvType, window, parallel, ubatch))
+}
+
+// ollamaEstimateMemoryDraft prices the load with a draft of draft tokens
+// (0 = none), whoever decided it.
+func ollamaEstimateMemoryDraft(v catalog.Variant, h Host, kvType string, window, parallel, ubatch, draft int) OllamaMemory {
 	if v.EstimatedWeightGB <= 0 {
 		return OllamaMemory{}
 	}
@@ -220,7 +260,6 @@ func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, pa
 	// ollama offloads beside the model and the device copy of a tied
 	// embedding.
 	loaded := g.TensorBytes + g.ProjectorBytes + g.TiedOutputBytes
-	draft := catalog.MTPDraftTokens(v)
 	if draft <= 0 {
 		loaded -= g.NextNBytes
 	}
