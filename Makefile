@@ -80,6 +80,7 @@ help:
 	@echo "  e2e-vllm-quick       Real-vLLM smoke only (Qwen2.5-0.5B, GPU REQUIRED)"
 	@echo "  e2e-vllm-fp8         fp8 KV cache ≈2× pool on Ada+ (GPU REQUIRED, #676)"
 	@echo "  e2e-vllm-spec        ngram speculative decode boots+serves (GPU REQUIRED, #677)"
+	@echo "  e2e-vllm-mtp         MTP speculative decode at the product's sizing (GPU REQUIRED, waired#1432)"
 	@echo "  e2e-vllm-serve-flags the DERIVED #887 serve flags reach the engine and take"
 	@echo "                       effect: chunk, KV offloading, prompt-token details"
 	@echo "                       (GPU REQUIRED, #955)"
@@ -576,6 +577,15 @@ e2e-vllm-spec:
 # orphaning a worker to init. One target for all three because they are one
 # surface, and because every extra target is another chance for one to end up
 # with no caller — which is what waired#1229 was.
+# waired-ai/waired#1432 MTP speculative decoding: a catalog build with MTP
+# layers, served with the product's --speculative-config and the window
+# VLLMMaxModelLenFor sizes with the draft priced in, starts, clears the
+# window, stays on Model Runner V2, drafts, and returns a structured tool
+# call. Qwen3.5-0.8B (~1.8 GB download).
+.PHONY: e2e-vllm-mtp
+e2e-vllm-mtp:
+	go test -tags=e2e,gpu -count=1 -v -timeout=45m -run TestVLLMSpeculativeMTP ./internal/e2e/inference/...
+
 .PHONY: e2e-vllm-serve-flags
 e2e-vllm-serve-flags:
 	go test -tags=e2e,gpu -count=1 -v -timeout=45m -run TestVLLMDerivedServeFlags ./internal/e2e/inference/...

@@ -120,6 +120,12 @@ type vllmSmokeOpts struct {
 	maxNumBatchedTokens       int
 	kvOffloadingGiB           float64
 	enablePromptTokensDetails bool
+	// toolCallParser maps to VLLMConfig.ToolCallParser ("" omits it).
+	toolCallParser string
+	// whileServing, when non-nil, runs after the completion while the
+	// engine is still up, with its port: for lanes that read /metrics
+	// or send more requests (waired-ai/waired#1432).
+	whileServing func(t *testing.T, port int)
 }
 
 // vllmSmokeResult carries what the clamp/fp8/ngram lanes read back after
@@ -207,6 +213,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		MaxNumBatchedTokens:       opts.maxNumBatchedTokens,
 		KVOffloadingGiB:           opts.kvOffloadingGiB,
 		EnablePromptTokensDetails: opts.enablePromptTokensDetails,
+		ToolCallParser:            opts.toolCallParser,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},
 		HealthInterval:            2 * time.Second,
@@ -321,6 +328,9 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		t.Logf("bench: %d completion tokens in %.2fs → %.1f tok/s (wall, incl. prefill)",
 			parsed.Usage.CompletionTokens, elapsed, res.decodeTokPerSec)
 		t.Logf("sample output (first 200 chars): %.200s", parsed.Choices[0].Message.Content)
+	}
+	if opts.whileServing != nil {
+		opts.whileServing(t, port)
 	}
 	t.Logf("vLLM e2e ok for model=%s on port=%d", modelName, port)
 	return res
