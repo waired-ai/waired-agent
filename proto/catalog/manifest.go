@@ -562,7 +562,7 @@ func LookupByAlias(name string, manifests []Manifest) (Manifest, bool) {
 //   - quality_tier ∈ [1, 100]
 //   - param_count > 0 (Phase 7 router score input)
 //   - quantization_tier ∈ [1, 8] (Phase 7 router score input)
-//   - AWQ-quantized variants must source from the official Qwen/* org
+//   - AWQ-quantized variants are Hugging Face repositories (any org, waired-ai/waired#1427)
 //   - context_length > 0
 func (m *Manifest) Validate() error {
 	if m.ModelID == "" {

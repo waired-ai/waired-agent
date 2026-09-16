@@ -251,6 +251,10 @@ func TestValidate_QualityTierRequired(t *testing.T) {
 	}
 }
 
+// Product contract: an AWQ build may come from any org (owner, 2026-09-16,
+// waired-ai/waired#1427: 「有志の量子化も認める」). The two rows that
+// expected a community org to be refused were inverted by that ruling;
+// what Validate still refuses is an AWQ build with no repository.
 func TestValidate_AWQSourceConstraint(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -258,9 +262,9 @@ func TestValidate_AWQSourceConstraint(t *testing.T) {
 		wantErr bool
 	}{
 		{"official Qwen org", "Qwen/Qwen3-32B-Instruct-AWQ", false},
-		{"community fork rejected", "TheBloke/Qwen3-32B-Instruct-AWQ", true},
+		{"community org accepted", "TheBloke/Qwen3-32B-Instruct-AWQ", false},
 		{"empty repo rejected", "", true},
-		{"wrong prefix", "Qwen2/Qwen3-32B-Instruct-AWQ", true},
+		{"another org accepted", "Qwen2/Qwen3-32B-Instruct-AWQ", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
