@@ -75,7 +75,7 @@
       ]
     },
     {
-      "description": "uv bump also needs UVPinnedSHA256Linux64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
+      "description": "uv bump also needs UVPinnedSHA256Linux64 and UVPinnedSHA256LinuxARM64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["astral-sh/uv"],
       "labels": ["dependencies", "inference", "actionable"],
@@ -85,7 +85,7 @@
         "executionMode": "update"
       },
       "prBodyNotes": [
-        ":warning: **uv version bump**: `UVPinnedSHA256Linux64` in `internal/runtime/uv.go` must match the new tarball. `scripts/dev/update-uv-sha.sh` recomputes it via postUpgradeTasks when self-hosted Renovate has `allowedPostUpgradeCommands` enabled; otherwise run it by hand on this branch before merge."
+        ":warning: **uv version bump**: `UVPinnedSHA256Linux64` (x86_64) and `UVPinnedSHA256LinuxARM64` (aarch64) in `internal/runtime/uv.go` must match the new tarballs. `scripts/dev/update-uv-sha.sh` recomputes both and checks each against the release's `.sha256` sidecar, via postUpgradeTasks when self-hosted Renovate has `allowedPostUpgradeCommands` enabled; otherwise run it by hand on this branch before merge. Then run `go test -tags integration -run TestPinnedUVReleaseResolvesForEveryArch ./internal/runtime/` (or `make integration-runtime`): it resolves both real tarballs through the installer's own resolver and checks each binary is built for its machine."
       ]
     }
   ],

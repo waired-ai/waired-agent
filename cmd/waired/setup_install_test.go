@@ -741,6 +741,31 @@ func TestSetupVLLMInstall_BlockingAdvisoryFailsTheStep(t *testing.T) {
 	}
 }
 
+// A failed venv build on the wizard path still hands the state dir back:
+// the uv, its cache and the managed Python the failed build left under
+// the state dir are root-owned otherwise, and the daemon's next converge
+// stops on them (waired-ai/waired#1435).
+func TestSetupVLLMInstall_FailedBuildStillHandsStateBack(t *testing.T) {
+	shrinkSetupTimers(t)
+	f := &fakeVLLMInstaller{nvidia: true, err: errors.New("uv pip install failed")}
+	f.install(t)
+	d := &fakeSetupDaemon{}
+	d.setState(activeVLLMInstallState())
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	if err := setupEngineInstall(context.Background(), s, io.Discard, "linux", true); err == nil {
+		t.Fatal("a failed build was reported as success")
+	}
+	if got := f.handedOff(); len(got) != 1 || got[0] != "/var/lib/waired" {
+		t.Errorf("ownership handoff = %v, want one call with the state dir after a failed build", got)
+	}
+	if last := lastPhase(t, d); last.Phase != management.SetupExecutorPhaseFailed {
+		t.Errorf("final phase = %q, want failed", last.Phase)
+	}
+}
+
 // TestSetupVLLMClaimsBeforeInstalling: like ollama, the daemon must see
 // "installing" before the long venv build starts, or a second executor
 // could kick off a parallel one.

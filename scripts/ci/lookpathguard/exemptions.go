@@ -129,7 +129,6 @@ var declared = []lookpath{
 	// Third-party CLIs the user brings.
 	{"internal/download/hf.go", "hf", userTool},
 	{"internal/download/hf.go", "huggingface-cli", userTool},
-	{"internal/runtime/uv.go", "uv", userTool},
 	{"internal/integration/detect.go", "binary",
 		userTool + " (the coding-agent CLIs: claude, opencode, openclaw, code, …)"},
 

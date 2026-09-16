@@ -20,12 +20,12 @@ import (
 func newRecordingInstaller(t *testing.T, baseDir string) *VLLMInstaller {
 	t.Helper()
 	uvDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(uvDir, "uv"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+	if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return &VLLMInstaller{
 		BaseDir: baseDir,
-		UV:      &UVResolver{BinDir: uvDir},
+		UV:      &UVResolver{Root: uvDir},
 		Runner:  &scriptedRunner{respond: func(scriptedCall) ([]string, error) { return nil, nil }},
 		Now:     fakeNow,
 	}
@@ -146,7 +146,7 @@ func TestVLLMPrune_RefusesWhenNothingIsActive(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "0.11.0", ".venv", "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	inst := &VLLMInstaller{BaseDir: dir, UV: NewUVResolver(), Runner: &scriptedRunner{}, Now: fakeNow}
+	inst := &VLLMInstaller{BaseDir: dir, UV: NewUVResolverAt(t.TempDir()), Runner: &scriptedRunner{}, Now: fakeNow}
 	if _, err := inst.PruneOtherVersions(); err == nil {
 		t.Fatal("PruneOtherVersions succeeded with no active install")
 	}
@@ -317,4 +317,56 @@ func TestConvergeVLLM_RebuildsAndReclaimsThroughTheRealInstaller(t *testing.T) {
 	if again.Install {
 		t.Errorf("second pass decided to install (reason: %s)", again.Reason)
 	}
+}
+
+// RemoveUVIfNoVenvs takes the managed uv, its cache and the Python uv
+// installed away only when no venv is left for them to build, reconcile
+// or run (waired-ai/waired#1435).
+func TestVLLMInstaller_RemoveUVIfNoVenvs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		dirs     []string // under BaseDir
+		wantGone bool
+	}{
+		{"no venvs", nil, true},
+		{"only a failed build kept for inspection", []string{"0.29.0.failed-20260916/.venv"}, true},
+		{"a venv remains", []string{"0.28.0/.venv"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			base := filepath.Join(state, "runtimes", "vllm")
+			for _, d := range append([]string{""}, tc.dirs...) {
+				if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			inst := NewVLLMInstallerAt(base)
+			if err := os.MkdirAll(filepath.Join(inst.UV.CacheDir(), "wheels-v5"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustWriteExec(t, uvStubPath(t, inst.UV.Root), "#!/bin/sh\n")
+			python := filepath.Join(base, "python", "cpython-3.12-linux-x86_64-gnu", "bin")
+			if err := os.MkdirAll(python, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			removed, err := inst.RemoveUVIfNoVenvs()
+			if err != nil {
+				t.Fatalf("RemoveUVIfNoVenvs: %v", err)
+			}
+			for _, dir := range []string{inst.UV.Root, filepath.Join(base, "python")} {
+				_, statErr := os.Stat(dir)
+				if gone := os.IsNotExist(statErr); gone != tc.wantGone || removed != tc.wantGone {
+					t.Errorf("%s: removed=%v gone=%v, want %v", dir, removed, gone, tc.wantGone)
+				}
+			}
+		})
+	}
+
+	t.Run("nothing to remove", func(t *testing.T) {
+		inst := NewVLLMInstallerAt(filepath.Join(t.TempDir(), "runtimes", "vllm"))
+		if removed, err := inst.RemoveUVIfNoVenvs(); removed || err != nil {
+			t.Errorf("removed=%v err=%v, want false, nil", removed, err)
+		}
+	})
 }

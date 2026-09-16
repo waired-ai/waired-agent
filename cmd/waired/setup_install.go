@@ -197,6 +197,12 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		// (waired-agent#255). Bound to THIS lease, so an inert session
 		// yields nil and the installer behaves exactly as it did.
 		res, err := setupInstallVLLM(stateDir, newVLLMProgressSink(s, "vllm"))
+		// Built as root; hand the state dir back or the unprivileged daemon
+		// cannot read the venv we just created (Linux only, no-op elsewhere).
+		// On a failed build too: the uv, its cache and the managed Python
+		// it leaves behind are root-owned otherwise, and the daemon's next
+		// converge stops on them (waired-ai/waired#1435).
+		setupHandState(stateDir)
 		if err != nil {
 			writePromptf(out, "%s vLLM install failed: %v\n", emo("⚠️", "!"), err)
 			// No declared code: the build failed somewhere inside uv/pip
@@ -205,9 +211,6 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 			s.Failed("vllm", "", err.Error())
 			return err
 		}
-		// Built as root; hand the state dir back or the unprivileged daemon
-		// cannot read the venv we just created (Linux only, no-op elsewhere).
-		setupHandState(stateDir)
 		writePromptf(out, "%s vLLM installed.\n", emo("✅", "*"))
 		// The same renderer the hand-run install uses, with the same two
 		// headings (#957) — the wizard path dropped these entirely until

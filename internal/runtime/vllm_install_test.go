@@ -78,14 +78,14 @@ func (r *scriptedRunner) Run(_ context.Context, binary string, args, env []strin
 func TestVLLMInstall_PutsThePythonInstallDirUnderBaseDir(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	uvBin := filepath.Join(uvDir, "uv")
+	uvBin := uvStubPath(t, uvDir)
 	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.11.8\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r := &scriptedRunner{t: t, respond: func(scriptedCall) ([]string, error) {
 		return []string{"ok"}, nil
 	}}
-	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow}
+	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow}
 
 	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -117,6 +117,64 @@ func TestVLLMInstall_PutsThePythonInstallDirUnderBaseDir(t *testing.T) {
 	}
 }
 
+// uv's cache goes beside the managed uv unless the caller exported one.
+//
+// waired-ai/waired#1435 (owner-approved plan): the cache under the state
+// dir is one copy for root and the service user, sits on the venv's
+// filesystem so uv can hardlink wheels, and leaves with the state dir on
+// uninstall. An inherited UV_CACHE_DIR is kept — the GPU CI lane points
+// it at a persistent disk, and overriding it would start every run cold.
+func TestVLLMInstall_UVCacheDirIsManagedUnlessInherited(t *testing.T) {
+	run := func(t *testing.T) (*scriptedRunner, string) {
+		t.Helper()
+		uvDir := t.TempDir()
+		if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		r := &scriptedRunner{t: t, respond: func(scriptedCall) ([]string, error) { return []string{"ok"}, nil }}
+		inst := &VLLMInstaller{BaseDir: t.TempDir(), UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow}
+		if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
+			t.Fatalf("Install: %v", err)
+		}
+		if len(r.calls) == 0 {
+			t.Fatal("no subprocess calls recorded")
+		}
+		return r, uvDir
+	}
+
+	t.Run("managed", func(t *testing.T) {
+		r, uvDir := run(t)
+		want := "UV_CACHE_DIR=" + filepath.Join(uvDir, "cache")
+		for _, c := range r.calls {
+			if !slices.Contains(c.env, want) {
+				t.Errorf("call %s %v ran without %s (env=%v)", c.binary, c.args, want, c.env)
+			}
+		}
+	})
+
+	t.Run("inherited", func(t *testing.T) {
+		t.Setenv("UV_CACHE_DIR", "/mnt/cache/uv")
+		r, _ := run(t)
+		for _, c := range r.calls {
+			for _, kv := range c.env {
+				if strings.HasPrefix(kv, "UV_CACHE_DIR=") {
+					t.Errorf("call %s %v overrides the inherited cache with %s", c.binary, c.args, kv)
+				}
+			}
+		}
+	})
+}
+
+// The installer's uv lives beside the venvs under the state dir, so a
+// root-run install and the service user's converge resolve one binary
+// (waired-ai/waired#1435).
+func TestNewVLLMInstallerAt_PutsUVBesideTheVenvs(t *testing.T) {
+	inst := NewVLLMInstallerAt(filepath.Join("/var/lib/waired", "runtimes", "vllm"))
+	if got, want := inst.UV.Root, filepath.Join("/var/lib/waired", "runtimes", "uv"); got != want {
+		t.Errorf("UV.Root = %q, want %q", got, want)
+	}
+}
+
 // The venv is created on a uv-managed interpreter, never a system one.
 //
 // uv prefers an interpreter it manages but takes a system python3.12 when
@@ -135,14 +193,14 @@ func TestVLLMInstall_PutsThePythonInstallDirUnderBaseDir(t *testing.T) {
 func TestVLLMInstall_CreatesTheVenvOnAManagedInterpreter(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	uvBin := filepath.Join(uvDir, "uv")
+	uvBin := uvStubPath(t, uvDir)
 	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.12.15\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r := &scriptedRunner{t: t, respond: func(scriptedCall) ([]string, error) {
 		return []string{"ok"}, nil
 	}}
-	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow}
+	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow}
 	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
@@ -212,7 +270,7 @@ func TestVLLMActive_UnreadableVenvIsNotReportedAsAbsent(t *testing.T) {
 func TestVLLMInstall_HappyPath(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	uvBin := filepath.Join(uvDir, "uv")
+	uvBin := uvStubPath(t, uvDir)
 	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.11.8\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +280,7 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 	}}
 	inst := &VLLMInstaller{
 		BaseDir: dir,
-		UV:      &UVResolver{BinDir: uvDir},
+		UV:      &UVResolver{Root: uvDir},
 		Runner:  r,
 		Now:     fakeNow,
 	}
@@ -249,10 +307,13 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 	if len(r.calls) != 3 {
 		t.Fatalf("calls = %d, want 3 (venv, pip install, verify)", len(r.calls))
 	}
-	// First two calls go through whatever uv UVResolver picked (system
-	// uv or the test's stub) — assert by command shape, not path,
-	// since the system PATH may shadow the stub.
-	_ = uvBin
+	// Both uv calls run the pinned binary under the resolver's root and
+	// nothing else — not a uv that happens to be on PATH (#1435).
+	for _, c := range r.calls[:2] {
+		if c.binary != uvBin {
+			t.Errorf("uv call ran %s, want the managed uv %s", c.binary, uvBin)
+		}
+	}
 	if filepath.Base(r.calls[0].binary) != "uv" || r.calls[0].args[0] != "venv" || r.calls[0].args[1] != "--python" {
 		t.Errorf("first call should be `uv venv --python ...`, got %s %v", r.calls[0].binary, r.calls[0].args)
 	}
@@ -332,7 +393,7 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 func TestVLLMInstall_PipFailureRollsBack(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(uvDir, "uv"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+	if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -343,7 +404,7 @@ func TestVLLMInstall_PipFailureRollsBack(t *testing.T) {
 		return nil, nil
 	}}
 	inst := &VLLMInstaller{
-		BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow,
+		BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow,
 	}
 	_, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil)
 	if err == nil {
@@ -357,7 +418,7 @@ func TestVLLMInstall_PipFailureRollsBack(t *testing.T) {
 func TestVLLMInstall_KeepFailedRetainsBrokenVenv(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(uvDir, "uv"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+	if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r := &scriptedRunner{respond: func(c scriptedCall) ([]string, error) {
@@ -367,7 +428,7 @@ func TestVLLMInstall_KeepFailedRetainsBrokenVenv(t *testing.T) {
 		return nil, nil
 	}}
 	inst := &VLLMInstaller{
-		BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow,
+		BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow,
 	}
 	_, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0", KeepFailed: true}, nil)
 	if err == nil {
@@ -389,7 +450,7 @@ func TestVLLMInstall_KeepFailedRetainsBrokenVenv(t *testing.T) {
 func TestVLLMInstall_VerifyFailureRollsBack(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(uvDir, "uv"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+	if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r := &scriptedRunner{respond: func(c scriptedCall) ([]string, error) {
@@ -400,7 +461,7 @@ func TestVLLMInstall_VerifyFailureRollsBack(t *testing.T) {
 		return nil, nil
 	}}
 	inst := &VLLMInstaller{
-		BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow,
+		BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow,
 	}
 	_, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil)
 	if err == nil {
@@ -413,7 +474,7 @@ func TestVLLMInstall_VerifyFailureRollsBack(t *testing.T) {
 
 func TestVLLMInstall_ActiveBeforeInstallReturnsFalse(t *testing.T) {
 	dir := t.TempDir()
-	inst := &VLLMInstaller{BaseDir: dir, UV: NewUVResolver(), Runner: &scriptedRunner{}, Now: fakeNow}
+	inst := &VLLMInstaller{BaseDir: dir, UV: NewUVResolverAt(t.TempDir()), Runner: &scriptedRunner{}, Now: fakeNow}
 	if _, ok := inst.Active(); ok {
 		t.Errorf("Active() should be false before any install")
 	}
@@ -422,12 +483,12 @@ func TestVLLMInstall_ActiveBeforeInstallReturnsFalse(t *testing.T) {
 func TestVLLMInstall_Uninstall(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(uvDir, "uv"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+	if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	r := &scriptedRunner{respond: func(scriptedCall) ([]string, error) { return nil, nil }}
 	inst := &VLLMInstaller{
-		BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow,
+		BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow,
 	}
 	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
 		t.Fatalf("Install: %v", err)
@@ -477,7 +538,7 @@ func TestExtractInstallPercent(t *testing.T) {
 func TestVLLMInstall_PipStageCarriesBytes(t *testing.T) {
 	dir := t.TempDir()
 	uvDir := t.TempDir()
-	uvBin := filepath.Join(uvDir, "uv")
+	uvBin := uvStubPath(t, uvDir)
 	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.11.8\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +559,7 @@ func TestVLLMInstall_PipStageCarriesBytes(t *testing.T) {
 		}
 		return []string{"ok"}, nil
 	}}
-	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow}
+	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{Root: uvDir}, Runner: r, Now: fakeNow}
 
 	var progress []InstallProgress
 	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, func(p InstallProgress) {

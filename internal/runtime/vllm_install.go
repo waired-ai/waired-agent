@@ -152,8 +152,8 @@ type InstallRunner interface {
 // pip install vllm → torch/vllm verification →
 // `current` symlink swap. Stateless across Install calls.
 type VLLMInstaller struct {
-	BaseDir string        // typically <XDG_DATA_HOME>/waired/runtimes/vllm
-	UV      *UVResolver   // for resolving a uv binary
+	BaseDir string        // <state-dir>/runtimes/vllm
+	UV      *UVResolver   // the pinned uv, under <state-dir>/runtimes/uv
 	Runner  InstallRunner // for the venv / pip / python subprocesses
 	Now     func() time.Time
 }
@@ -165,10 +165,15 @@ type VLLMInstaller struct {
 // diverges between root (HOME=/root) and the User=waired daemon
 // (HOME=/var/lib/waired), so the daemon never finds a sudo-run install
 // (#525). The runner is the real subprocess spawner; tests inject a fake.
+//
+// uv lives beside the venvs, at <state-dir>/runtimes/uv, for the same
+// reason: root and the service user must resolve one binary, and the
+// state dir is what the ownership hand-off and uninstall cover
+// (waired-ai/waired#1435).
 func NewVLLMInstallerAt(baseDir string) *VLLMInstaller {
 	return &VLLMInstaller{
 		BaseDir: baseDir,
-		UV:      NewUVResolver(),
+		UV:      NewUVResolverAt(filepath.Join(filepath.Dir(baseDir), "uv")),
 		Runner:  DefaultInstallRunner{},
 		Now:     time.Now,
 	}
@@ -192,7 +197,8 @@ func NewVLLMInstaller() *VLLMInstaller {
 //
 // The five-stage pipeline maps to plan §3.6:
 //
-//  1. Resolve uv (no-op when uv was already on PATH or cached).
+//  1. Resolve the pinned uv under <state-dir>/runtimes/uv (downloads it
+//     when that version is not there yet).
 //  2. Create the versioned venv via `uv venv --python <py> <dir>/.venv`.
 //  3. Install vllm (+ extras) via `uv pip install`.
 //  4. Verify the install runs `python -c "import vllm, torch; ..."`.
@@ -238,14 +244,27 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// — and run from a directory that HAS a uv.toml silently resolves
 	// against settings nobody meant to apply to the engine. The venv this
 	// product builds is defined by the arguments above and nothing else.
+	//
+	// UV_CACHE_DIR for a third (waired-ai/waired#1435): uv's download cache
+	// otherwise lands in the invoking user's home — /root/.cache/uv under
+	// sudo, /var/lib/waired/.cache/uv for the daemon — which splits it in
+	// two, and nothing removes the /root copy (several GB) on uninstall.
+	// Beside the uv binary it is one cache on the venv's filesystem, so uv
+	// can hardlink wheels into the venv, and it goes with the state dir.
+	// A UV_CACHE_DIR the caller already exported is kept: the GPU CI lane
+	// points it at a persistent cache disk, and overriding it would make
+	// every lane run start cold.
 	uvEnv := []string{
 		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(i.BaseDir, "python"),
 		"UV_NO_CONFIG=1",
 	}
+	if _, set := os.LookupEnv("UV_CACHE_DIR"); !set {
+		uvEnv = append(uvEnv, "UV_CACHE_DIR="+i.UV.CacheDir())
+	}
 
 	// Stage 1: resolve uv.
 	onProgress(InstallProgress{Stage: StageResolveUV, Step: 1, Total: totalStages, Percent: -1, Message: "resolving uv binary..."})
-	uvBin, err := i.UV.Resolve(ctx, "")
+	uvBin, err := i.UV.Resolve(ctx)
 	if err != nil {
 		return InstallResult{}, fmt.Errorf("vllm install: %w", err)
 	}
@@ -445,6 +464,44 @@ func (i *VLLMInstaller) Uninstall(_ context.Context, version string) error {
 		return fmt.Errorf("vllm install: remove %s: %w", versionDir, err)
 	}
 	return nil
+}
+
+// RemoveUVIfNoVenvs removes the managed uv, its cache, and the Python
+// interpreter uv installed for the venvs (<BaseDir>/python,
+// UV_PYTHON_INSTALL_DIR) when no vLLM venv remains under BaseDir, and
+// reports whether it removed anything. uv exists only to build and
+// reconcile those venvs, its cache is several GB, and the interpreter
+// runs nothing without a venv, so once the last venv is gone nothing is
+// left for any of them to serve (waired-ai/waired#1435). A directory kept
+// as .failed-<ts> for inspection is not a venv anyone runs and keeps
+// none of them.
+func (i *VLLMInstaller) RemoveUVIfNoVenvs() (bool, error) {
+	if i.UV == nil || i.UV.Root == "" {
+		return false, nil
+	}
+	entries, err := os.ReadDir(i.BaseDir)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("vllm uninstall: read %s: %w", i.BaseDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.Contains(e.Name(), ".failed-") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(i.BaseDir, e.Name(), ".venv")); err == nil {
+			return false, nil
+		}
+	}
+	removed := false
+	for _, dir := range []string{i.UV.Root, filepath.Join(i.BaseDir, "python")} {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			return removed, fmt.Errorf("vllm uninstall: remove %s: %w", dir, err)
+		}
+		removed = true
+	}
+	return removed, nil
 }
 
 // ErrVLLMNotInstalled means there is genuinely no active install here —

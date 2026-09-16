@@ -63,9 +63,15 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 	}
 }
 
-// TestInstallVLLM_Error surfaces an install failure and skips the
-// ownership hand-off: nothing was successfully written, so there is
-// nothing to chown back.
+// TestInstallVLLM_Error surfaces an install failure AND still hands the
+// state dir back.
+//
+// Inverted by waired-ai/waired#1435 (owner-approved plan). This used to
+// assert the opposite ("nothing was successfully written, so there is
+// nothing to chown back"), which stopped being true once uv and its cache
+// moved under the state dir: a build that fails still leaves a root-owned
+// uv, cache and managed Python there, and the service user's next
+// converge stops on them.
 func TestInstallVLLM_Error(t *testing.T) {
 	origInstall := vllmInstall
 	t.Cleanup(func() { vllmInstall = origInstall })
@@ -75,14 +81,14 @@ func TestInstallVLLM_Error(t *testing.T) {
 
 	origFix := fixStateOwnership
 	t.Cleanup(func() { fixStateOwnership = origFix })
-	fixCalled := false
-	fixStateOwnership = func(string) error { fixCalled = true; return nil }
+	fixCalls := 0
+	fixStateOwnership = func(string) error { fixCalls++; return nil }
 
 	if err := installVLLM(t.TempDir()); err == nil {
 		t.Fatal("expected install error to propagate")
 	}
-	if fixCalled {
-		t.Error("fixStateOwnership should not run when the install failed")
+	if fixCalls != 1 {
+		t.Errorf("fixStateOwnership called %d times after a failed install, want 1", fixCalls)
 	}
 }
 

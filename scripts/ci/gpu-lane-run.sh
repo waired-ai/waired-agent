@@ -72,12 +72,35 @@ lane_vllm() {
   run go build -o "${BIN}" ./cmd/waired || return 1
 
   banner "install the vLLM venv (real ~6 GB build; exercises vllmInstallCore)"
+  # The installer uses only the pinned uv it keeps under the state dir
+  # (waired-ai/waired#1435). A failing uv first on PATH proves nothing else
+  # is picked up: if the install ran it, the install fails here. The lane's
+  # inherited UV_CACHE_DIR (the persistent cache disk) is left alone — the
+  # installer honours an exported one.
+  local uv_pin fake_uv_dir home_uv home_uv_before home_uv_after
+  uv_pin="$(sed -n 's/^const UVPinnedVersion = "\(.*\)"$/\1/p' internal/runtime/uv.go)"
+  fake_uv_dir="$(mktemp -d)"
+  printf '#!/bin/sh\necho "gpu-lane-run: a uv on PATH was used instead of the managed one" >&2\nexit 97\n' > "${fake_uv_dir}/uv"
+  chmod +x "${fake_uv_dir}/uv"
+  home_uv="${HOME}/.local/share/waired/bin/uv"
+  home_uv_before="$(stat -c %Y "${home_uv}" 2>/dev/null || echo absent)"
   if [ "${DRY_RUN}" = "1" ]; then
-    echo "DRY-RUN: ${BIN} runtimes install vllm --yes --state-dir ${STATE_DIR}"
+    echo "DRY-RUN: PATH=${fake_uv_dir}:\$PATH ${BIN} runtimes install vllm --yes --state-dir ${STATE_DIR}"
+    echo "DRY-RUN: test -x ${STATE_DIR}/runtimes/uv/${uv_pin}/uv"
   else
-    "${BIN}" runtimes install vllm --yes --state-dir "${STATE_DIR}" 2>&1 | tee vllm-install.log
+    PATH="${fake_uv_dir}:${PATH}" "${BIN}" runtimes install vllm --yes --state-dir "${STATE_DIR}" 2>&1 | tee vllm-install.log
     [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
+    if [ -z "${uv_pin}" ] || [ ! -x "${STATE_DIR}/runtimes/uv/${uv_pin}/uv" ]; then
+      echo "gpu-lane-run: no managed uv at ${STATE_DIR}/runtimes/uv/${uv_pin}/uv after the install" >&2
+      return 1
+    fi
+    home_uv_after="$(stat -c %Y "${home_uv}" 2>/dev/null || echo absent)"
+    if [ "${home_uv_after}" != "${home_uv_before}" ]; then
+      echo "gpu-lane-run: the install wrote ${home_uv}; uv belongs under the state dir" >&2
+      return 1
+    fi
   fi
+  rm -rf "${fake_uv_dir}"
 
   local overall=0 target ran=""
   for target in ${WAIRED_LANE_TARGETS}; do
