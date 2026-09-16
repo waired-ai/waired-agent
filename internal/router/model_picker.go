@@ -51,6 +51,13 @@ type PickInput struct {
 	// disables that pass.
 	Measured          map[string]MeasuredRate
 	TurnBudgetSeconds float64
+
+	// TurnSpeedFor answers the seconds one request takes with a variant on
+	// the reference host class, for FasterCandidate. nil reads the shipped
+	// store (catalog.TurnSpeeds). RankModels does not read it: the first
+	// pick uses no speed figure it did not measure on this host (decision
+	// 4 of docs/decisions/20260804/1937).
+	TurnSpeedFor func(catalog.Manifest, catalog.Variant) (float64, bool)
 }
 
 // MeasuredRate and Pick are the shared shapes, aliased so this package's

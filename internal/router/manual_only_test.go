@@ -126,14 +126,15 @@ func TestManualOnly_WithheldFromEveryAutomaticPath(t *testing.T) {
 			},
 		},
 		{
-			// The lighter-model proposal. It steps down from the
-			// ACTIVE variant, so the case needs an active heavier
-			// than every candidate — otherwise the answer is the
-			// rung below the top and the A/B tests nothing. Appended
-			// to both catalogs, so the comparison stays controlled.
-			name: "LighterCandidate",
+			// The step-down offer. It compares seconds on the reference
+			// host class and needs candidates this host holds resident,
+			// so it runs on a copy of the fixture with a 262k window, a
+			// KV size and a GPU, and an active model slower than every
+			// candidate — otherwise the A/B tests nothing.
+			name: "FasterCandidate",
 			pick: func(t *testing.T, in PickInput) string {
-				in.Catalog = append(in.Catalog, catalog.Manifest{
+				cat := make([]catalog.Manifest, 0, len(in.Catalog)+1)
+				for _, m := range append(in.Catalog, catalog.Manifest{
 					ModelID: "plain-huge", ContextLength: 32768,
 					Capabilities: []string{"chat", "tool_use"},
 					Variants: []catalog.Variant{{
@@ -143,8 +144,26 @@ func TestManualOnly_WithheldFromEveryAutomaticPath(t *testing.T) {
 						ParamCount: 32_000_000_000,
 						Source:     catalog.VariantSource{Type: "ollama", Tag: "huge:32b"},
 					}},
-				})
-				p, ok := LighterCandidate(in, "plain-huge", "q4-gguf")
+				}) {
+					m.ContextLength = 262144
+					vs := make([]catalog.Variant, len(m.Variants))
+					copy(vs, m.Variants)
+					for i := range vs {
+						vs[i].KVBytesPerTokenFP16 = 4096
+					}
+					m.Variants = vs
+					cat = append(cat, m)
+				}
+				in.Catalog = cat
+				in.Hardware = hardware.Profile{OS: "linux", Arch: "x86_64", RAMTotalGB: 32,
+					GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24 * 1024}}}
+				in.TurnSpeedFor = func(m catalog.Manifest, _ catalog.Variant) (float64, bool) {
+					if m.ModelID == "plain-huge" {
+						return 300, true
+					}
+					return 100, true
+				}
+				p, ok := FasterCandidate(in, "plain-huge", "q4-gguf")
 				if !ok {
 					return ""
 				}

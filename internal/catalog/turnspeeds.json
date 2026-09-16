@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "notes": "Seconds per 32,768-token request of each catalog variant on one host class, the figure the step-down compares (docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md). Imported with catalog-tool turnspeeds --import from the product's own measured_variants records; turn_seconds is the median of the samples.",
+  "host_class": "amd-unified-128gb",
+  "models": {}
+}

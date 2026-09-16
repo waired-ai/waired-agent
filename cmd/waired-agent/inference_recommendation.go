@@ -373,7 +373,7 @@ func recommendationFromBench(
 	// PreferredModelID is deliberately left empty so a pinned-but-too-heavy
 	// model can still be stepped down across families — the whole point of
 	// the recommendation is to override a pick that the host can't sustain.
-	cand, ok := router.LighterCandidate(router.PickInput{
+	cand, ok := router.FasterCandidate(router.PickInput{
 		Catalog:       manifests,
 		Hardware:      hw,
 		Engine:        engine,
