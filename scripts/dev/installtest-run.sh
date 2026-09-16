@@ -808,6 +808,7 @@ if [ "$TIER" -le 2 ]; then
       assert_tier2 "$GUEST"            # identity chain still applies (the daemon owns it)
       assert_reinit_resumes "$GUEST"   # a second init resumes, it does not fail (waired-agent#313)
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
+      assert_claude_enable_unelevated "$GUEST"   # the non-root refusal names the command (waired-agent#1419)
       assert_daemon_engine "$GUEST"    # the waired#835 §9/§11 executor engine install
     else
       it_enroll_guest "$GUEST"   # enrol (IT_ENROLL_MODE) against the Control Plane
@@ -833,6 +834,7 @@ if [ "$TIER" -le 2 ]; then
         assert_models_pull_confirm "$GUEST"
       fi
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
+      assert_claude_enable_unelevated "$GUEST"   # the non-root refusal names the command (waired-agent#1419)
       # LAST of the engine-less probes, because it is the one that ends
       # the guest's engine-less life: it installs one (waired-agent#590).
       [ "$ENGINE_ONLY" = 1 ] && assert_engine_only_install "$GUEST"
@@ -905,6 +907,10 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # probe is in the engine-less block, so only the two floors that keep the
 # block move: the lean leg and --engine-only. The INFER / DAEMON_ENGINE floor
 # stays where it is, because those legs trade the block away.
+#
+# waired-agent#1419 added assert_claude_enable_unelevated beside
+# assert_claude_route on both tier-2 paths, always 3 asserts, so every tier-2
+# floor below is its predecessor plus 3.
 case "$TIER" in
   1) floor=14 ;;
   # 23 shared + the lean-only engine-less block:
@@ -922,9 +928,9 @@ case "$TIER" in
   # waired-agent#579 is open (it warns rather than failing when no measurement
   # was published), so on the leg that hits that case it contributes 0, not 1.
   # The #579 fix flips it to blocking and raises INFER to 28 then.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=31
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=47
-     else floor=41; fi ;;
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=34
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=50
+     else floor=44; fi ;;
 esac
 # The root-shell install arm (waired-agent#990): 3 asserts, on the lean
 # --local configuration only. Keyed on IT_LOCAL rather than folded into the

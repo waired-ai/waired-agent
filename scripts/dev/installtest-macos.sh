@@ -1183,6 +1183,40 @@ assert_mgmt_socket_macos() {
   "$BINDIR/waired" resume >/dev/null 2>&1 || true
 }
 
+# assert_claude_enable_unelevated_macos — twin of assert_claude_enable_unelevated
+# in lib/installtest-enroll.sh (waired-agent#1419): `waired claude enable` run
+# without sudo must fail, name the command to run with sudo exactly once, and
+# leave the managed-settings file as it was. The runner user is an admin, but
+# not root, and /Library/Application Support is not group-writable, so the
+# write is refused whether or not the file exists yet.
+#
+# Exactly three asserts, always — the tier-2 floor counts on it.
+# shellcheck disable=SC2016 # the backticks are the product's text
+assert_claude_enable_unelevated_macos() {
+  local managed='/Library/Application Support/ClaudeCode/managed-settings.json' before after out rc
+  before="$(shasum -a 256 "$managed" 2>/dev/null || echo absent)"
+  out="$("$BINDIR/waired" claude enable </dev/null 2>&1)" && rc=0 || rc=$?
+  after="$(shasum -a 256 "$managed" 2>/dev/null || echo absent)"
+
+  if [ "$rc" != 0 ]; then
+    ok "un-elevated 'waired claude enable' fails (exit $rc)"
+  else
+    bad "un-elevated 'waired claude enable' exited 0, want non-zero: $out"
+  fi
+  if [ "$(printf '%s\n' "$out" | grep -c 'needs elevation')" = 1 ] \
+     && printf '%s\n' "$out" | grep -qF 'needs elevation — run `sudo waired claude enable`' \
+     && ! printf '%s\n' "$out" | grep -qF '(permission denied:'; then
+    ok "it names the command to run with sudo, once (waired-agent#1419)"
+  else
+    bad "un-elevated 'waired claude enable' did not name the sudo command exactly once (waired-agent#1419): $out"
+  fi
+  if [ "$before" = "$after" ]; then
+    ok "it left $managed as it was"
+  else
+    bad "un-elevated 'waired claude enable' changed $managed ($before -> $after)"
+  fi
+}
+
 # --- daemon-path setup-executor engine install (waired#835 §9/§11) ----------
 # macOS analog of lib/installtest-daemon-engine.sh. The system LaunchDaemon is
 # already running (Tier 1), so `waired init` takes the DAEMON path and its
@@ -1777,6 +1811,8 @@ if [ "$TIER" -ge 2 ]; then
   # Cheap and fast, so it runs before the minutes-long inference asserts.
   it_step "management write socket asserts (waired#838)"
   assert_mgmt_socket_macos
+  it_step "un-elevated claude enable asserts (waired-agent#1419)"
+  assert_claude_enable_unelevated_macos
 
   # LAST of the engine-less probes, because it is the one that ends this
   # host's engine-less life: it installs one (waired-agent#590).
@@ -2196,6 +2232,10 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # the primary install, which always runs) and 3 more to every tier-2 one (the
 # root-shell install arm, which sits inside the same `[ "$TIER" -ge 2 ]` block
 # as #680's and contributes a fixed three whichever way each assert lands).
+#
+# waired-agent#1419 adds 3 to every tier-2 configuration:
+# assert_claude_enable_unelevated_macos runs beside the mgmt-socket set on
+# every tier-2 leg and contributes a fixed three.
 case "$TIER" in
   1) floor=25 ;;
   # 31 shared + the lean-only engine-less block:
@@ -2205,9 +2245,9 @@ case "$TIER" in
   # waired-agent#573's host-speed assert does NOT move these — it is soft while
   # waired-agent#579 is open, so it contributes 0 on the leg that hits that
   # case. See the Linux twin in installtest-run.sh.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=42   # 38 + #990's 1 + 3
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=57   # 53 + #990's 1 + 3
-     else floor=51; fi ;;                          # 47 + #990's 1 + 3
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=45   # 38 + #990's 1 + 3 + #1419's 3
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=60   # 53 + #990's 1 + 3 + #1419's 3
+     else floor=54; fi ;;                          # 47 + #990's 1 + 3 + #1419's 3
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

@@ -194,8 +194,7 @@ func routeClaudeNow(o claudeRouteApplyOpts, out io.Writer) bool {
 			printOrgManagedRefusal(org)
 			return false
 		}
-		fmt.Fprintf(stderr, "Warning: couldn't write Claude Code managed settings (%v). %s\n",
-			err, elevationHintFor(runtime.GOOS, "waired claude enable"))
+		fmt.Fprintln(stderr, managedWriteWarning(runtime.GOOS, isElevatedFn(), "write Claude Code managed settings", err))
 		return false
 	}
 	baseURL, _ := claudeBaseURL(o.StateDir)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"strings"
 	"testing"
 )
@@ -93,18 +94,67 @@ func TestElevatedCmdline(t *testing.T) {
 	}
 }
 
+// friendlyErrorFor, not friendlyError: the elevation fact is an argument, so
+// a CI container that runs the tests as root cannot flip the answer.
 func TestFriendlyError(t *testing.T) {
 	perm := fmt.Errorf("identity: read /var/lib/waired/identity.json: %w", fs.ErrPermission)
-	got := friendlyError(perm)
-	if !strings.Contains(got, "permission denied: ") {
-		t.Errorf("friendlyError(perm) = %q, want elevation hint appended", got)
+	got := friendlyErrorFor("linux", false, perm)
+	if want := perm.Error() + "\n  (permission denied: re-run with sudo)"; got != want {
+		t.Errorf("friendlyErrorFor(perm) = %q, want %q", got, want)
 	}
 	plain := errors.New("some other failure")
-	if got := friendlyError(plain); got != plain.Error() {
-		t.Errorf("friendlyError(plain) = %q, want passthrough", got)
+	if got := friendlyErrorFor("linux", false, plain); got != plain.Error() {
+		t.Errorf("friendlyErrorFor(plain) = %q, want passthrough", got)
 	}
 	down := wrapDaemonDialError(fmt.Errorf("connection refused"))
-	if got := friendlyError(down); got != down.Error() {
-		t.Errorf("friendlyError(agentDown) = %q, want the friendly line only", got)
+	if got := friendlyErrorFor("linux", false, down); got != down.Error() {
+		t.Errorf("friendlyErrorFor(agentDown) = %q, want the friendly line only", got)
+	}
+	// An elevated process is not told to elevate: on root or an elevated
+	// token a permission error is something elevating does not fix
+	// (waired-agent#1419).
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		if got := friendlyErrorFor(goos, true, perm); got != perm.Error() {
+			t.Errorf("%s elevated: friendlyErrorFor(perm) = %q, want the error alone", goos, got)
+		}
+	}
+}
+
+// TestPermissionHintFor pins the one question every elevation hint for a
+// failed write now asks: would running elevated fix this? Only when the
+// process is not elevated and the error is a permission error, however deeply
+// it is wrapped. os.IsPermission answered it for `waired claude enable` and
+// never saw through the wrapping, so the hint there never printed
+// (waired-agent#1419).
+//
+// PIN: product contract, waired-agent#1419.
+func TestPermissionHintFor(t *testing.T) {
+	const cmd = "waired claude enable"
+	pathErr := &os.PathError{Op: "createtemp", Path: "/etc/claude-code/managed-settings.json.tmp.*", Err: fs.ErrPermission}
+	secretsErr := fmt.Errorf("secrets: create temp in %s: %w", "/etc/claude-code", pathErr)
+	errs := []struct {
+		name string
+		err  error
+		perm bool
+	}{
+		{"bare permission", fs.ErrPermission, true},
+		{"a *PathError", pathErr, true},
+		{"secrets.WriteFile's wrap", secretsErr, true},
+		{"claudemanaged's wrap around it", fmt.Errorf("claudemanaged: write %s: %w", "/etc/claude-code/managed-settings.json", secretsErr), true},
+		{"not a permission error", errors.New("claudemanaged: settings file is not readable JSON"), false},
+		{"nil", nil, false},
+	}
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		for _, elevated := range []bool{false, true} {
+			for _, e := range errs {
+				want := ""
+				if e.perm && !elevated {
+					want = elevationHintFor(goos, cmd)
+				}
+				if got := permissionHintFor(goos, elevated, e.err, cmd); got != want {
+					t.Errorf("%s elevated=%v %s: permissionHintFor = %q, want %q", goos, elevated, e.name, got, want)
+				}
+			}
+		}
 	}
 }

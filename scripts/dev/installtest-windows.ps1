@@ -342,6 +342,8 @@ $script:ContractBlocking = @{
     # Blocking from the start: the fix ships in the same PR.
     '1406' = $true   # waired-agent#1406: the GUI uninstaller unlinks OpenCode / OpenClaw (FIXED)
     '1409' = $true   # waired-agent#1409: uninstall.ps1's un-elevated parent runs its per-user steps and reports a refused elevation (FIXED)
+    # Blocking from the start: the fix ships in the same PR.
+    '1419' = $true   # waired-agent#1419: an un-elevated `waired claude enable` names the command to re-run elevated (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -4435,6 +4437,34 @@ if ($Contract) {
                 ((Get-Content -LiteralPath $ms -Raw -ErrorAction SilentlyContinue) -match 'ANTHROPIC_BASE_URL')
         ItSoft '749' $msOk "waired claude enable (exit $claudeEnableExit) writes $ms with ANTHROPIC_BASE_URL"
 
+        # (waired-agent#1419) The same command without elevation -- an
+        # Administrator's ordinary, UAC-filtered shell -- must fail, name the
+        # command to re-run from an elevated prompt exactly once, and leave the
+        # file the elevated run just wrote as it was. The hint that names the
+        # command was dead code: it was guarded by os.IsPermission, which does not
+        # look through the wrapping on every write error, so a refusal got only
+        # main's generic "(permission denied: ...)" line. The file exists by
+        # now, so the refusal comes from inside secrets.WriteFile, the most
+        # deeply wrapped shape there is. ASCII matches only: cmd redirects
+        # waired.exe's UTF-8 to a file PS 5.1 reads back as ANSI, so the em dash
+        # in the hint does not survive the trip.
+        if ($isSystem) {
+            ItSkip "un-elevated claude enable (waired-agent#1419): running as SYSTEM, where runas /trustlevel is unavailable"
+        } else {
+            $msHashBefore = if (Test-Path -LiteralPath $ms) { (Get-FileHash -LiteralPath $ms -Algorithm SHA256).Hash } else { 'absent' }
+            $r = Invoke-AsBasicToken -Exe $waired -ArgLine 'claude enable' -Tag 'claude-enable-basictoken'
+            $msHashAfter = if (Test-Path -LiteralPath $ms) { (Get-FileHash -LiteralPath $ms -Algorithm SHA256).Hash } else { 'absent' }
+            $enableOut = [string]$r.Out
+            ItLog "basic-token claude enable (exit $($r.Exit)): $($enableOut.Trim())"
+            ItSoft '1419' ($r.Exit -ne 0 -and $r.Exit -ne -1) "un-elevated waired claude enable fails (exit $($r.Exit))"
+            $hintCount = ([regex]::Matches($enableOut, 'needs elevation')).Count
+            $namesCmd = ($hintCount -eq 1) -and
+                        ($enableOut -match [regex]::Escape('re-run `waired claude enable` from an elevated (Administrator) prompt')) -and
+                        ($enableOut -notmatch [regex]::Escape('(permission denied:'))
+            ItSoft '1419' $namesCmd "un-elevated waired claude enable names the command to re-run elevated, once (needs elevation x$hintCount)"
+            ItSoft '1419' ($msHashBefore -eq $msHashAfter) "un-elevated waired claude enable leaves $ms as it was ($msHashBefore -> $msHashAfter)"
+        }
+
         # (waired-agent#787) Every entry waired writes must be written for a
         # shell this OS actually has. Claude Code passes a hook command to
         # `sh -c` on the Unixes but on Windows to Git Bash when Git Bash is
@@ -5887,7 +5917,13 @@ if ($Tier -ge 2) {
     # waired.exe ran to the end, the leftovers are gone, the install is still
     # there. Five from the GUI uninstaller's unlink case (waired-agent#1406):
     # Invoke-InnoUninstall's three, the Waired plugin gone, the user's own kept.
-    $floor = if ($Contract) { 193 } elseif ($EngineOnly) { 81 } else { 78 }
+    #
+    # 193 -> 196 for -Contract alone: the un-elevated `claude enable` run
+    # (waired-agent#1419) -- it fails, it names the command once, the file is
+    # unchanged. It skips under SYSTEM like the '751' contexts beside it, and
+    # neither -Contract leg (installtest.yml, installtest-inference.yml) runs
+    # as SYSTEM, so on both it is three every time.
+    $floor = if ($Contract) { 196 } elseif ($EngineOnly) { 81 } else { 78 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
