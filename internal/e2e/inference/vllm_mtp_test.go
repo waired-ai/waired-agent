@@ -76,6 +76,7 @@ func TestVLLMSpeculativeMTP(t *testing.T) {
 		maxNumBatchedTokens:       router.VLLMMaxNumBatchedTokens(window, hw, 0),
 		toolCallParser:            "qwen3_xml",
 		benchTokens:               256,
+		startBudget:               15 * time.Minute,
 		whileServing: func(t *testing.T, port int) {
 			drafts := specMetric(t, port, "vllm:spec_decode_num_drafts_total")
 			accepted := specMetric(t, port, "vllm:spec_decode_num_accepted_tokens_total")

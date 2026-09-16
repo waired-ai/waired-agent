@@ -122,6 +122,12 @@ type vllmSmokeOpts struct {
 	enablePromptTokensDetails bool
 	// toolCallParser maps to VLLMConfig.ToolCallParser ("" omits it).
 	toolCallParser string
+	// startBudget, when > 0, replaces the 5-minute readiness budget. A
+	// lane that profiles a 262,144-token window with an MTP draft on an
+	// L4 spends longer than that before the first 200: the draft head's
+	// compile and a second CUDA-graph capture follow the main model's
+	// (waired-ai/waired#1432).
+	startBudget time.Duration
 	// whileServing, when non-nil, runs after the completion while the
 	// engine is still up, with its port: for lanes that read /metrics
 	// or send more requests (waired-ai/waired#1432).
@@ -197,6 +203,11 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 	// diagnosable; the path is logged below and dumped on failure.
 	port := freePort(t)
 	logDir := t.TempDir()
+	// 150 probes at 2 s, unless the lane asked for more.
+	healthMaxFails, startTimeout := 150, 6*time.Minute
+	if opts.startBudget > 0 {
+		healthMaxFails, startTimeout = int(opts.startBudget/(2*time.Second)), opts.startBudget+time.Minute
+	}
 	a := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:               filepath.Join(venvPath, "bin", "python"),
 		Host:                 "127.0.0.1",
@@ -222,7 +233,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		// flashinfer JIT compile (nvcc via ninja/g++), which alone can
 		// exceed the old 3-min budget on an L4 (observed ~4 min cold,
 		// <1 min warm).
-		HealthMaxFails: 150,
+		HealthMaxFails: healthMaxFails,
 		StopTimeout:    10 * time.Second,
 	})
 	t.Cleanup(func() {
@@ -233,7 +244,7 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		}
 	})
 
-	startCtx, startCancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	startCtx, startCancel := context.WithTimeout(context.Background(), startTimeout)
 	defer startCancel()
 	if err := a.EnsureRunning(startCtx); err != nil {
 		if raw, rerr := os.ReadFile(filepath.Join(logDir, "engine.log")); rerr == nil {
