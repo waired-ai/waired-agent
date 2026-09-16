@@ -52,7 +52,7 @@ Claude Code の routing ページは「Waired の行は 200,000 トークンの�
 - OpenClaw の refresh の行は `Updated OpenClaw's list of Waired models and their context windows.` になる(旧 `OpenClaw now knows this computer serves N tokens of context.` は、`waired/default` の値がこのコンピュータの値でなくなったので意味を失った)。`waired doctor` の `openclaw context window` の detail に `the plugin was written by an older version of Waired` / `the plugin's list of Waired models is out of date` が加わる。
 - Claude Code のステータス行の赤い理由に `the pinned computer cannot take this turn` と `no computer has the context window this needs` が加わる。
 - 名指したコンピュータが居ないときの文は `no computer named in "<name>" is on your network right now — restart your coding tool and pick a computer from its model list again` になる(旧文は Claude Code の `/model` を名指していたが、同じ Selector を OpenCode / OpenClaw も通る)。
-- 製品文字列はオーナー未承認の下書き。変えるときは docs と同じ PR で動かす。
+- 上の製品文字列はオーナーが 2026-09-16 に承認した。変えるときは docs と同じ PR で動かす。
 
 ## Refs
 
