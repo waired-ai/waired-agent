@@ -31,6 +31,9 @@ const bootBenchPoll = speedMeasurementPoll
 //   - AppliedWindow / KVCacheType / NumParallel — the serving
 //     configuration. The same weights served with a smaller window or
 //     another KV type are a different speed (waired-ai/waired-agent#1341).
+//   - SpeculativeMethod / SpeculativeTokens, appended only when there is
+//     a draft, so a host that drafts nothing keeps its key
+//     (waired-ai/waired#1432).
 //
 // ModelID is what makes it empty. A host with no committed selection has
 // nothing to measure, and keying on the empty model would let the first
@@ -39,8 +42,12 @@ func bootBenchSelectionKey(d BenchDeps) string {
 	if d.ModelID == "" {
 		return ""
 	}
-	return strings.Join([]string{d.ModelID, d.VariantID, d.EngineKind, d.EngineVersion,
-		itoa(d.AppliedWindow), d.KVCacheType, itoa(d.NumParallel)}, "\x00")
+	terms := []string{d.ModelID, d.VariantID, d.EngineKind, d.EngineVersion,
+		itoa(d.AppliedWindow), d.KVCacheType, itoa(d.NumParallel)}
+	if d.SpeculativeMethod != "" {
+		terms = append(terms, d.SpeculativeMethod, itoa(d.SpeculativeTokens))
+	}
+	return strings.Join(terms, "\x00")
 }
 
 // benchReachedAVerdict reports whether a run said something about this

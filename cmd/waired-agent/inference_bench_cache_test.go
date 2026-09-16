@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -314,6 +317,8 @@ func TestBenchCacheKey_VariesWithInputs(t *testing.T) {
 		{"AppliedWindow", func(d *BenchDeps) { d.AppliedWindow = 131072 }},
 		{"KVCacheType", func(d *BenchDeps) { d.KVCacheType = "q4_0" }},
 		{"NumParallel", func(d *BenchDeps) { d.NumParallel = 2 }},
+		// A draft is another speed (waired-ai/waired#1432).
+		{"SpeculativeMethod", func(d *BenchDeps) { d.SpeculativeMethod, d.SpeculativeTokens = "mtp", 1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -429,5 +434,30 @@ func TestBenchCache_V4DecodeRateEntriesAreAMiss(t *testing.T) {
 	}
 	if _, _, hit, err := c.Load("k"); err != nil || hit {
 		t.Fatalf("a v4 entry was served (err=%v hit=%v)", err, hit)
+	}
+}
+
+// A host that drafts nothing keeps the key it had before the draft terms
+// existed, so upgrading does not throw its measurement away
+// (waired-ai/waired#1432). The literal is the pre-draft format.
+func TestBenchCacheKey_NoDraftKeepsTheOldKey(t *testing.T) {
+	d := BenchDeps{EngineKind: "vllm", EngineModel: "Qwen/Qwen3.5-4B", EngineVersion: "0.29.0", GPUModel: "RTX",
+		VRAMTotalMB: 24463, DriverVersion: "595", VariantSHA: "abc", AppliedWindow: 262144, KVCacheType: "fp8", NumParallel: 1}
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%s\x00%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\x00%d",
+		d.GPUModel, d.VRAMTotalMB, d.DriverVersion, d.VariantSHA, d.EngineKind, d.EngineModel, d.EngineVersion,
+		d.AppliedWindow, d.KVCacheType, d.NumParallel)
+	if got, want := benchCacheKey(d), hex.EncodeToString(h.Sum(nil)); got != want {
+		t.Errorf("no-draft key %s, want the pre-draft key %s", got, want)
+	}
+	withMTP := d
+	withMTP.SpeculativeMethod, withMTP.SpeculativeTokens = "mtp", 2
+	if benchCacheKey(withMTP) == benchCacheKey(d) {
+		t.Error("an MTP draft kept the draft-free key")
+	}
+	longer := withMTP
+	longer.SpeculativeTokens = 3
+	if benchCacheKey(longer) == benchCacheKey(withMTP) {
+		t.Error("a longer draft kept the shorter draft's key")
 	}
 }

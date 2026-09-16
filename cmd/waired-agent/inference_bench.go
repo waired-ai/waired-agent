@@ -371,6 +371,13 @@ type BenchDeps struct {
 	KVCacheType string
 	NumParallel int
 
+	// SpeculativeMethod and SpeculativeTokens are the draft the engine
+	// runs (infruntime.ModelTuning): cache-key inputs too, because a draft
+	// changes decode speed on the same weights (waired-ai/waired#1432).
+	// Empty/0 for none, which leaves every key as it was.
+	SpeculativeMethod string
+	SpeculativeTokens int
+
 	// ServingInFlight, when non-nil, reports this host's serving traffic.
 	// A measurement request gives the engine back the moment it is
 	// non-zero rather than make a person's turn wait behind 32,768 tokens.
@@ -746,6 +753,9 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			AppliedWindow: deps.AppliedWindow,
 			KVCacheType:   deps.KVCacheType,
 			NumParallel:   deps.NumParallel,
+
+			SpeculativeMethod: deps.SpeculativeMethod,
+			SpeculativeTokens: deps.SpeculativeTokens,
 		}
 		if err := deps.Cache.Store(cacheKey, result, meta, deps.Now()); err != nil {
 			deps.Logger.Warn("inference boot benchmark: cache store failed",

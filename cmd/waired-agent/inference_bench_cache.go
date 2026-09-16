@@ -99,6 +99,10 @@ type benchCacheEntry struct {
 	AppliedWindow int     `json:"applied_window,omitempty"`
 	KVCacheType   string  `json:"kv_cache_type,omitempty"`
 	NumParallel   int     `json:"num_parallel,omitempty"`
+	// SpeculativeMethod / SpeculativeTokens: the draft the engine ran
+	// (waired-ai/waired#1432, waired-ai/waired#1433). Absent for none.
+	SpeculativeMethod string `json:"speculative_method,omitempty"`
+	SpeculativeTokens int    `json:"speculative_tokens,omitempty"`
 }
 
 // benchCacheHumanMeta carries the identifying inputs that get embedded
@@ -116,6 +120,9 @@ type benchCacheHumanMeta struct {
 	AppliedWindow int
 	KVCacheType   string
 	NumParallel   int
+
+	SpeculativeMethod string
+	SpeculativeTokens int
 }
 
 // benchCache is the file-backed boot benchmark cache. The zero value
@@ -158,6 +165,12 @@ func benchCacheKey(d BenchDeps) string {
 		d.GPUModel, d.VRAMTotalMB, d.DriverVersion,
 		d.VariantSHA, d.EngineKind, d.EngineModel, d.EngineVersion,
 		d.AppliedWindow, d.KVCacheType, d.NumParallel)
+	// A draft is another speed for the same weights (waired-ai/waired#1432).
+	// Appended only when there is one, so an engine that drafts nothing
+	// keeps the key it had and its stored figure stays valid.
+	if d.SpeculativeMethod != "" {
+		_, _ = fmt.Fprintf(h, "\x00%s\x00%d", d.SpeculativeMethod, d.SpeculativeTokens)
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -272,26 +285,28 @@ func (c *benchCache) Store(key string, r BenchResult, meta benchCacheHumanMeta, 
 		file.Entries = make(map[string]benchCacheEntry)
 	}
 	file.Entries[key] = benchCacheEntry{
-		TokensPerSec:  r.TokensPerSec,
-		Capacity:      r.Capacity,
-		VariantID:     meta.VariantID,
-		GPUModel:      meta.GPUModel,
-		VRAMTotalMB:   meta.VRAMTotalMB,
-		DriverVersion: meta.DriverVersion,
-		EngineKind:    meta.EngineKind,
-		EngineModel:   meta.EngineModel,
-		EngineVersion: meta.EngineVersion,
-		Method:        r.Method,
-		SpreadPct:     r.SpreadPct,
-		MeasuredAt:    now,
-		PrefillTokps:  r.PrefillTokps,
-		DecodeTokps:   r.DecodeTokps,
-		DepthTokens:   r.DepthTokens,
-		TurnSeconds:   r.TurnSeconds,
-		Samples:       r.Samples,
-		AppliedWindow: meta.AppliedWindow,
-		KVCacheType:   meta.KVCacheType,
-		NumParallel:   meta.NumParallel,
+		TokensPerSec:      r.TokensPerSec,
+		Capacity:          r.Capacity,
+		VariantID:         meta.VariantID,
+		GPUModel:          meta.GPUModel,
+		VRAMTotalMB:       meta.VRAMTotalMB,
+		DriverVersion:     meta.DriverVersion,
+		EngineKind:        meta.EngineKind,
+		EngineModel:       meta.EngineModel,
+		EngineVersion:     meta.EngineVersion,
+		Method:            r.Method,
+		SpreadPct:         r.SpreadPct,
+		MeasuredAt:        now,
+		PrefillTokps:      r.PrefillTokps,
+		DecodeTokps:       r.DecodeTokps,
+		DepthTokens:       r.DepthTokens,
+		TurnSeconds:       r.TurnSeconds,
+		Samples:           r.Samples,
+		AppliedWindow:     meta.AppliedWindow,
+		KVCacheType:       meta.KVCacheType,
+		SpeculativeMethod: meta.SpeculativeMethod,
+		SpeculativeTokens: meta.SpeculativeTokens,
+		NumParallel:       meta.NumParallel,
 	}
 	buf, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {

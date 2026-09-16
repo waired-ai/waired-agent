@@ -269,6 +269,9 @@ func benchMeasurement(bench BenchResult, manifests []catalog.Manifest, deps Benc
 		AppliedWindow: deps.AppliedWindow,
 		KVCacheType:   deps.KVCacheType,
 		NumParallel:   deps.NumParallel,
+
+		SpeculativeMethod: deps.SpeculativeMethod,
+		SpeculativeTokens: deps.SpeculativeTokens,
 	}
 }
 

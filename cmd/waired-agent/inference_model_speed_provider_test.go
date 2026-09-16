@@ -212,6 +212,7 @@ func TestStoredSpeedMeasurement_AnswersOnlyForTheSameConfiguration(t *testing.T)
 		"window":         func(d *BenchDeps) { d.AppliedWindow = 32768 },
 		"kv cache type":  func(d *BenchDeps) { d.KVCacheType = "q8_0" },
 		"parallel":       func(d *BenchDeps) { d.NumParallel = 2 },
+		"draft":          func(d *BenchDeps) { d.SpeculativeMethod, d.SpeculativeTokens = "draft-mtp", 2 },
 	} {
 		d := base
 		mutate(&d)
