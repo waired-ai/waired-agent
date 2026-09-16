@@ -540,6 +540,7 @@ function Invoke-SelfElevate {
             # Before this catch the script's trap printed "uninstall failed:"
             # over a run whose per-user steps had already run
             # (waired-agent#1409).
+            throw  # MUTATION CHECK, reverted before merge: the catch is inert
             Common-Warn "The Administrator step didn't start, so Waired is still installed."
             Common-Log "Windows reported: $($_.Exception.Message)"
             Common-Log "The steps for your own user account already ran. Everything that needs Administrator rights, such as the Waired service and its program files, is still in place."
