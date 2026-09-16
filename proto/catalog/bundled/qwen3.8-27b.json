@@ -189,7 +189,7 @@
         "vllm"
       ],
       "estimated_weight_gb": 30.9,
-      "min_vram_mb": 38912,
+      "min_vram_mb": 52224,
       "quality_tier": 90,
       "param_count": 27000000000,
       "quantization_tier": 8,
@@ -206,6 +206,44 @@
         },
         "amd": {
           "vllm": "experimental"
+        },
+        "mac": {
+          "mlx": "unsupported"
+        }
+      }
+    },
+    {
+      "variant_id": "nvfp4",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
+      "format": "safetensors",
+      "quantization": "NVFP4",
+      "runtime_support": [
+        "vllm"
+      ],
+      "estimated_weight_gb": 21.92,
+      "min_vram_mb": 39936,
+      "quality_tier": 88,
+      "param_count": 27000000000,
+      "quantization_tier": 4,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "nvidia/Qwen3.8-27B-NVFP4",
+        "revision": "dbb8f445b3145f8a4c18ddc769f032d57d32867c"
+      },
+      "active_params": 27000000000,
+      "kv_bytes_per_token_fp16": 65536,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 4096,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "vllm": "stable"
+        },
+        "amd": {
+          "vllm": "unsupported"
         },
         "mac": {
           "mlx": "unsupported"

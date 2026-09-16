@@ -9,10 +9,11 @@
   "license": "apache-2.0",
   "context_length": 262144,
   "default_variant": {
-    "ollama": "mtp-q4-gguf"
+    "ollama": "mtp-q4-gguf",
+    "vllm": "nvfp4"
   },
   "capabilities": ["chat", "tool_use", "json_mode"],
-  "runtime": {"preferred": "ollama", "fallback": []},
+  "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
   "variants": [
     {
       "variant_id": "mtp-q4-gguf",
@@ -168,6 +169,32 @@
         "expert_bytes": 10487857152
       },
       "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL", "digest": "sha256:16c1a50b12582a7bc5b689c7053224351537f4c7cadf294fcc720f474fcd0a83"}
+    },
+    {
+      "variant_id": "nvfp4",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
+      "format": "safetensors",
+      "quantization": "NVFP4",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 23.42,
+      "min_vram_mb": 36864,
+      "quality_tier": 83,
+      "param_count": 35000000000,
+      "active_params": 3300000000,
+      "quantization_tier": 4,
+      "attention_arch": "hybrid_mamba",
+      "kv_bytes_per_token_fp16": 20480,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 2048,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "unsupported"},
+        "mac":    {"mlx": "unsupported"}
+      },
+      "source": {"type": "huggingface", "repo_id": "nvidia/Qwen3.6-35B-A3B-NVFP4", "revision": "1355db6a052410cfd62085d94b58866fd0f2c3c5"}
     }
   ],
   "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}

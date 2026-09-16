@@ -107,6 +107,44 @@
         "type": "huggingface",
         "repo_id": "Qwen/Qwen3.5-4B"
       }
+    },
+    {
+      "variant_id": "w4a16",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
+      "format": "safetensors",
+      "quantization": "W4A16",
+      "runtime_support": [
+        "vllm"
+      ],
+      "estimated_weight_gb": 5.52,
+      "min_vram_mb": 15360,
+      "quality_tier": 41,
+      "param_count": 4000000000,
+      "quantization_tier": 4,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "RedHatAI/Qwen3.5-4B-quantized.w4a16",
+        "revision": "7a613872f394578b0b52b683ff4ac47516b4bcaf"
+      },
+      "active_params": 0,
+      "kv_bytes_per_token_fp16": 32768,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 4096,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "vllm": "stable"
+        },
+        "amd": {
+          "vllm": "experimental"
+        },
+        "mac": {
+          "mlx": "unsupported"
+        }
+      }
     }
   ],
   "security": {

@@ -59,7 +59,7 @@
         "amd":    {"vllm": "unsupported"},
         "mac":    {"mlx": "unsupported", "ollama": "unsupported"}
       },
-      "source": {"type": "huggingface", "repo_id": "nvidia/GLM-5.2-NVFP4"}
+      "source": {"type": "huggingface", "repo_id": "nvidia/GLM-5.2-NVFP4", "revision": "53e0691e21895a3863a606dfd12910c69eba94ab"}
     }
   ],
   "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}

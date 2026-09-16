@@ -136,26 +136,46 @@ func TestCheckTierUniqueness(t *testing.T) {
 	}
 }
 
-func TestBundledManifests_AWQOrgConstraint(t *testing.T) {
-	// AWQ variants must source from the official Qwen/* org so that
-	// Step 2 doesn't pull community quantizations of unknown provenance.
+// Product contract: a quantization published outside the model's own org
+// is allowed (owner, 2026-09-16, waired-ai/waired#1427: 「有志の量子化も
+// 認める」), and it ships pinned to the revision that was read. A
+// community repository can be rewritten under the same id — the frob
+// ollama tag changed from 55 GB to 79 GB under one name (#1305) — and
+// source.revision is what makes the download, the size and the chat
+// template the catalog describes the ones a host gets.
+//
+// This replaces the rule that AWQ variants come from Qwen/ only, which
+// the ruling overturned.
+func TestBundledManifests_OutsideQuantizationsPinARevision(t *testing.T) {
 	ms, err := BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
+	checked := 0
 	for _, m := range ms {
-		for _, v := range m.Variants {
-			if !isAWQ(v.Quantization) {
-				continue
-			}
-			if v.Source.Type != "huggingface" {
-				t.Errorf("%s/%s AWQ variant must use source.type=huggingface, got %q", m.ModelID, v.VariantID, v.Source.Type)
-				continue
-			}
-			if !strings.HasPrefix(v.Source.RepoID, "Qwen/") {
-				t.Errorf("%s/%s AWQ source.repo_id %q must start with Qwen/", m.ModelID, v.VariantID, v.Source.RepoID)
+		orgs := map[string]bool{}
+		for _, a := range m.ModelAliases {
+			if org, _, ok := strings.Cut(a, "/"); ok {
+				orgs[org] = true
 			}
 		}
+		for _, v := range m.Variants {
+			if v.Source.Type != "huggingface" {
+				continue
+			}
+			org, _, _ := strings.Cut(v.Source.RepoID, "/")
+			if orgs[org] {
+				continue
+			}
+			checked++
+			if len(v.Source.Revision) != 40 {
+				t.Errorf("%s/%s: %s is published outside the model's org (%v) and must pin source.revision to a full commit, got %q",
+					m.ModelID, v.VariantID, v.Source.RepoID, orgs, v.Source.Revision)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no Hugging Face variant comes from outside its model's org; this test is checking nothing")
 	}
 }
 

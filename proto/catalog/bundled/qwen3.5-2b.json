@@ -107,6 +107,44 @@
         "type": "huggingface",
         "repo_id": "Qwen/Qwen3.5-2B"
       }
+    },
+    {
+      "variant_id": "w4a16",
+      "kv_cache_types": [
+        "fp8",
+        "fp16"
+      ],
+      "format": "safetensors",
+      "quantization": "W4A16",
+      "runtime_support": [
+        "vllm"
+      ],
+      "estimated_weight_gb": 2.5,
+      "min_vram_mb": 9216,
+      "quality_tier": 26,
+      "param_count": 2000000000,
+      "quantization_tier": 4,
+      "source": {
+        "type": "huggingface",
+        "repo_id": "cyankiwi/Qwen3.5-2B-AWQ-4bit",
+        "revision": "718fd9b52c5ca16f1f856f6c4e4209129802a6a2"
+      },
+      "active_params": 0,
+      "kv_bytes_per_token_fp16": 12288,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 2048,
+      "attention_arch": "hybrid_mamba",
+      "vendor_support": {
+        "nvidia": {
+          "vllm": "stable"
+        },
+        "amd": {
+          "vllm": "experimental"
+        },
+        "mac": {
+          "mlx": "unsupported"
+        }
+      }
     }
   ],
   "security": {
