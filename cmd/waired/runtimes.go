@@ -261,6 +261,13 @@ func newRuntimesUninstallCmd() *cobra.Command {
 			if err := inst.Uninstall(context.Background(), active.Version); err != nil {
 				return err
 			}
+			// With the last venv gone, the managed uv and its download
+			// cache (several GB, under <state-dir>/runtimes/uv) have nothing
+			// left to build for (waired-ai/waired#1435). Best effort: a
+			// leftover cache is disk, not a broken uninstall.
+			if _, err := inst.RemoveUVIfNoVenvs(); err != nil {
+				fmt.Fprintf(stderr, "Warning: %v\n", err)
+			}
 			fmt.Fprintf(stdout, "Uninstalled vLLM %s\n", active.Version)
 			return nil
 		},
@@ -546,14 +553,20 @@ func installVLLM(stateDir string) error {
 	// No sink: `waired runtimes install` is a hand-run command, with
 	// nothing on the other side of a lease to report to.
 	res, err := vllmInstallCore(ctx, stateDir, true, nil)
-	if err != nil {
-		return err
-	}
 	// The venv was just built under sudo (root-owned); hand the state dir
 	// back to the waired-agent service user so the daemon can read/manage
 	// it — matching the ollama bundle install (#484/#525). No-op off Linux
 	// / when not root.
+	//
+	// On a failed build too (waired-ai/waired#1435). A failure still
+	// leaves root-owned files the daemon has to be able to use or replace
+	// on its next converge: the pinned uv and its cache under runtimes/uv,
+	// and the managed Python under runtimes/vllm/python. Left root-owned,
+	// the service user's converge stops on a permission error.
 	handStateToServiceUser(stateDir)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(stdout, "\nDone. vLLM %s installed at %s\n", res.Version, res.VenvPath)
 	fmt.Fprintln(stdout, "Run `waired runtimes status` to confirm.")
 	// Last, and under their own heading, because an advisory is worth

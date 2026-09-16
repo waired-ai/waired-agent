@@ -318,3 +318,48 @@ func TestConvergeVLLM_RebuildsAndReclaimsThroughTheRealInstaller(t *testing.T) {
 		t.Errorf("second pass decided to install (reason: %s)", again.Reason)
 	}
 }
+
+// RemoveUVIfNoVenvs takes the managed uv and its cache away only when no
+// venv is left for them to build or reconcile (waired-ai/waired#1435).
+func TestVLLMInstaller_RemoveUVIfNoVenvs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		dirs     []string // under BaseDir
+		wantGone bool
+	}{
+		{"no venvs", nil, true},
+		{"only a failed build kept for inspection", []string{"0.29.0.failed-20260916/.venv"}, true},
+		{"a venv remains", []string{"0.28.0/.venv"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			base := filepath.Join(state, "runtimes", "vllm")
+			for _, d := range append([]string{""}, tc.dirs...) {
+				if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			inst := NewVLLMInstallerAt(base)
+			if err := os.MkdirAll(filepath.Join(inst.UV.CacheDir(), "wheels-v5"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mustWriteExec(t, uvStubPath(t, inst.UV.Root), "#!/bin/sh\n")
+
+			removed, err := inst.RemoveUVIfNoVenvs()
+			if err != nil {
+				t.Fatalf("RemoveUVIfNoVenvs: %v", err)
+			}
+			_, statErr := os.Stat(inst.UV.Root)
+			if gone := os.IsNotExist(statErr); gone != tc.wantGone || removed != tc.wantGone {
+				t.Errorf("removed=%v gone=%v, want %v", removed, gone, tc.wantGone)
+			}
+		})
+	}
+
+	t.Run("nothing to remove", func(t *testing.T) {
+		inst := NewVLLMInstallerAt(filepath.Join(t.TempDir(), "runtimes", "vllm"))
+		if removed, err := inst.RemoveUVIfNoVenvs(); removed || err != nil {
+			t.Errorf("removed=%v err=%v, want false, nil", removed, err)
+		}
+	})
+}

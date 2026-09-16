@@ -466,6 +466,37 @@ func (i *VLLMInstaller) Uninstall(_ context.Context, version string) error {
 	return nil
 }
 
+// RemoveUVIfNoVenvs removes the managed uv and its cache when no vLLM
+// venv remains under BaseDir, and reports whether it did. uv exists only
+// to build and reconcile those venvs, and its cache is several GB, so
+// once the last venv is gone nothing is left for it to serve
+// (waired-ai/waired#1435). A directory kept as .failed-<ts> for
+// inspection is not a venv anyone runs and does not keep uv.
+func (i *VLLMInstaller) RemoveUVIfNoVenvs() (bool, error) {
+	if i.UV == nil || i.UV.Root == "" {
+		return false, nil
+	}
+	entries, err := os.ReadDir(i.BaseDir)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("vllm uninstall: read %s: %w", i.BaseDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.Contains(e.Name(), ".failed-") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(i.BaseDir, e.Name(), ".venv")); err == nil {
+			return false, nil
+		}
+	}
+	if _, err := os.Stat(i.UV.Root); os.IsNotExist(err) {
+		return false, nil
+	}
+	if err := os.RemoveAll(i.UV.Root); err != nil {
+		return false, fmt.Errorf("vllm uninstall: remove %s: %w", i.UV.Root, err)
+	}
+	return true, nil
+}
+
 // ErrVLLMNotInstalled means there is genuinely no active install here —
 // no `current` symlink, or nothing behind it. It is the ONLY error that
 // means "install it"; every other error from ActiveErr describes an

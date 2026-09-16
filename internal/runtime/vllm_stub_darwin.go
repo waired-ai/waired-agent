@@ -112,6 +112,10 @@ func (*VLLMInstaller) Uninstall(_ context.Context, _ string) error {
 	return ErrVLLMUnsupportedOnDarwin
 }
 
+// RemoveUVIfNoVenvs reports nothing removed: there is no managed uv on
+// this OS (uv is only used by the Linux vLLM installer).
+func (*VLLMInstaller) RemoveUVIfNoVenvs() (bool, error) { return false, nil }
+
 // ActivePins reports no record, which — with Active saying "nothing
 // installed" — is what makes DecideVLLMConverge answer "no venv here"
 // on macOS without a build tag at the call site (#843).

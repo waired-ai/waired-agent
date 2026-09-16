@@ -115,13 +115,13 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 		// "[N/5]" progress a person watching an update expects, and
 		// hands the state dir back to the service user afterwards, so a
 		// venv rebuilt under sudo is one the daemon can still read
-		// (#525 / #778).
+		// (#525 / #778) — on a failed build too, because the uv, its
+		// cache and the managed Python it leaves behind are still
+		// root-owned otherwise (waired-ai/waired#1435).
 		Install: func(ctx context.Context) error {
-			if _, err := vllmInstallCore(ctx, stateDir, false, nil); err != nil {
-				return err
-			}
+			_, err := vllmInstallCore(ctx, stateDir, false, nil)
 			handStateToServiceUser(stateDir)
-			return nil
+			return err
 		},
 		Prune: inst.PruneOtherVersions,
 	})
