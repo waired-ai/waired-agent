@@ -79,3 +79,59 @@ func TestOllamaEstimateMemoryPricesAStampedDraftLikeTheTagsOwn(t *testing.T) {
 		t.Errorf("a draft added no device memory: %d vs %d", b, a)
 	}
 }
+
+// Measured (waired-ai/waired#1432): the window VLLMMaxModelLenFor sizes
+// for Qwen3.5-4B bf16 is one the engine starts with. vLLM 0.29.0 on an
+// RTX PRO 4000 Blackwell (24,467 MiB), fp8 KV, prefix caching, one start
+// per row; the pool is the engine's "GPU KV cache size" line, and the
+// engine refuses to start when it is below --max-model-len.
+//
+// At util 0.85 every row is capped by the model's 262,144-token window. The
+// rows at util 0.5664 put 0.85 × 16,303 MiB inside the same card, the
+// budget of a 16 GB card, where the estimate is what binds: the windows
+// 84,992 / 53,248 / 46,080 started there with pools of 135,791 / 93,184 /
+// 82,106 tokens. Without the draft priced, the 2-token row would have asked
+// for 84,992 tokens against a pool of 82,106 and not started.
+func TestVLLMMaxModelLenForStartsOnTheMeasuredPools(t *testing.T) {
+	v := catalog.Variant{VariantID: "bf16", Format: catalog.FormatSafetensors, EstimatedWeightGB: 9.32,
+		KVBytesPerTokenFP16: 32768, MTPLayers: 1, MTPKVBytesPerTokenFP16: 4096}
+	const nativeWindow = 262144
+	for _, c := range []struct {
+		util  float64
+		draft int
+		pool  int
+	}{
+		{0.85, 0, 567464}, {0.85, 1, 479581}, {0.85, 2, 469207}, {0.85, 3, 463793}, {0.85, 4, 456474},
+		{0.5664, 0, 135791}, {0.5664, 1, 93184}, {0.5664, 2, 82106},
+	} {
+		window := min(VLLMMaxModelLenFor(v, c.draft, 1, c.util, VLLMKVFactorFP8, rtxPro4000), nativeWindow)
+		if window <= 0 || window > c.pool {
+			t.Errorf("util %.4f draft %d: window %d, measured pool %d", c.util, c.draft, window, c.pool)
+		}
+	}
+	if unpriced := VLLMMaxModelLenFor(v, 0, 1, 0.5664, VLLMKVFactorFP8, rtxPro4000); unpriced <= 82106 {
+		t.Errorf("fixture no longer shows why the draft is priced: the draft-free window %d already fits the 2-token pool", unpriced)
+	}
+}
+
+// The reserve covers what each measured draft took from the memory the
+// profiler left for the KV cache ("Available KV cache memory", GiB, draft 0
+// minus draft N, same card and settings as above). The pool rows above
+// cannot pin it on their own: the other terms of the estimate leave the
+// 4B enough slack to start with no reserve at all, and a smaller build does
+// not have that slack.
+func TestVLLMMTPReserveCoversTheMeasuredCost(t *testing.T) {
+	for _, c := range []struct {
+		build string
+		draft int
+		gib   float64
+	}{
+		{"qwen3.5-4b", 1, 8.90 - 8.56}, {"qwen3.5-4b", 2, 8.90 - 8.47}, {"qwen3.5-4b", 3, 8.90 - 8.47}, {"qwen3.5-4b", 4, 8.90 - 8.44},
+		{"qwen3.5-2b", 1, 13.26 - 13.01}, {"qwen3.5-2b", 2, 13.26 - 12.93},
+		{"qwen3.5-0.8b", 1, 16.20 - 16.05}, {"qwen3.5-0.8b", 2, 16.20 - 15.94},
+	} {
+		if reserve := vllmMTPReserveMB + float64(c.draft)*vllmMTPReservePerDraftTokenMB; reserve < c.gib*1024 {
+			t.Errorf("%s draft %d: reserve %.0f MiB, measured %.0f MiB", c.build, c.draft, reserve, c.gib*1024)
+		}
+	}
+}

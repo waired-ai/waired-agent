@@ -108,8 +108,19 @@ const (
 	// vllmMTPReserveMB and vllmMTPReservePerDraftTokenMB are what an MTP
 	// draft takes from each device outside the per-token KV price: a
 	// fixed part, and a part per drafted token (VLLMMaxModelLenFor).
-	// PROVISIONAL until calibrated on a 24 GB card (waired-ai/waired#1432).
-	vllmMTPReserveMB              = 1024.0
+	//
+	// Measured on vLLM 0.29.0, RTX PRO 4000 Blackwell (24 GB), util 0.85,
+	// fp8 KV, from the profile lines of one start per draft length: the
+	// memory left for the KV cache fell by 0.34 / 0.43 / 0.43 / 0.46 GiB
+	// at 1 to 4 drafted tokens on Qwen3.5-4B bf16, by 0.25 / 0.33 GiB at
+	// 1 and 2 on 2B, and by 0.15 / 0.26 GiB on 0.8B. That is the MTP
+	// layer's weights (0.25 / 0.13 / 0.05 GiB), CUDA graphs captured for
+	// the longer steps (+0.06 GiB per token up to two) and a larger
+	// activation peak. 256 + 128 per token covers every reading. The
+	// fixed part is sized by the largest MTP layer measured, 0.25 GiB on
+	// the 4B; a build whose MTP layer is larger than that is outside the
+	// calibration (waired-ai/waired#1432).
+	vllmMTPReserveMB              = 256.0
 	vllmMTPReservePerDraftTokenMB = 128.0
 
 	// DefaultVLLMGPUMemoryUtilization mirrors the agent config default
