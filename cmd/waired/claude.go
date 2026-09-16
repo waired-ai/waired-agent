@@ -287,10 +287,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 			// once it reaches main; this one is deliberately terse.
 			return fmt.Errorf("waired claude enable: settings left unchanged")
 		}
-		if os.IsPermission(err) {
-			return fmt.Errorf("waired claude enable: %w\n  (writing %s needs elevation — %s)", err, claudemanaged.Path(), elevationHintFor(runtime.GOOS, "waired claude enable"))
-		}
-		return fmt.Errorf("waired claude enable: %w", err)
+		return claudeEnableErrorFor(runtime.GOOS, isElevatedFn(), err, claudemanaged.Path())
 	}
 	fmt.Fprintf(stdout, "Claude Code managed settings written: %s\n", path)
 	fmt.Fprintf(stdout, "  ANTHROPIC_BASE_URL = %s  (no credential; your subscription and auto-mode keep working)\n", baseURL)
@@ -300,21 +297,67 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 	return nil
 }
 
+// claudeEnableErrorFor is the error `waired claude enable` exits with when the
+// managed-settings write failed.
+//
+// When running elevated would fix it, the error names the file and the command
+// to run. It is formatted with %v rather than %w on purpose: main's
+// friendlyError appends its own generic hint to any permission error it can
+// still see, and one run then printed two (waired-agent#1419). This shape
+// was dead code until then — os.IsPermission guarded it and never saw through
+// the wrapping every write error carries.
+func claudeEnableErrorFor(goos string, elevated bool, err error, path string) error {
+	if hint := permissionHintFor(goos, elevated, err, "waired claude enable"); hint != "" {
+		return fmt.Errorf("waired claude enable: %v\n  (writing %s needs elevation — %s)", err, path, hint)
+	}
+	return fmt.Errorf("waired claude enable: %w", err)
+}
+
+// managedWriteWarning is the warning for a managed-settings write whose failure
+// does not stop the run — `waired init`'s routing step and its context-window
+// top-up. what is the thing that could not be done ("write Claude Code managed
+// settings").
+//
+// The elevation hint is added only when elevating would fix the failure. Both
+// callers run elevated, and both used to append it to every error, including a
+// file that is not JSON (waired-agent#1419).
+func managedWriteWarning(goos string, elevated bool, what string, err error) string {
+	msg := fmt.Sprintf("Warning: couldn't %s (%v).", what, err)
+	if hint := permissionHintFor(goos, elevated, err, "waired claude enable"); hint != "" {
+		msg += " " + capitalize(hint) + "."
+	}
+	return msg
+}
+
+// claudeDisableToleratedWarning is the line an un-elevated `waired claude
+// disable` prints when it cannot edit the machine-wide file and carries on with
+// this user's own settings (see managedRemoveIsFatal).
+func claudeDisableToleratedWarning(goos, path string, err error) string {
+	return fmt.Sprintf("Warning: couldn't remove %s (%v). %s. Continuing with the per-user cleanup.",
+		path, err, capitalize(elevationHintFor(goos, "waired claude disable")))
+}
+
 // managedRemoveIsFatal reports whether an error from claudemanaged.Remove should
 // abort `claude disable` (true) or be tolerated so the per-user cleanup still
-// runs (false). A permission error is tolerated: the managed-settings file is
-// admin-owned (e.g. %ProgramFiles% on a Windows service install), so a
-// non-elevated `claude disable` — the un-elevated, invoking-user phase of
-// uninstall.ps1 — cannot edit it, yet it must still scrub THIS user's ~/.claude
-// (route skill, statusline) and any retired-MITM artifacts; the elevated phase
-// removes the managed file itself (waired#754). A nil error is not fatal.
+// runs (false). A permission error in an un-elevated run is tolerated: the
+// managed-settings file is admin-owned (e.g. %ProgramFiles% on a Windows service
+// install), so a non-elevated `claude disable` — the un-elevated, invoking-user
+// phase of uninstall.ps1 — cannot edit it, yet it must still scrub THIS user's
+// ~/.claude (route skill, statusline) and any retired-MITM artifacts; the
+// elevated phase removes the managed file itself (waired#754). A nil error is
+// not fatal.
+//
+// An elevated run is that phase, so every error there is fatal. It used to
+// tolerate a permission error too — a Windows file held open past the replace
+// retry, an immutable file on a Unix — and exited 0 with Claude Code still
+// pointed at the loopback gateway (waired-agent#1419).
 //
 // errors.Is, not os.IsPermission: a rewrite goes through secrets.WriteFile,
 // which wraps its error with fmt.Errorf, and os.IsPermission does not look
 // through that wrapping. A standard user whose managed file needed a rewrite
 // rather than a delete got exit 1 and no per-user cleanup (waired-agent#1409).
-func managedRemoveIsFatal(err error) bool {
-	return err != nil && !errors.Is(err, fs.ErrPermission)
+func managedRemoveIsFatal(err error, elevated bool) bool {
+	return err != nil && (elevated || !errors.Is(err, fs.ErrPermission))
 }
 
 // leftoverContextWindow returns the CLAUDE_CODE_MAX_CONTEXT_TOKENS a scrub
@@ -350,14 +393,13 @@ func runClaudeDisable(stateDir string) error {
 			"so this value couldn't be confirmed as ours. Remove it by hand if you didn't set it.\n",
 			claudemanaged.MaxContextTokensKey, left, claudemanaged.Path())
 	}
-	if managedRemoveIsFatal(err) {
+	if managedRemoveIsFatal(err, isElevatedFn()) {
 		return fmt.Errorf("waired claude disable: %w", err)
 	}
 	if err != nil {
 		// Tolerated permission error (see managedRemoveIsFatal): warn, but keep
 		// going so the invoking user's per-user integration is still removed.
-		fmt.Fprintf(stderr, "Warning: couldn't remove %s (%v). %s. Continuing with the per-user cleanup.\n",
-			claudemanaged.Path(), err, elevationHintFor(runtime.GOOS, "waired claude disable"))
+		fmt.Fprintln(stderr, claudeDisableToleratedWarning(runtime.GOOS, claudemanaged.Path(), err))
 	}
 	// Also clean up any retired MITM artifacts an upgrader may still carry.
 	legacycleanup.Run(stateDir, stderrLogger())

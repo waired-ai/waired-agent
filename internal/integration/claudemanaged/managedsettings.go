@@ -84,6 +84,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -310,8 +311,22 @@ func writeWithOptionsFor(goos, baseURL string, opts WriteOptions) (string, error
 	if path == "" {
 		return "", ErrUnsupportedOS
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", fmt.Errorf("claudemanaged: mkdir %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	_, statErr := os.Stat(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("claudemanaged: mkdir %s: %w", dir, err)
+	}
+	// MkdirAll's mode passes through the umask, and sudo keeps a caller's
+	// stricter one: under the 027 umask a hardened host gives its
+	// administrators, /etc/claude-code came out 0750 root:root and nobody but
+	// root could read the file inside — while Claude Code reads it as whoever
+	// runs `claude` (waired-agent#1419). Only a directory this call created; one
+	// that was already there keeps whatever mode its owner gave it. Windows has
+	// no mode bits to fix: the directory inherits Program Files' ACL.
+	if errors.Is(statErr, fs.ErrNotExist) && goos != "windows" {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return "", fmt.Errorf("claudemanaged: chmod %s: %w", dir, err)
+		}
 	}
 	obj, err := readObject(path)
 	if err != nil {

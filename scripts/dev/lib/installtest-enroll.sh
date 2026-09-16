@@ -427,6 +427,52 @@ assert_claude_route() {
   fi
 }
 
+# assert_claude_enable_unelevated <guest> — what `waired claude enable` says
+# to someone who is not root (waired-agent#1419).
+#
+# The hint that names the command to run elevated was dead code: the
+# permission check used os.IsPermission, and every error the managed-settings
+# write returns is wrapped, so a non-root run got only main's generic
+# "(permission denied: re-run with sudo)". Run as `nobody` — no sudoers entry
+# needed, the #838 probe's reason — right after assert_claude_route, so on a
+# routed leg the file already exists and the refusal comes from inside
+# secrets.WriteFile, the most deeply wrapped shape there is. A
+# --skip-integration leg has no file and fails at the mkdir instead, which
+# must say the same.
+#
+# Always exactly three asserts, whichever way the leg was configured, so the
+# assert-count floor in installtest-run.sh holds.
+# shellcheck disable=SC2016 # $1 expands in the guest's sh; the backticks are the product's text
+assert_claude_enable_unelevated() {
+  local guest="$1" wbin before after out rc
+  wbin="$(gx "$guest" sh -c 'command -v waired' 2>/dev/null | tr -d '\r' || true)"
+  before="$(gx "$guest" sh -c 'sha256sum "$1" 2>/dev/null || echo absent' sh "$IT_CLAUDE_MANAGED_SETTINGS" || true)"
+  # errexit: a bare assignment of a command that is EXPECTED to fail (the
+  # comment in assert_mgmt_socket has the whole story). The exit status is
+  # read through a marker line instead.
+  out="$(gx "$guest" sh -c 'runuser -u nobody -- "$1" claude enable </dev/null 2>&1; echo "exit=$?"' sh "${wbin:-waired}" || true)"
+  rc="$(printf '%s\n' "$out" | sed -n 's/^exit=//p' | tail -n 1)"
+  after="$(gx "$guest" sh -c 'sha256sum "$1" 2>/dev/null || echo absent' sh "$IT_CLAUDE_MANAGED_SETTINGS" || true)"
+
+  if [ -n "$rc" ] && [ "$rc" != 0 ]; then
+    ok "un-elevated 'waired claude enable' fails (exit $rc)"
+  else
+    bad "un-elevated 'waired claude enable' exited ${rc:-?}, want non-zero: $out"
+  fi
+  if [ "$(printf '%s\n' "$out" | grep -c 'needs elevation')" = 1 ] \
+     && printf '%s\n' "$out" | grep -qF 'needs elevation — run `sudo waired claude enable`' \
+     && ! printf '%s\n' "$out" | grep -qF '(permission denied:'; then
+    ok "it names the command to run with sudo, once (waired-agent#1419)"
+  else
+    bad "un-elevated 'waired claude enable' did not name the sudo command exactly once (waired-agent#1419): $out"
+  fi
+  if [ "$before" = "$after" ]; then
+    ok "it left $IT_CLAUDE_MANAGED_SETTINGS as it was"
+  else
+    bad "un-elevated 'waired claude enable' changed $IT_CLAUDE_MANAGED_SETTINGS ($before -> $after)"
+  fi
+}
+
 assert_tier2() {
   local guest="$1" v out
   gx "$guest" test -f /var/lib/waired/identity.json \

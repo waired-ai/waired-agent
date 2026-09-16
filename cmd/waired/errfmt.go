@@ -72,12 +72,35 @@ func elevatedCmdline(goos, cmd string) string {
 	return "sudo " + cmd
 }
 
+// permissionHintFor is the elevation hint for err, or "" when running elevated
+// would not fix it: err is not a permission error, or this process already is
+// elevated. On root or an elevated Windows token a permission error comes from
+// something else — a file another program holds open past the replace retry
+// on Windows, an immutable file on a Unix — and "run it elevated" is advice
+// the person has already taken.
+//
+// errors.Is, never os.IsPermission: every writer here wraps its error, and
+// os.IsPermission does not look through fmt.Errorf's wrapping
+// (waired-agent#1409, #1419).
+func permissionHintFor(goos string, elevated bool, err error, cmdline string) string {
+	if elevated || !errors.Is(err, fs.ErrPermission) {
+		return ""
+	}
+	return elevationHintFor(goos, cmdline)
+}
+
 // friendlyError renders the final error text for main()'s "waired:"
 // line: permission errors get the elevation hint appended so the user
 // learns the fix, everything else prints unchanged.
 func friendlyError(err error) string {
-	if errors.Is(err, fs.ErrPermission) {
-		return fmt.Sprintf("%v\n  (permission denied: %s)", err, elevationHint(""))
+	return friendlyErrorFor(runtime.GOOS, isElevatedFn(), err)
+}
+
+// friendlyErrorFor is friendlyError with the OS and the elevation fact as
+// arguments, so every combination is testable from any host.
+func friendlyErrorFor(goos string, elevated bool, err error) string {
+	if hint := permissionHintFor(goos, elevated, err, ""); hint != "" {
+		return fmt.Sprintf("%v\n  (permission denied: %s)", err, hint)
 	}
 	return err.Error()
 }
