@@ -78,6 +78,14 @@ type RunnerFlags struct {
 	// batches to measure steady state rather than the first partial one
 	// (waired-agent#1127).
 	BatchTokens int
+	// SpecType is --spec-type ("draft-mtp" when ollama runs a model's own
+	// MTP head as the draft) and SpecDraftTokens is --spec-draft-n-max, the
+	// draft length. Both empty/0 when the runner drafts nothing. ollama
+	// decides from the tag's draft_num_predict, so this command line is
+	// the only place the agent can see whether a draft actually runs
+	// (waired-ai/waired#1433).
+	SpecType        string
+	SpecDraftTokens int
 }
 
 // IsRunnerProc reports whether argv looks like an Ollama model runner: a
@@ -178,10 +186,10 @@ func baseName(p string) string {
 	return p
 }
 
-// ParseRunnerFlags extracts -np/-c/-m/-b from a runner argv, tolerating
-// both `-c N` and `-c=N` (and the long forms). Unknown flags (e.g.
-// --spec-type draft-mtp) are skipped. Values that do not parse as ints
-// are ignored.
+// ParseRunnerFlags extracts -np/-c/-m/-b and the speculative draft
+// (--spec-type, --spec-draft-n-max) from a runner argv, tolerating both
+// `-c N` and `-c=N` (and the long forms). Unknown flags are skipped. Values
+// that do not parse as ints are ignored.
 func ParseRunnerFlags(argv []string) RunnerFlags {
 	var f RunnerFlags
 	for i := 0; i < len(argv); i++ {
@@ -217,6 +225,16 @@ func ParseRunnerFlags(argv []string) RunnerFlags {
 			if v, ok := valueAt(); ok {
 				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
 					f.BatchTokens = n
+				}
+			}
+		case "--spec-type":
+			if v, ok := valueAt(); ok {
+				f.SpecType = strings.TrimSpace(v)
+			}
+		case "--spec-draft-n-max":
+			if v, ok := valueAt(); ok {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					f.SpecDraftTokens = n
 				}
 			}
 		}

@@ -1237,6 +1237,17 @@ type ModelTuning struct {
 	// prefill measurement has to span several full batches to measure
 	// steady state rather than the first partial one (waired-agent#1127).
 	PromptBatchTokens int
+	// SpeculativeMethod and SpeculativeTokens are the speculative decoding
+	// the engine runs: on vLLM what the agent passed in
+	// --speculative-config ("mtp" or "ngram", and num_speculative_tokens);
+	// on ollama what the runner's own command line carries (--spec-type,
+	// e.g. "draft-mtp", and --spec-draft-n-max), because ollama decides
+	// from the tag's draft_num_predict and exports nothing the agent sets.
+	// Empty/0 = no draft. Like PromptBatchTokens, the ollama values are an
+	// observation made after the spawn (waired-ai/waired#1432,
+	// waired-ai/waired#1433).
+	SpeculativeMethod string
+	SpeculativeTokens int
 	// KVCapacityTokens is how many tokens of KV cache the engine reported
 	// holding, read back after load. vLLM prints it at start-up ("GPU KV
 	// cache size: N tokens"); ollama does not print an equivalent, and on
@@ -1292,8 +1303,8 @@ type ModelTuning struct {
 // AFTER the spawn, describing the outcome rather than the intent:
 // Verified, Warning, PostLoadFreeVRAMMB, KVCapacityTokens and Degraded
 // are written by the post-load verification,
-// ObservedNumParallel and PromptBatchTokens by reading the runner's
-// command line,
+// ObservedNumParallel, PromptBatchTokens and the Speculative pair by
+// reading the runner's command line,
 // RecommendedMaxParallel is advisory telemetry, and WindowFits is the
 // sizing's own judgement of the window — a pure function of the inputs
 // already compared, so comparing it too could never change the answer. A freshly computed

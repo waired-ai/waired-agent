@@ -169,6 +169,29 @@ type ollamaVerifyDeps struct {
 	// records where it placed each load (placementEvidence). nil means no
 	// placement witness.
 	EngineLog func(maxBytes int) string
+	// RestampDraft writes the variant's MTP draft onto tag again when the
+	// runner turned out to run none (draftStampMissing). It returns at
+	// once; the pull runs in the background. nil skips the repair.
+	RestampDraft func(tag string, v catalog.Variant)
+}
+
+// draftStampMissing reports whether the runner serving v runs no MTP
+// draft although the product writes one onto v's tag. That happens to a
+// tag pulled before the catalog set MTPDraftTokens: the write happens
+// only inside download.Puller.Pull, so a tag already on disk never got
+// it. Re-pulling the tag writes it. ollama then reloads the runner on the
+// next request, because draft_num_predict is a runner option and a
+// changed runner option reloads (server/sched.go needsReload, v0.34.0)
+// (waired-ai/waired#1433).
+//
+// A tag whose publisher set draft_num_predict is not the product's to
+// repair (GGUF.DraftMaxTokens > 0): its draft is the publisher's, and a
+// runner without one there has some other cause.
+func draftStampMissing(v catalog.Variant, f proclist.RunnerFlags) bool {
+	if v.GGUF == nil || v.GGUF.DraftMaxTokens > 0 || v.GGUF.NextNLayers <= 0 || v.MTPDraftTokens <= 0 {
+		return false
+	}
+	return f.SpecDraftTokens <= 0
 }
 
 // verifyOllamaTuning inspects the loaded model and classifies the
@@ -666,6 +689,13 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 				// only way to know what the prefill measurement is
 				// measuring against.
 				mt.PromptBatchTokens = f.BatchTokens
+				// Same for the draft: ollama decides it from the tag's
+				// draft_num_predict, and the runner's arguments are the
+				// only place it shows (waired-ai/waired#1433).
+				mt.SpeculativeMethod, mt.SpeculativeTokens = f.SpecType, f.SpecDraftTokens
+				if draftStampMissing(v, f) && deps.RestampDraft != nil {
+					deps.RestampDraft(tag, v)
+				}
 				if np < tn.NumParallel {
 					// The count comes from the process table; the CAUSE
 					// comes from the engine or from nowhere. This note

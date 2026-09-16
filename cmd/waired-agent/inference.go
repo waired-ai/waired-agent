@@ -1395,6 +1395,10 @@ type agentInferenceProvider struct {
 	// pullMu guards pullsInFlight. It is a leaf: never held across a
 	// store.Update, an engine call, or requestEngineReconcile.
 	pullMu sync.Mutex
+	// draftRestampMu guards draftRestamped, the tags restampDraft has
+	// already pulled again in this process. A leaf, like pullMu.
+	draftRestampMu sync.Mutex
+	draftRestamped map[string]bool
 	// pullsInFlight maps model_id to the single pull running for it, so a
 	// second dispatcher joins instead of starting a duplicate (#305).
 	// Keyed by model_id ALONE, deliberately: variant choice depends on the
@@ -2695,10 +2699,61 @@ func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVeri
 		Allocate: func(ctx context.Context, tag string, promptTokens int) error {
 			return probeOllamaAllocation(ctx, &http.Client{}, p.ollama.BaseURL(), tag, promptTokens)
 		},
-		ListProcs: proclist.List,
-		EngineLog: p.ollama.EngineLogTail,
+		ListProcs:    proclist.List,
+		EngineLog:    p.ollama.EngineLogTail,
+		RestampDraft: p.restampDraft,
 	}
 }
+
+// restampDraft pulls tag again so download.Puller.Pull writes v's MTP
+// draft onto it (draftStampMissing, waired-ai/waired#1433). At most once
+// per tag per agent process: if the runner still shows no draft after
+// the repair, a second pull would not change that, and the verification
+// that calls this runs on every engine start and model switch.
+//
+// Serving is not interrupted. ollama reloads the runner with the draft
+// on the next request that reaches the model.
+func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant) {
+	if p.puller == nil || tag == "" {
+		return
+	}
+	p.draftRestampMu.Lock()
+	if p.draftRestamped == nil {
+		p.draftRestamped = map[string]bool{}
+	}
+	done := p.draftRestamped[tag]
+	p.draftRestamped[tag] = true
+	p.draftRestampMu.Unlock()
+	if done {
+		return
+	}
+	ctx := p.agentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	want := download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: v.MTPDraftTokens}
+	p.logger.Info("the model runner runs no MTP draft; pulling the tag again to write draft_num_predict",
+		"tag", tag, "variant_id", v.VariantID, "draft_num_predict", v.MTPDraftTokens)
+	p.pullsWG.Add(1)
+	go func() {
+		defer p.pullsWG.Done()
+		ctx, cancel := context.WithTimeout(ctx, draftRestampTimeout)
+		defer cancel()
+		if err := p.puller.Pull(ctx, tag, want, nil); err != nil {
+			p.logger.Warn("could not write the MTP draft onto the tag; the model runs without it",
+				"tag", tag, "err", err)
+			return
+		}
+		p.logger.Info("wrote the MTP draft onto the tag; ollama loads it with the next request",
+			"tag", tag, "draft_num_predict", v.MTPDraftTokens)
+	}()
+}
+
+// draftRestampTimeout bounds the repair pull. A pull of a tag that is
+// already on disk moves no weights and took about two seconds where it
+// was measured (download.Puller.Pull); the bound only has to outlast a
+// slow registry answer.
+const draftRestampTimeout = 5 * time.Minute
 
 // modelsSnapshot projects the stored model lifecycle onto the management
 // snapshot the CLI and tray read. Pure, and separated from Status so it
@@ -4750,7 +4805,7 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		// 500 on shapes this project recorded as accepted.
 		var want download.Rendering
 		if v, ok := variantByID(manifest, variantID); ok {
-			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser}
+			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: v.MTPDraftTokens}
 		}
 		// Give the bar its whole total before the first byte moves. Once
 		// per tag: a retry of the same tag already has the figure, and the
