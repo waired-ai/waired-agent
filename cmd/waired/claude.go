@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -299,8 +300,13 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 // uninstall.ps1 — cannot edit it, yet it must still scrub THIS user's ~/.claude
 // (route skill, statusline) and any retired-MITM artifacts; the elevated phase
 // removes the managed file itself (waired#754). A nil error is not fatal.
+//
+// errors.Is, not os.IsPermission: a rewrite goes through secrets.WriteFile,
+// which wraps its error with fmt.Errorf, and os.IsPermission does not look
+// through that wrapping. A standard user whose managed file needed a rewrite
+// rather than a delete got exit 1 and no per-user cleanup (waired-agent#1409).
 func managedRemoveIsFatal(err error) bool {
-	return err != nil && !os.IsPermission(err)
+	return err != nil && !errors.Is(err, fs.ErrPermission)
 }
 
 // leftoverContextWindow returns the CLAUDE_CODE_MAX_CONTEXT_TOKENS a scrub

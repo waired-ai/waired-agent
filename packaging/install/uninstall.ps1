@@ -306,6 +306,10 @@ $script:Deregistered = $false
 # (waired-agent#1398), so Show-Done can tell "Waired removed" from "Waired was
 # already gone, and Claude Code still pointed at it".
 $script:ClaudeLeftovers = 0
+# How many settings files were left for a hand fix. A warning above names each
+# one, so Show-Done must not follow it with "Nothing to remove"
+# (waired-agent#1407).
+$script:ClaudeUnchecked = 0
 
 # Common-Run runs a scriptblock, or prints its description in dry-run mode.
 function Common-Run {
@@ -523,8 +527,28 @@ function Invoke-SelfElevate {
     $marker = "$LogPath.status"
 
     try {
-        $proc = Start-Process -FilePath 'powershell.exe' `
-            -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
+        $proc = $null
+        try {
+            $proc = Start-Process -FilePath 'powershell.exe' `
+                -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
+        } catch {
+            # A declined UAC prompt. ShellExecute failing is a TERMINATING
+            # error, and Start-Process rethrows it as a bare
+            # InvalidOperationException with a localized message and no
+            # InnerException, so it can't be told apart from other refusals;
+            # quote it verbatim. install.ps1's catch explains why in full.
+            # Before this catch the script's trap printed "uninstall failed:"
+            # over a run whose per-user steps had already run
+            # (waired-agent#1409).
+            Common-Warn "The Administrator step didn't start, so Waired is still installed."
+            Common-Log "Windows reported: $($_.Exception.Message)"
+            Common-Log "The steps for your own user account already ran. Everything that needs Administrator rights, such as the Waired service and its program files, is still in place."
+            Common-Log "The usual cause is choosing No on the Administrator (UAC) prompt."
+            Common-Die "Re-run and choose Yes, or open an Administrator PowerShell and run this uninstaller there."
+        }
+        if ($null -eq $proc) {
+            Common-Die "Windows didn't start the elevated uninstaller and gave no reason. Try running this uninstaller from an Administrator PowerShell."
+        }
         if ($proc.ExitCode -ne 0) {
             # A child that died before its transcript existed still leaves the
             # marker; one that never started at all leaves nothing, and saying
@@ -1102,12 +1126,14 @@ function Invoke-ClaudeLeftoverEdit {
     try {
         $text = Read-ClaudeSettingsText -Path $Path
     } catch {
+        $script:ClaudeUnchecked++
         Common-Warn "Couldn't read $Path ($($_.Exception.Message.Trim())). If it still has Waired's settings, remove them by hand."
         return $null
     }
     $edit = Edit-ClaudeLeftovers -Kind $Kind -Text $text
     if ($edit.State -eq 'unreadable') {
         if ($text -match 'waired|127\.0\.0\.1') {
+            $script:ClaudeUnchecked++
             Common-Warn "$Path isn't JSON the uninstaller can read, so it was left unchanged. If it still has Waired's settings, remove them by hand."
         }
         return $edit
@@ -1731,7 +1757,15 @@ function Show-Done {
     if ($DryRun) { $tag = '[dry-run] ' }
 
     if ($script:DidCount -eq 0) {
-        if ($DryRun) {
+        # A warning above named a settings file left for a hand fix, so
+        # "Nothing to remove" would contradict it (waired-agent#1407).
+        if ($script:ClaudeUnchecked -gt 0) {
+            if ($DryRun) {
+                Common-Log "${tag}Nothing would be removed, but a file named above may still have Waired's settings. Remove them by hand, then restart Claude Code."
+            } else {
+                Common-Log "Waired wasn't installed on this computer, but a file named above may still have Waired's settings. Remove them by hand, then restart Claude Code."
+            }
+        } elseif ($DryRun) {
             Common-Log "${tag}Nothing would be removed: Waired isn't installed on this computer."
         } else {
             Common-Log "Nothing to remove: Waired wasn't installed on this computer."
@@ -1747,6 +1781,7 @@ function Show-Done {
         } else {
             Common-Log "Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect."
         }
+        Show-DoneUnchecked
         return
     }
 
@@ -1771,6 +1806,16 @@ function Show-Done {
         }
     } else {
         Common-Log "No Waired registration was found on this computer, so nothing was deregistered."
+    }
+    Show-DoneUnchecked
+}
+
+# Show-DoneUnchecked ends the summary with the hand fix a warning above asked
+# for, so it isn't lost behind "Waired removed" (waired-agent#1407). Mirrors
+# uninstall.sh's print_done_unchecked.
+function Show-DoneUnchecked {
+    if ($script:ClaudeUnchecked -gt 0) {
+        Common-Log "A file named above may still have Waired's settings. Remove them by hand, then restart Claude Code."
     }
 }
 
@@ -1838,6 +1883,7 @@ if (-not $DryRun -and -not (Test-IsAdmin)) {
     } else {
         Common-Log "Local state under $StateDir was kept; re-run with -Clean to wipe it."
     }
+    Show-DoneUnchecked
     exit 0
 }
 

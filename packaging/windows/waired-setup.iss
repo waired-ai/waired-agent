@@ -214,11 +214,19 @@ Filename: "{app}\waired-tray.exe"; \
 Filename: "{app}\waired.exe"; Parameters: "claude disable"; \
     Flags: runhidden waituntilterminated; \
     RunOnceId: "WairedClaudeDisable"
+; Then take Waired out of the other coding tools, as uninstall.ps1 does: the
+; OpenCode plugin and commands, and OpenClaw's plugin and its entries in
+; openclaw.json. None of them stops a tool from starting, but each left a
+; "waired" provider whose models fail when picked (waired-agent#1406). Like
+; `claude disable`, it works on the profile of the user running the uninstall.
+Filename: "{app}\waired.exe"; Parameters: "unlink"; \
+    Flags: runhidden waituntilterminated; \
+    RunOnceId: "WairedUnlink"
 ; Then check Claude Code's settings without waired.exe. Inno ignores a failed
-; entry, so when Smart App Control or a damaged install refuses the line above,
+; entry, so when Smart App Control or a damaged install refuses `claude disable`,
 ; the managed ANTHROPIC_BASE_URL used to outlive Waired and Claude Code failed
 ; every request against a port nothing listened on (waired-agent#1398). A
-; no-op when the line above did its job. -File, not -EncodedCommand, which
+; no-op when `claude disable` did its job. -File, not -EncodedCommand, which
 ; AMSI reads as a download-and-execute pattern (#552).
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -ClaudeLeftoversOnly"; \

@@ -106,6 +106,8 @@ func TestSetupRunsOnlyTheseProgramsFromRunSections(t *testing.T) {
 		},
 		"UninstallRun": {
 			`{app}\waired.exe claude disable`,
+			// waired-agent#1406: OpenCode / OpenClaw, as uninstall.ps1 does.
+			`{app}\waired.exe unlink`,
 			// waired-agent#1398: Claude Code's settings, checked without
 			// waired.exe, for when Windows refuses to start it.
 			`{sys}\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{app}\uninstall.ps1" -ClaudeLeftoversOnly`,
