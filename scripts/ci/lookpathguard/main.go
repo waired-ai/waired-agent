@@ -77,7 +77,7 @@ same instant. Resolve waired-managed binaries through the single
 predicate in cmd/waired-agent/engine_resolve.go instead.
 
 If the binary you are probing is a SYSTEM tool the host either has or
-does not (sudo, runuser, systemctl, zenity, nvidia-smi, uv), PATH is the
+does not (sudo, runuser, systemctl, zenity, nvidia-smi), PATH is the
 right question. Add the call site to declared in
 scripts/ci/lookpathguard/exemptions.go with the reason.
 
