@@ -338,14 +338,14 @@ func auditContextWindow(ctx context.Context, opts integration.ApplyOptions) inte
 			Detail: "the plugin's list of Waired models is out of date",
 		}
 	}
-	live := pluginContextWindow
-	switch {
-	case declared == live:
+	const live = pluginContextWindow
+	switch declared {
+	case live:
 		return integration.AuditFinding{
 			Status: integration.StatusOK, Subject: subject,
 			Detail: fmt.Sprintf("%d tokens", live),
 		}
-	case declared == 0:
+	case 0:
 		return integration.AuditFinding{
 			Status: integration.StatusWarn, Subject: subject,
 			Detail: fmt.Sprintf("the plugin declares no window for waired/default; Waired now gives it %d tokens", live),
