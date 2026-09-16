@@ -98,9 +98,9 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.5-9b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 52 | 4 | 6.6 | 12 | — | 9B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:9b-q4_K_M | — |
 | `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 69 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 68 | 4 | 17.4 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
-| `qwen3.8-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 17.7 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.8:27b-mtp-q4_K_M | 0.32.13 |
-| `qwen3.8-27b` | `q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 66 | 3 | 14.1 | 16 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL | 0.33.3 |
-| `qwen3.8-27b` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 65 | 2 | 10.8 | 12 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL | 0.33.3 |
+| `qwen3.8-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 89 | 4 | 17.7 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.8:27b-mtp-q4_K_M | 0.32.13 |
+| `qwen3.8-27b` | `q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 87 | 3 | 14.1 | 16 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL | 0.33.3 |
+| `qwen3.8-27b` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 86 | 2 | 10.8 | 12 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q2_K_XL | 0.33.3 |
 
 **MoE（総 / アクティブ）**
 
@@ -108,12 +108,12 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `gpt-oss-120b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 85 | 4 | 65.4 | 96 | — | 116.8B / A5.1B | sliding_window | 36,864 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=E | ollama:gpt-oss:120b | — |
 | `gpt-oss-20b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 60 | 4 | 14.0 | 16 | — | 20.9B / A3.6B | sliding_window | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:gpt-oss:20b | — |
-| `qwen3.5-122b-a10b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 83 | 4 | 81.0 | 128 | — | 122B / A10B | hybrid_mamba | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:122b-a10b-q4_K_M | — |
+| `qwen3.5-122b-a10b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 78 | 4 | 81.0 | 128 | — | 122B / A10B | hybrid_mamba | 24,576 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:122b-a10b-q4_K_M | — |
 | `qwen3.5-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 73 | 4 | 24.0 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:35b-a3b-q4_K_M | — |
-| `qwen3.6-35b-a3b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 90 | 4 | 22.6 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-mtp-q4_K_M | 0.30.0 |
-| `qwen3.6-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 89 | 4 | 23.9 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-q4_K_M | — |
-| `qwen3.6-35b-a3b` | `mtp-q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 87 | 3 | 18.1 | 24 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL | 0.33.3 |
-| `qwen3.6-35b-a3b` | `mtp-q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 86 | 2 | 13.5 | 16 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL | 0.33.3 |
+| `qwen3.6-35b-a3b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 82 | 4 | 22.6 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-mtp-q4_K_M | 0.30.0 |
+| `qwen3.6-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 81 | 4 | 23.9 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-q4_K_M | — |
+| `qwen3.6-35b-a3b` | `mtp-q3-gguf` | ollama-tag | UD-Q3_K_XL | ollama | 80 | 3 | 18.1 | 24 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q3_K_XL | 0.33.3 |
+| `qwen3.6-35b-a3b` | `mtp-q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 79 | 2 | 13.5 | 16 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q2_K_XL | 0.33.3 |
 | `qwen3.8-flash-next` | `q2-gguf` | ollama-tag | UD-Q2_K_XL | ollama | 91 | 2 | 79.8 | 128 | — | 176.9B / A6B | hybrid_mamba | 27,648 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:frob/qwen3.8-flash-next:125b-a6b-ud-q2_K_XL | 0.33.3 |
 
 #### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
@@ -126,7 +126,7 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.5-2b` | `bf16` | safetensors | BF16 | vllm | 28 | 8 | 4.5 | — | 12,288 | 2B | hybrid_mamba | 12,288 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.5-2B | — |
 | `qwen3.5-4b` | `bf16` | safetensors | BF16 | vllm | 43 | 8 | 9.3 | — | 20,480 | 4B | hybrid_mamba | 32,768 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.5-4B | — |
 | `qwen3.6-27b` | `fp8` | safetensors | FP8 | vllm | 70 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.6-27B-FP8 | — |
-| `qwen3.8-27b` | `fp8` | safetensors | FP8 | vllm | 72 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.8-27B-FP8 | — |
+| `qwen3.8-27b` | `fp8` | safetensors | FP8 | vllm | 90 | 8 | 30.9 | — | 38,912 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.8-27B-FP8 | — |
 
 **MoE（総 / アクティブ）**
 

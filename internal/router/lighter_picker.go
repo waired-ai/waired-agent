@@ -32,7 +32,7 @@ import (
 // isLightestOfferedModel — "An ORDERING, not a floor"). Selecting the
 // step-down by footprint instead made the two halves of one flow disagree,
 // and on the shipped catalog it traded 17 quality_tier points for 0.1 GB:
-// qwen3.5-35b-a3b (tier 73, 24.0 GB) beat qwen3.6-35b-a3b (tier 89/90 at
+// qwen3.5-35b-a3b (tier 73, 24.0 GB) beat qwen3.6-35b-a3b (then tier 89/90 at
 // 23.9/22.6 GB) below an 81.0 GB baseline (waired-agent#834, reported in
 // the v0.0.3-rc2 owner review waired-ai/waired#1223).
 //

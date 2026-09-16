@@ -46,7 +46,7 @@ type PublicUse struct {
 	//
 	// It replaced MinQualityTier in #537, and it had to: a size floor
 	// cannot be expressed as a tier floor, because the two orderings
-	// cross. glm-4.5-air is tier 75 and large; qwen3.6-35b-a3b is tier 90
+	// cross. glm-4.5-air was tier 75 and large; qwen3.6-35b-a3b is tier 82
 	// and medium. Picking either number as the boundary admits a model
 	// the other rule excludes.
 	MinModelSize string `json:"min_model_size,omitempty"`

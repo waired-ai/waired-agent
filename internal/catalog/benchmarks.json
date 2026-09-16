@@ -129,7 +129,7 @@
           "retrieved": "2026-08-05"
         }
       },
-      "notes": "This model sits above qwen3.6-27b in the ladder (89/90 vs 70/72) while the one accepted source covering both puts it 6.5 points below. Left as it is, deliberately (owner decision, 2026-08-05): one window of 111 problems is thin, LiveBench's current table carries no 35B-A3B so nothing cross-checks it, and the MoE's speed is a real axis quality_tier does not encode \u2014 it activates 3.3B of 35B per token against the 27B dense model's 27B. Revisit when a second accepted source covers the pair. The current order is not a measurement either: the composite uses TOTAL parameters by design, which structurally places a MoE above a dense model of similar size."
+      "notes": "Moved below every qwen3.8 build on 2026-09-16 (82/81/80/79, was 90/89/87/86; owner decision, docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md, waired-agent#1400). Qwen's own model cards put the dense 27B above this model in the same tables, and L107's paired comparison agreed. Speed, which this ladder never encoded, is decided by measurement on a reference host instead. It still sits above qwen3.6-27b (70/69/68, manual_only), although the one accepted source covering both puts it 6.5 points below; that pair is left as it is because qwen3.6-27b is not offered automatically. The order is written by hand: the composite uses TOTAL parameters by design, which structurally places a MoE above a dense model of similar size."
     },
     "qwen3.5-35b-a3b": {
       "scores": {

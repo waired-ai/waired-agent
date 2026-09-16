@@ -262,7 +262,8 @@ func TestLighterCandidate_RealCatalogReportedHost(t *testing.T) {
 // same answer and neither fixture could ever see waired-agent#834. That
 // co-monotonicity is why the defect shipped with the picker fully covered.
 //
-// The shape is the shipped catalog's, scaled to the 16 GB ollama host the
+// The shape is the shipped catalog's when #834 was reported (tiers as they
+// were then), scaled to the 16 GB ollama host the
 // other CPU cases in this file use: qwen3.6-35b-a3b/q4-gguf (23.9 GB,
 // quality_tier 89) beside qwen3.5-35b-a3b/q4-gguf (24.0 GB, tier 73), both
 // below qwen3.5-122b-a10b (81.0 GB, tier 83).
@@ -405,11 +406,13 @@ func reviewHostStrixHalo() hardware.Profile {
 // isLightestOfferedModel compares on (cmd/waired/init_modelselect.go — "An
 // ORDERING, not a floor"), so the two halves of one flow cannot disagree.
 //
-// The table runs TWO engine versions on purpose. qwen3.6-35b-a3b's mtp
-// variant (22.6 GB, tier 90) carries min_engine_version 0.30.0, so which
-// candidate is admitted depends on the engine — pinning one version would
-// leave the other case untested and would make the reproduction condition
-// depend on a value the test never varied.
+// The table runs TWO engine versions on purpose. The qwen3.8-27b builds
+// that top the ladder since waired-ai/waired-agent#1400 carry
+// min_engine_version 0.32.13 (MTP-Q4) and 0.33.3 (Q3/Q2), and
+// qwen3.6-35b-a3b's mtp variant carries 0.30.0, so which candidate is
+// admitted depends on the engine — pinning one version would leave the
+// other case untested and would make the reproduction condition depend on
+// a value the test never varied.
 func TestLighterCandidate_ShippedCatalogStepsDownByRank(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -430,10 +433,10 @@ func TestLighterCandidate_ShippedCatalogStepsDownByRank(t *testing.T) {
 		wantVariantID string
 		why           string
 	}{
-		{"0.32.13", "qwen3.6-35b-a3b", "mtp-q4-gguf",
-			"tier 90 at 22.6 GB — the highest-ranked candidate lighter than the 81.0 GB baseline"},
+		{"0.32.13", "qwen3.8-27b", "mtp-q4-gguf",
+			"tier 89 at 17.7 GB — the highest-ranked candidate lighter than the 81.0 GB baseline (#1400)"},
 		{"0.29.0", "qwen3.6-35b-a3b", "q4-gguf",
-			"the mtp variant is below its min_engine_version 0.30.0 floor here, so tier 89 at 23.9 GB is the highest-ranked lighter candidate"},
+			"every qwen3.8 build and the 35B-A3B mtp variant are below their min_engine_version floors here, so tier 81 at 23.9 GB is the highest-ranked lighter candidate"},
 	}
 
 	for _, tc := range cases {
