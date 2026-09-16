@@ -141,16 +141,6 @@
           "notes": "Below its qwen3.6 counterpart (24.7), which is the direction the ladder already has them in."
         }
       }
-    },
-    "gpt-oss-120b": {
-      "scores": {
-        "swe_bench_verified": {
-          "value": 62.4,
-          "url": "https://www.swebench.com/",
-          "retrieved": "2026-05-16",
-          "notes": "Recorded only. No accepted source carries this model."
-        }
-      }
     }
   }
 }

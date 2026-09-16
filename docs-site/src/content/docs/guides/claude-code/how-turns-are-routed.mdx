@@ -30,8 +30,8 @@ line saying which computer it means.
 For the rows where Waired chooses the computer, **Waired**, **Waired peer**
 and **Waired public share**, a computer is used only when it is running a
 model with room for a 200,000-token conversation. Most can. A computer serving
-a smaller window, such as one running a `gpt-oss` model (about 131,000
-tokens), is not used for those rows. It still answers **Waired local** on
+a smaller window, such as one where vLLM sized the window down to fit the
+GPU's VRAM, is not used for those rows. It still answers **Waired local** on
 itself and its own **Waired peer: &lt;name&gt;** row, and those rows state that
 computer's own window. Which of your computers is chosen is decided by
 `waired worker`. See [Choose which computer answers](/guides/routing/).
@@ -100,22 +100,6 @@ numbers and says when they disagree.
 A prompt too long for the computer that answers comes back as
 `prompt is too long`, and Claude Code compacts and retries on its own. That
 is the session continuing, not failing.
-
-<Aside type="note" title="Models with a 131k window">
-	The `gpt-oss` models hold about 131,000 tokens instead of 200,000. Waired
-	never picks one for you: a computer running one is not used for the
-	**Waired**, **Waired peer** and **Waired public share** rows. To use it,
-	pick **Waired local** on that computer, or its own
-	**Waired peer: &lt;name&gt;** row. If you do, have Claude Code compact earlier
-	so it does not compact under pressure:
-
-	```sh
-	export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
-	```
-
-	This is a Claude Code setting, not a Waired one, and it may change with
-	Claude Code releases.
-</Aside>
 
 ## When a turn cannot run
 
@@ -197,7 +181,7 @@ way, and the message says why. The pin can come from `waired worker set --pin`
 or from a **Waired peer: &lt;name&gt;** row. Here the row's window:
 
 ```
-API Error: 400 The computer this turn is pinned to, sv-mag, cannot take it: its context window is 131072 tokens, and the model you picked needs 200704. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The computer this turn is pinned to, studio-desktop, cannot take it: it does not state a context window, and the model you picked needs 200704 tokens. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 The same place names the other reasons: `Serve main conversation is turned

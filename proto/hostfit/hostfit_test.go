@@ -1629,22 +1629,10 @@ func TestMeetsNativeContextFloor(t *testing.T) {
 		}
 	}
 
-	manifests, err := catalog.BundledManifests()
-	if err != nil {
-		t.Fatalf("BundledManifests: %v", err)
-	}
-	var pass, fail int
-	for _, m := range manifests {
-		if hostfit.MeetsNativeContextFloor(m) {
-			pass++
-		} else {
-			fail++
-		}
-	}
-	if pass == 0 || fail == 0 {
-		t.Errorf("bundled catalog splits %d above / %d below the native context floor; "+
-			"a floor that separates nothing is not gating auto-selection", pass, fail)
-	}
+	// The half that asserted the bundled catalog splits on this floor
+	// left with waired-ai/waired-agent#1400: the catalog admits only
+	// builds whose window reaches ~200k, so nothing ships below it and
+	// the function has no caller (it stays deprecated in proto).
 }
 
 // TestOllamaRecommend_DiscreteRequiresResidentWeights is the rule

@@ -108,9 +108,9 @@ request itself.
 The entries where Waired picks the computer, `waired/default`, `waired/peer`
 and `waired/public`, use only a computer whose context window holds 200,704
 tokens, and every `[1m]` entry only one that holds 1,048,576. A computer
-serving less, such as one running a `gpt-oss` model, is not used for them. It
-still answers `waired/local` on itself and its own `waired/peer-<name>`
-entry, which ask nothing of the computer they name.
+serving less, such as one where vLLM sized the window down to fit the GPU's
+VRAM, is not used for them. It still answers `waired/local` on itself and its
+own `waired/peer-<name>` entry, which ask nothing of the computer they name.
 
 Each entry states its window as `max_input_tokens` in the list at
 `http://127.0.0.1:9473/v1/models`, and OpenCode reads it at every start as

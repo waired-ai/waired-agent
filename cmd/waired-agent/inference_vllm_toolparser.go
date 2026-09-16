@@ -113,9 +113,8 @@ var vllmToolParserByModelID = map[string]string{
 	"qwen3.5-2b":   vllmParserQwen3XML, // Qwen/Qwen3.5-2B
 	"qwen3.5-4b":   vllmParserQwen3XML, // Qwen/Qwen3.5-4B
 
-	// docs §"OpenAI OSS Models (`openai`)", both repos listed by name.
-	"gpt-oss-20b":  vllmParserOpenAI, // openai/gpt-oss-20b
-	"gpt-oss-120b": vllmParserOpenAI, // openai/gpt-oss-120b
+	// The gpt-oss rows (docs §"OpenAI OSS Models (`openai`)") went with
+	// waired-ai/waired-agent#1400, which retired both with no successor.
 
 	// No docs section, but vLLM registers `deepseek_v4` and its
 	// DeepSeekV4ToolParser is documented in-source as "DeepSeek V4 DSML

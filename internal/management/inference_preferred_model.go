@@ -3,7 +3,6 @@ package management
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -81,7 +80,7 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		// setupCanonicalModelID.
 		if ret, retired := catalog.LookupRetirement(req.ModelID); retired {
 			writeJSON(w, http.StatusConflict, errorBody("model_retired",
-				fmt.Sprintf("%q was retired; use %q instead", req.ModelID, ret.SuccessorModelID)))
+				catalog.RetirementRefusal(req.ModelID, ret)))
 			return
 		}
 		writeJSON(w, http.StatusNotFound, errorBody("model_not_found", "no bundled manifest with that model_id"))

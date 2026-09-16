@@ -310,6 +310,38 @@ func TestPreferredModel_RetiredModelReturns409NamingTheSuccessor(t *testing.T) {
 	}
 }
 
+// A model retired with no successor (docs/decisions/20260916/0340,
+// decision 4) is refused the same way, and the message says there is no
+// replacement instead of naming an empty one.
+func TestPreferredModel_RetiredWithNoSuccessorReturns409SayingSo(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	inf := &fakeInference{}
+	s := newPreferredModelTestServer(t, inf, prefDir, &restarts)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{ModelID: "gpt-oss-20b"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		ErrorCode string `json:"error_code"`
+		Message   string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, w.Body.String())
+	}
+	if body.ErrorCode != "model_retired" {
+		t.Errorf("error_code = %q, want model_retired", body.ErrorCode)
+	}
+	if want := `"gpt-oss-20b" was retired with no replacement; choose another model`; body.Message != want {
+		t.Errorf("message = %q, want %q", body.Message, want)
+	}
+	if _, ok, _ := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json")); ok {
+		t.Error("a retired model must not persist a preference")
+	}
+}
+
 func TestPreferredModel_UndownloadedReportsDownloadingWithoutPull(t *testing.T) {
 	prefDir := t.TempDir()
 	var restarts int32

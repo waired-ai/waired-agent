@@ -188,6 +188,18 @@ func TestResolveModel_EveryRetiredNameResolvesOnTheShippedCatalog(t *testing.T) 
 			checked++
 			var reasons []string
 			m, ok := sel.resolveModel(name, &reasons)
+			if !catalog.HasSuccessor(r) {
+				// Retired with no successor (docs/decisions/20260916/0340,
+				// decision 4): nothing to serve, and Select says why.
+				if ok {
+					t.Errorf("retired name %q with no successor resolved to %q", name, m.ModelID)
+				}
+				_, err := sel.Select(context.Background(), Request{Model: name})
+				if !errors.Is(err, ErrModelNotFound) || !strings.Contains(err.Error(), "retired with no replacement") {
+					t.Errorf("Select(%q) err = %v, want a not-found that says it was retired with no replacement", name, err)
+				}
+				continue
+			}
 			if !ok {
 				t.Errorf("retired name %q does not resolve on the shipped catalog", name)
 				continue

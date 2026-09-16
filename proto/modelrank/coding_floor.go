@@ -58,6 +58,15 @@ const CodingAgentSelectionFloorTokps = 60.0
 // control plane's wizard once offered 131072-window models as defaults
 // for coding work while the agent on the same machine would not serve
 // them (waired-ai/waired#988).
+//
+// Deprecated: nothing reads it since waired-ai/waired-agent#1400. The
+// catalog admits only builds whose own window reaches the ~200k serving
+// window (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md,
+// held by internal/hardware.TestBundledCatalog_EveryBuildFitsTheReferenceHost),
+// so this gate no longer separates any offered model, and the owner had
+// the machinery built around sub-200k models removed (decision 4). Kept
+// only because the proto module is additive-only.
 func MeetsNativeContextFloor(m catalog.Manifest) bool {
 	return m.ContextLength >= hostfit.NativeContextFloorTokens
 }

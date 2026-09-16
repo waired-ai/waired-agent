@@ -1341,6 +1341,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	// Step 1: alias resolution.
 	manifest, ok := s.resolveModel(req.Model, &reasons)
 	if !ok {
+		// A name retired with no successor is still a name we shipped, so
+		// the answer says so rather than "never heard of it". It stays a
+		// not-found for every caller that branches on the error: there is
+		// nothing to serve, and a request naming a model is an instruction
+		// given now, not a pin to fall back from
+		// (docs/decisions/20260916/0340, decision 4).
+		if r, retired := catalog.LookupRetirement(req.Model); retired && !catalog.HasSuccessor(r) {
+			return nil, fmt.Errorf("%w: %s", ErrModelNotFound, catalog.RetirementRefusal(req.Model, r))
+		}
 		return nil, fmt.Errorf("%w: %q", ErrModelNotFound, req.Model)
 	}
 	modelID = manifest.ModelID

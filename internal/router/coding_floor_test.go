@@ -2,7 +2,6 @@ package router
 
 import (
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -36,17 +35,6 @@ func TestEffectiveContextFloor(t *testing.T) {
 	}
 	if got := EffectiveContextFloor(floorManifest(0)); got != CodingAgentContextFloorTokens {
 		t.Errorf("unknown-context manifest floor = %d, want %d", got, CodingAgentContextFloorTokens)
-	}
-}
-
-func TestMeetsNativeContextFloor(t *testing.T) {
-	if !MeetsNativeContextFloor(floorManifest(262144)) {
-		t.Error("262144 must pass the native floor")
-	}
-	for _, ctx := range []int{131072, 32768} {
-		if MeetsNativeContextFloor(floorManifest(ctx)) {
-			t.Errorf("%d must fail the native floor", ctx)
-		}
 	}
 }
 
@@ -278,13 +266,6 @@ func floorCatalog() []catalog.Manifest {
 			Variants:     []catalog.Variant{v("mtp-q4", 22.62, 20480, 90, 32)},
 		},
 		{
-			// Higher tier than the flagship but 131072-native: must lose
-			// auto-selection to the floor no matter the tier.
-			ModelID: "subfloor-champ", ContextLength: 131072,
-			Capabilities: []string{"chat", "tool_use"},
-			Variants:     []catalog.Variant{v("q4", 16.3, 65536, 95, 24)},
-		},
-		{
 			ModelID: "small-pass", ContextLength: 262144,
 			Capabilities: []string{"chat", "tool_use"},
 			Variants:     []catalog.Variant{v("q4", 6.6, 32768, 52, 12)},
@@ -330,88 +311,16 @@ func TestRankModels_ContextFloorGating(t *testing.T) {
 	if flagship.Recommendation.Fits {
 		t.Error("flagship must not be recommended on the anchor: the floor window is not fully resident there")
 	}
-	for _, p := range ranked {
-		if p.Manifest.ModelID == "subfloor-champ" {
-			t.Error("131072-native manifest must be absent from auto-selection when floor-passing candidates exist")
-		}
-	}
 }
 
-func TestRankModels_PreferredBypassesFloor(t *testing.T) {
-	pick, err := PickModel(PickInput{
-		Catalog: floorCatalog(), Hardware: anchorHost(),
-		Engine: catalog.RuntimeOllama, PreferredModelID: "subfloor-champ",
-	})
-	if err != nil {
-		t.Fatalf("PickModel: %v", err)
-	}
-	if pick.Manifest.ModelID != "subfloor-champ" {
-		t.Fatalf("pick = %s, want the preferred subfloor-champ", pick.Manifest.ModelID)
-	}
-	if pick.ContextFloorSatisfied {
-		t.Error("sub-floor preferred pick must report ContextFloorSatisfied=false")
-	}
-	found := false
-	for _, r := range pick.Reasons {
-		if strings.Contains(r, "overrides the ~200k coding-agent context floor") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("reasons lack the override warning: %v", pick.Reasons)
-	}
-}
-
-// TestRankModels_BestEffortFallbackWhenNothingServesFloor is the
-// best-effort path after waired#1031: it fires when no model's OWN window
-// reaches the floor, which is the only case left where no amount of
-// hardware helps.
-//
-// It used to be driven by an 8 GiB card instead, on the reasoning that
-// none of the fixture models "serves ~200k" there. That reasoning was
-// the non-monotone gate: the same host with no card at all serves the
-// flagship's 200k window out of system RAM, and a card can only add to
-// that. What the 8 GiB card actually changes is how FAST it runs, which
-// the recommendation gate says out loud and the case below asserts.
-func TestRankModels_BestEffortFallbackWhenNothingServesFloor(t *testing.T) {
-	// A catalog with nothing above the native floor: no host can serve a
-	// coding-agent window from it, so every pick is best-effort.
-	subFloor := []catalog.Manifest{{
-		ModelID: "subfloor-champ", ContextLength: 131072,
-		Capabilities: []string{"chat", "tool_use"},
-		Variants: []catalog.Variant{{
-			VariantID: "q4", Format: "ollama-tag", RuntimeSupport: []string{catalog.RuntimeOllama},
-			EstimatedWeightGB: 16.3, KVBytesPerTokenFP16: 65536, QualityTier: 95, MinRAMGB: 24,
-			Source: catalog.VariantSource{Type: "ollama", Tag: "q4"},
-		}},
-	}}
-	hw := hardware.Profile{
-		RAMTotalGB: 32,
-		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24564}},
-	}
-	ranked, err := RankModels(PickInput{Catalog: subFloor, Hardware: hw, Engine: catalog.RuntimeOllama})
-	if err != nil {
-		t.Fatalf("RankModels: %v", err)
-	}
-	for _, p := range ranked {
-		if p.ContextFloorSatisfied {
-			t.Errorf("%s: a 131072-native model can never satisfy the floor", p.Manifest.ModelID)
-		}
-	}
-	pick, err := PickModel(PickInput{Catalog: subFloor, Hardware: hw, Engine: catalog.RuntimeOllama})
-	if err != nil {
-		t.Fatalf("PickModel: %v", err)
-	}
-	found := false
-	for _, r := range pick.Reasons {
-		if strings.Contains(r, "best-effort selection") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("reasons lack the best-effort line: %v", pick.Reasons)
-	}
-}
+// The native half of the #624 floor left with waired-ai/waired-agent#1400:
+// the catalog admits only builds whose own window reaches ~200k, and the
+// owner had the machinery built around sub-200k models removed (decisions 3
+// and 4 of docs/decisions/20260916/0340). Three tests went with it — a
+// preferred sub-floor model reporting the override, the best-effort line
+// when no model's own window reaches the floor, and the step-down refusing
+// a sub-floor model — and floorCatalog lost the 131072-native fixture they
+// shared.
 
 // TestRankModels_SmallCardCostsTierNotTheWindow is what a card too small
 // for the flagship's weights may and may not cost.
@@ -455,21 +364,6 @@ func TestRankModels_SmallCardCostsTierNotTheWindow(t *testing.T) {
 	if rec := hostfit.OllamaRecommend(flagship, hw.HostFit()); rec.Fits ||
 		rec.Reason != hostfit.ReasonWeightsSpill {
 		t.Errorf("recommendation on an 8 GiB card = %+v, want a weights_spill refusal", rec)
-	}
-}
-
-// The #133 lighter-model recommendation goes through RankModels, so it
-// must never step down from a floor-passing model onto a sub-floor one
-// while floor-passing alternatives exist.
-func TestLighterCandidate_StaysAboveContextFloor(t *testing.T) {
-	pick, ok := LighterCandidate(PickInput{
-		Catalog: floorCatalog(), Hardware: anchorHost(), Engine: catalog.RuntimeOllama,
-	}, "flagship-moe", "mtp-q4")
-	if !ok {
-		t.Fatal("expected a lighter candidate")
-	}
-	if pick.Manifest.ModelID != "small-pass" {
-		t.Errorf("lighter pick = %s, want small-pass (subfloor-champ is floor-excluded)", pick.Manifest.ModelID)
 	}
 }
 

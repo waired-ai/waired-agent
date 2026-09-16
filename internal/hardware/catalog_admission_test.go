@@ -14,10 +14,6 @@ import (
 // catalog. An entry that starts passing fails the test too, so the table
 // cannot outlive the reason it was written for.
 var admissionExemptions = map[string]string{
-	"gpt-oss-20b/mxfp4-gguf":            "131,072-token native window; retired with no successor by the next catalog change (owner decision 2026-09-16, waired-ai/waired-agent#1400)",
-	"gpt-oss-20b/mxfp4-safetensors":     "131,072-token native window; retired with no successor by the next catalog change (owner decision 2026-09-16, waired-ai/waired-agent#1400)",
-	"gpt-oss-120b/mxfp4-gguf":           "131,072-token native window; retired with no successor by the next catalog change (owner decision 2026-09-16, waired-ai/waired-agent#1400)",
-	"gpt-oss-120b/mxfp4-safetensors":    "131,072-token native window; retired with no successor by the next catalog change (owner decision 2026-09-16, waired-ai/waired-agent#1400)",
 	"glm-5.2/fp8-safetensors":           "needs 1,130,000 MB of accelerator memory; retired in waired-ai/waired#1427",
 	"glm-5.2/nvfp4-safetensors":         "needs 560,000 MB of accelerator memory; retired in waired-ai/waired#1427",
 	"deepseek-v4-flash/fp8-safetensors": "needs 196,608 MB of accelerator memory; retired in waired-ai/waired#1427",

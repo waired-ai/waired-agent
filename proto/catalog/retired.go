@@ -39,9 +39,17 @@ type Retirement struct {
 	// second spelling.
 	Names []string
 
-	// SuccessorModelID is the entry to use instead.
+	// SuccessorModelID is the entry to use instead, or "" when there is
+	// none.
 	//
-	// It must resolve in the shipped catalog, must not be InternalOnly
+	// Empty is a decision, not an omission: the entry left because the
+	// catalog no longer admits anything like it, and no single model is
+	// right for every host that ran it (gpt-oss, owner decision
+	// 2026-09-16, docs/decisions/20260916/0340). The names stay reserved;
+	// what a consumer does instead — refuse, or fall back to what it would
+	// choose for that host now — is its own policy, as substituting is.
+	//
+	// A named successor must resolve in the shipped catalog, must not be InternalOnly
 	// (migrating somebody onto a model we refuse to offer is not a
 	// migration), and must not itself be retired — a chain is a migration
 	// nobody wrote, and the fix is to re-point the first entry at the
@@ -185,6 +193,36 @@ var retirements = []Retirement{
 			"returned 0 for it, so no host ever auto-selected it. Carried for vendor " +
 			"diversity rather than licence, and the licence is covered regardless: glm-5.2 " +
 			"and deepseek-v4-flash are both MIT.",
+	},
+
+	// gpt-oss (waired-ai/waired-agent#1400). Both left together and with no
+	// successor. The catalog admits a build only if a Strix Halo with 128 GB
+	// holds it fully resident with a ~200k context window, and a
+	// 131,072-token native window can never meet that, however small the
+	// weights (owner decision 2026-09-16, decision 4 of
+	// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md).
+	// Both were manual_only, so no host was ever given one automatically.
+	{
+		Names: []string{
+			"gpt-oss-20b",
+			"openai/gpt-oss-20b",
+		},
+		Reason: "its 131,072-token native window is below the ~200k window the catalog " +
+			"admits (owner decision 2026-09-16, waired-ai/waired-agent#1400). Retired with " +
+			"no successor: it was manual_only, so only a person who asked for it by name " +
+			"ran it, and a host that still names it falls back to the model recommended " +
+			"for it.",
+	},
+	{
+		Names: []string{
+			"gpt-oss-120b",
+			"openai/gpt-oss-120b",
+		},
+		Reason: "its 131,072-token native window is below the ~200k window the catalog " +
+			"admits (owner decision 2026-09-16, waired-ai/waired-agent#1400). Retired with " +
+			"no successor: it was manual_only, so only a person who asked for it by name " +
+			"ran it, and a host that still names it falls back to the model recommended " +
+			"for it.",
 	},
 }
 

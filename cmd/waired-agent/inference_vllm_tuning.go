@@ -73,7 +73,7 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 	mt.Warning = fmt.Sprintf(
 		"context window clamped to %d tokens (model native %s) so the KV cache fits GPU memory at gpu-memory-utilization=%.2f, TP=%d",
 		est, native, gpuMemUtil, tp)
-	if router.MeetsNativeContextFloor(m) && est < router.EffectiveContextFloor(m) {
+	if est < router.EffectiveContextFloor(m) {
 		// Same tone as the ollama sub-floor note: informational — a
 		// clamped window is a working configuration, not an error.
 		mt.Warning += "; below the ~200k coding-agent context target — long sessions will truncate or compact"

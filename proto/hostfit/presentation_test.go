@@ -420,6 +420,11 @@ func TestPresentationCanonicalJSON(t *testing.T) {
 // also the preselected row, on a host whose engine then clamped it to
 // 124928. The absence did not read as "no rule applies"; it read as
 // "nothing is wrong with this row".
+//
+// Since waired-ai/waired-agent#1400 neither tab asks about the model's own
+// window: the catalog admits only builds whose window reaches the coding
+// window (decisions 3 and 4 of docs/decisions/20260916/0340). The parity
+// is what stays — the two tabs still give one answer for one model.
 func TestProjectModelVLLMWindowVerdict(t *testing.T) {
 	// vLLM-only variant, big enough card to run it, so Runnable is never
 	// the thing under test.
@@ -442,9 +447,9 @@ func TestProjectModelVLLMWindowVerdict(t *testing.T) {
 	if !got.Runnable {
 		t.Fatal("the short-window model stopped being runnable — capacity is the only rule allowed to refuse")
 	}
-	if !got.NotRecommended || got.NotRecommendedReason != hostfit.ReasonWindowTooSmall {
-		t.Errorf("vLLM row for a 131072-native model: NotRecommended=%v reason=%q, want true / %q",
-			got.NotRecommended, got.NotRecommendedReason, hostfit.ReasonWindowTooSmall)
+	if got.NotRecommendedReason == hostfit.ReasonWindowTooSmall {
+		t.Errorf("vLLM row for a 131072-native model still says %q; nothing produces it since #1400",
+			got.NotRecommendedReason)
 	}
 
 	// Parity is the point: the ollama tab has said this for a while.
@@ -468,9 +473,10 @@ func TestProjectModelVLLMWindowVerdict(t *testing.T) {
 }
 
 // TestVLLMRecommendModel pins what the vLLM rule does and does NOT ask.
-// It is one clause today by design — the two the ollama rule adds are its
-// own arithmetic, and vLLM's equivalents live in proto/modelrank, which
-// imports this package.
+// It carried one clause, the model's own window, until
+// waired-ai/waired-agent#1400 removed it (decisions 3 and 4 of
+// docs/decisions/20260916/0340); the host clauses live in
+// VLLMRecommendModelOnHost and proto/modelrank.
 func TestVLLMRecommendModel(t *testing.T) {
 	host := hostFromWire(t, wireRTX4090)
 	for _, tc := range []struct {
@@ -479,10 +485,10 @@ func TestVLLMRecommendModel(t *testing.T) {
 		wantFits   bool
 		wantReason string
 	}{
-		{"a 131072 model cannot hold a coding session on any machine", 131072, false, hostfit.ReasonWindowTooSmall},
+		{"a 131072 model is no longer judged on its window", 131072, true, ""},
 		{"the coding window exactly", 200704, true, ""},
 		{"a 1M model", 1048576, true, ""},
-		{"a manifest with no window declares nothing to check against", 0, false, hostfit.ReasonWindowTooSmall},
+		{"a manifest with no window", 0, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := catalog.Manifest{ModelID: "m", ContextLength: tc.ctxLen}

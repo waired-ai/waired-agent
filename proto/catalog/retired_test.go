@@ -29,9 +29,11 @@ func TestRetirementTableIsWellFormed(t *testing.T) {
 			}
 			seen[n] = r.SuccessorModelID
 		}
-		if strings.TrimSpace(r.SuccessorModelID) == "" {
-			t.Errorf("retirement of %v has no successor — deleting an entry with "+
-				"nowhere to send its users is what this table exists to prevent", r.Names)
+		// No successor is allowed (docs/decisions/20260916/0340, decision
+		// 4), but a blank one is not: a name made of spaces is a typo that
+		// would resolve to nothing, not a decision.
+		if r.SuccessorModelID != "" && strings.TrimSpace(r.SuccessorModelID) == "" {
+			t.Errorf("retirement of %v has a blank successor %q", r.Names, r.SuccessorModelID)
 		}
 		reason := strings.TrimSpace(r.Reason)
 		if len(reason) < 20 {
@@ -55,6 +57,11 @@ func TestEveryRetirementSuccessorResolves(t *testing.T) {
 		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
 	}
 	for _, r := range Retirements() {
+		if r.SuccessorModelID == "" {
+			// Retired with no successor (docs/decisions/20260916/0340,
+			// decision 4): nothing to resolve.
+			continue
+		}
 		m, ok := LookupByAlias(r.SuccessorModelID, all)
 		if !ok {
 			t.Errorf("successor %q for %v is not in the catalog — every site that "+

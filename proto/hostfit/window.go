@@ -699,11 +699,15 @@ func OllamaDeclaresWindowFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 // host declare the coding window with this model — 「重み+オーバーヘッド
 // 完全常駐、KV は既存 spill 上限（≈モデルの 20%）内、深部デコード条件」.
 //
-// Three clauses, in the order a reader can act on them:
+// Two clauses since waired-ai/waired-agent#1400, in the order a reader
+// can act on them. The first one used to be that the model's own window
+// reaches the coding window; the catalog now admits only builds that do
+// (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md),
+// and the owner had the clause removed with the rest of the machinery
+// built around sub-200k models (decision 4). The numbering below is kept,
+// because other comments cite "clause 3".
 //
-//  1. The model's own window reaches the coding window. No hardware
-//     changes this one, which is why it is named apart from the two an
-//     operator could buy their way out of.
 //  2. Weights and engine overhead fit GPU-addressable memory outright.
 //     Unresident weights are re-read from system RAM on EVERY token of
 //     every prompt, which is a different failure from an unresident KV
@@ -752,9 +756,6 @@ func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 	budget := h.OllamaVRAMBudgetMB()
 	accelerated := h.HasGPU() && budget > 0 && v.EstimatedWeightGB > 0
 	switch {
-	case DeclarableNativeWindow(m) < ServingWindow200k:
-		out = Verdict{Reason: ReasonWindowTooSmall}
-
 	case accelerated && v.GGUF != nil && OllamaEstimateMemory(v, h, kvType, 0, 1).DeviceMB() > budget:
 		out = Verdict{
 			Reason: ReasonWeightsSpill,
@@ -789,9 +790,15 @@ func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 }
 
 // VLLMRecommendModel is OllamaRecommendModel's counterpart for the vLLM
-// surface. Today it carries ONE clause, and that clause is the one no
-// engine can change: the model's own window has to reach the coding
-// window at all (DeclarableNativeWindow, clause 1 of OllamaRecommendModel).
+// surface. It carried ONE clause, the one no engine can change: the
+// model's own window has to reach the coding window at all.
+//
+// Deprecated: it carries no clause since waired-ai/waired-agent#1400 and
+// always fits. The catalog admits only builds whose own window reaches the
+// ~200k serving window (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md),
+// and the owner had the machinery built around sub-200k models removed
+// (decision 4). Use VLLMRecommendModelOnHost, which asks about the host.
 //
 // It exists because the surfaces asked the same question per engine tab
 // and got opposite answers. On the ollama tab a 131072-native model is
@@ -813,10 +820,7 @@ func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 // (VLLMFit) is the only rule allowed to refuse, and a model that fits is
 // still offered — annotated and sorted below the recommended ones
 // (waired-agent#229).
-func VLLMRecommendModel(m catalog.Manifest, _ catalog.Variant, _ Host) Verdict {
-	if DeclarableNativeWindow(m) < ServingWindow200k {
-		return Verdict{Reason: ReasonWindowTooSmall}
-	}
+func VLLMRecommendModel(_ catalog.Manifest, _ catalog.Variant, _ Host) Verdict {
 	return Verdict{Fits: true}
 }
 
@@ -853,9 +857,6 @@ func VLLMRecommendModelOnHost(
 func VLLMRecommendModelOnHostFor(
 	m catalog.Manifest, v catalog.Variant, h Host, gpus []signer.HardwareGPUSummary, kvType string,
 ) Verdict {
-	if out := VLLMRecommendModel(m, v, h); !out.Fits {
-		return out
-	}
 	if !VLLMServesContextFloorFor(m, v, gpus, kvType) {
 		return Verdict{Reason: ReasonWindowExceedsMemory}
 	}

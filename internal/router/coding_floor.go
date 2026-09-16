@@ -91,12 +91,6 @@ const (
 	OllamaIntentionalSpillCapExpected = hostfit.OllamaMaxExpectedSpillFraction
 )
 
-// MeetsNativeContextFloor reports whether the manifest's native window
-// qualifies it for the coding-agent auto-selection pool.
-func MeetsNativeContextFloor(m catalog.Manifest) bool {
-	return modelrank.MeetsNativeContextFloor(m)
-}
-
 // EffectiveContextFloor is the window the host gate (and the serve
 // tuning's intentional spill) aims for: the ~200k floor, capped at the
 // manifest's own native window for sub-floor models reached via the

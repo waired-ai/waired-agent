@@ -30,8 +30,8 @@ func refusedVLLMHost(t *testing.T, reason string) *agentInferenceProvider {
 //
 // PRODUCT CONTRACT (waired-agent#1075).
 func TestStatus_RefusedBootstrapIsNotReady(t *testing.T) {
-	const reason = "no vLLM-capable model selected — set a preferred model that ships a" +
-		" vllm/safetensors variant (e.g. gpt-oss-20b)"
+	const reason = "the model chosen for this computer (qwen3.5-9b) has no vllm/safetensors variant this engine can load;" +
+		" choose a model that does, or switch this computer to ollama"
 	p := refusedVLLMHost(t, reason)
 
 	st := p.Status(context.Background())
@@ -52,7 +52,7 @@ func TestStatus_RefusedBootstrapIsNotReady(t *testing.T) {
 	if row.State != infruntime.StateFailed {
 		t.Errorf("runtimes[vllm].state = %q, want %q", row.State, infruntime.StateFailed)
 	}
-	if !strings.Contains(row.LastError, "no vLLM-capable model selected") {
+	if !strings.Contains(row.LastError, reason) {
 		t.Errorf("runtimes[vllm].last_error = %q, want the refusal", row.LastError)
 	}
 }

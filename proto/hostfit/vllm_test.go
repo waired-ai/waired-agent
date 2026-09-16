@@ -52,16 +52,6 @@ func TestVLLMRecommendModelOnHost(t *testing.T) {
 		}
 	})
 
-	t.Run("the manifest clause still wins, and names itself", func(t *testing.T) {
-		// Below the declarable window: no hardware moves this, so the host
-		// clause must not get a chance to relabel it.
-		got := hostfit.VLLMRecommendModelOnHost(
-			windowManifest(131072), wide, hostfit.Host{}, []signer.HardwareGPUSummary{l4, l4})
-		if got.Fits || got.Reason != hostfit.ReasonWindowTooSmall {
-			t.Fatalf("got %+v, want window_too_small", got)
-		}
-	})
-
 	t.Run("fp8 KV on Ada widens one card past the floor", func(t *testing.T) {
 		v8 := catalog.Variant{EstimatedWeightGB: 8.0, KVBytesPerTokenFP16: 73728}
 		if got := hostfit.VLLMRecommendModelOnHost(

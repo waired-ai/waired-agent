@@ -101,19 +101,31 @@ func TestRetirementNotice(t *testing.T) {
 }
 
 // Product contract (#200): the agent resolves against the COMPLETE set,
-// so every retired name must reach a servable model on the real catalog.
-// The proto test pins the successor's presence; this pins that the
-// agent's own resolver, with the agent's own manifest set, actually
-// completes the migration.
+// so every retired name with a successor must reach a servable model on
+// the real catalog. The proto test pins the successor's presence; this
+// pins that the agent's own resolver, with the agent's own manifest set,
+// actually completes the migration.
+//
+// A name retired with no successor (docs/decisions/20260916/0340,
+// decision 4) must come back as the third state — retired, not unknown —
+// so a caller can say which it is.
 func TestResolveModelMigratesEveryRetiredNameOnTheShippedCatalog(t *testing.T) {
 	all, err := BundledManifestsIncludingInternal()
 	if err != nil {
 		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
 	}
-	checked := 0
+	checked, noSuccessor := 0, 0
 	for _, ret := range Retirements() {
 		for _, n := range ret.Names {
 			m, r, ok := ResolveModel(n, all)
+			if !HasSuccessor(ret) {
+				if ok || m.ModelID != "" || len(r.Names) == 0 {
+					t.Errorf("ResolveModel(%q) = (%q, %v, %v), want the retired-with-no-successor state",
+						n, m.ModelID, r.Names, ok)
+				}
+				noSuccessor++
+				continue
+			}
 			if !ok {
 				t.Errorf("retired name %q does not resolve on the shipped catalog", n)
 				continue
@@ -128,7 +140,30 @@ func TestResolveModelMigratesEveryRetiredNameOnTheShippedCatalog(t *testing.T) {
 			checked++
 		}
 	}
-	if checked == 0 {
-		t.Fatal("no retired names to check — this test is asserting nothing")
+	if checked == 0 || noSuccessor == 0 {
+		t.Fatalf("checked %d substituted and %d unsubstituted retired names — one half is asserting nothing",
+			checked, noSuccessor)
+	}
+}
+
+// The two sentences a site says about a retired name, pinned so the docs
+// can quote them verbatim.
+func TestRetirementRefusalAndRecommendedInsteadNotice(t *testing.T) {
+	succ, ok := LookupRetirement("qwen2.5-coder-0.5b")
+	if !ok {
+		t.Fatal("the 0.5b retirement is missing from the table")
+	}
+	none, ok := LookupRetirement("gpt-oss-20b")
+	if !ok {
+		t.Fatal("the gpt-oss-20b retirement is missing from the table")
+	}
+	for _, c := range []struct{ got, want string }{
+		{RetirementRefusal("qwen2.5-coder-0.5b", succ), `"qwen2.5-coder-0.5b" was retired; use "qwen3.5-0.8b" instead`},
+		{RetirementRefusal("gpt-oss-20b", none), `"gpt-oss-20b" was retired with no replacement; choose another model`},
+		{RecommendedInsteadNotice("gpt-oss-20b", "qwen3.8-27b"), `"gpt-oss-20b" was retired with no replacement; using "qwen3.8-27b", the model recommended for this computer, instead`},
+	} {
+		if c.got != c.want {
+			t.Errorf("got %q, want %q", c.got, c.want)
+		}
 	}
 }

@@ -35,13 +35,16 @@ func LookupRetirement(name string) (Retirement, bool) {
 //
 //	(m, zero, true)     name is live                  -> proceed
 //	(succ, r, true)     name was retired, substituted -> proceed AND SAY SO
-//	(zero, r, false)    retired, successor not in `manifests`
+//	(zero, r, false)    retired, and no successor in `manifests`
 //	                                                  -> "retired", not "unknown"
 //	(zero, zero, false) never heard of it             -> today's not-found
 //
-// The third state cannot happen against the shipped catalog — a proto
-// test asserts every successor resolves in it — but a caller passing the
-// OFFERED subset, or a test fixture, reaches it, and collapsing it into
+// The third state has two causes. A retirement may name no successor at
+// all (HasSuccessor): gpt-oss left the catalog that way (owner decision
+// 2026-09-16, docs/decisions/20260916/0340). Or the successor is not in
+// `manifests` — impossible against the shipped catalog, where a proto test
+// asserts every named successor resolves, but reachable by a caller passing
+// the OFFERED subset or a test fixture. Either way, collapsing it into
 // "unknown" would report a model we shipped as one we never had.
 //
 // SUBSTITUTE WHERE THE NAME IS AN INSTRUCTION — what to fetch, serve,
@@ -69,9 +72,35 @@ func ResolveModel(name string, manifests []Manifest) (Manifest, Retirement, bool
 	return m, r, true
 }
 
+// HasSuccessor reports whether r names an entry to use instead. A
+// retirement with none still reserves its names; what a caller does about
+// the name is then its own policy: refuse an instruction given now, or
+// fall back to this host's recommended model for one written down before
+// the entry went away.
+func HasSuccessor(r Retirement) bool {
+	return r.SuccessorModelID != ""
+}
+
 // RetirementNotice is the one sentence a substituting site says, so every
 // surface that reports a substitution reports it the same way and the
 // docs can quote one string.
 func RetirementNotice(requested string, r Retirement) string {
 	return fmt.Sprintf("%q was retired; using %q instead", requested, r.SuccessorModelID)
+}
+
+// RecommendedInsteadNotice is RetirementNotice for a retirement with no
+// successor, where the site substituted the model this computer would be
+// given now.
+func RecommendedInsteadNotice(requested, used string) string {
+	return fmt.Sprintf("%q was retired with no replacement; using %q, the model recommended for this computer, instead", requested, used)
+}
+
+// RetirementRefusal is the sentence a site says when it refuses a retired
+// name instead of substituting: an instruction given now, by a person or a
+// script, that should be told what to do next.
+func RetirementRefusal(requested string, r Retirement) string {
+	if !HasSuccessor(r) {
+		return fmt.Sprintf("%q was retired with no replacement; choose another model", requested)
+	}
+	return fmt.Sprintf("%q was retired; use %q instead", requested, r.SuccessorModelID)
 }

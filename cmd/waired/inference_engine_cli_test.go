@@ -68,8 +68,8 @@ func TestRunEngineTransition_AcceptedPrintsOK(t *testing.T) {
 // reach it, so a host with no venv, no vLLM-capable model, or weights still
 // arriving gets an answer instead of a claim.
 func TestRunEngineTransition_RefusalPrintsTheReason(t *testing.T) {
-	const reason = "no vLLM-capable model selected — set a preferred model that ships a" +
-		" vllm/safetensors variant (e.g. gpt-oss-20b)"
+	const reason = "the model chosen for this computer (qwen3.5-9b) has no vllm/safetensors variant this engine can load;" +
+		" choose a model that does, or switch this computer to ollama"
 	url, _ := engineMgmt(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -84,7 +84,7 @@ func TestRunEngineTransition_RefusalPrintsTheReason(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refused start reported success")
 	}
-	if !strings.Contains(err.Error(), "no vLLM-capable model selected") {
+	if !strings.Contains(err.Error(), reason) {
 		t.Errorf("err = %v, want the daemon's own sentence", err)
 	}
 	if strings.Contains(out, "ok.") {

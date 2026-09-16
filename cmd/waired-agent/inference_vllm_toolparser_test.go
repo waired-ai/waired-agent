@@ -19,7 +19,7 @@ func TestResolveVLLMToolParser(t *testing.T) {
 		// map entries went with them — an entry for a model the catalog
 		// no longer ships is dead code that reads as coverage.
 		{"qwen3.6 ships the XML dialect", "qwen3.6-27b", "", vllmParserQwen3XML},
-		{"gpt-oss ships harmony", "gpt-oss-20b", "", vllmParserOpenAI},
+		// gpt-oss (openai) went the same way with #1400.
 		{"deepseek v4 flash", "deepseek-v4-flash", "", vllmParserDeepSeekV4},
 
 		// An unestablished template must NOT be guessed into a
@@ -54,7 +54,7 @@ func TestResolveVLLMToolParser(t *testing.T) {
 // unit test that only exercises the mapped models would notice.
 func TestVLLMToolParserTableUsesRegisteredNames(t *testing.T) {
 	// hermes and glm45 have no row in the table since #522 retired the
-	// models that used them. They stay declared: these are vLLM's
+	// models that used them, and openai none since #1400 retired gpt-oss. They stay declared: these are vLLM's
 	// registered parser names read out of its source at the pinned
 	// version, not names we invented, and the next model of either
 	// lineage needs them back. The check below is over the table's

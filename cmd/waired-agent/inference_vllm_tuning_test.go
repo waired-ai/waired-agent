@@ -43,12 +43,11 @@ func TestComputeVLLMTuning_ClampsBelowNative(t *testing.T) {
 		!strings.Contains(mt.Warning, "131072") {
 		t.Errorf("clamp warning should name both windows, got %q", mt.Warning)
 	}
-	// 131072-native manifests are below the coding-agent native floor,
-	// so no sub-floor phrasing is appended for them (the floor gate never
-	// admitted this model; the clamp itself is the whole story).
-	if strings.Contains(mt.Warning, "coding") {
-		t.Errorf("sub-native-floor manifest must not carry the coding-target phrasing, got %q", mt.Warning)
-	}
+	// A 131072-native manifest used to be exempt from the coding-target
+	// phrasing, because the native floor gate never admitted it. That gate
+	// left with waired-ai/waired-agent#1400 (decisions 3 and 4 of
+	// docs/decisions/20260916/0340): no such model ships, and a clamp below
+	// the floor is named the same way for any manifest.
 }
 
 func TestComputeVLLMTuning_SubFloorClampNamesCodingTarget(t *testing.T) {
