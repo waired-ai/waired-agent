@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -533,15 +534,14 @@ func TestRankModels_VLLMContextFloorGating(t *testing.T) {
 		t.Errorf("2×L4 winner = %s, want big-vllm (TP=2 budget serves the floor)", pick.Manifest.ModelID)
 	}
 
-	// Best-effort fallback: when nothing serves the floor, the fitting
-	// candidates all stay (floor never newly disables inference).
+	// No best-effort fallback: when no build holds the 200k window, vLLM
+	// has nothing to serve on this host.
+	//
+	// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+	// waired-agent#1396 (a host or model that cannot hold 200,704 does not
+	// serve; #1434). This inverts the best-effort pick that used to stay.
 	onlyBig := []catalog.Manifest{cat[0]}
-	pick, err = PickModel(PickInput{Catalog: onlyBig, Hardware: oneL4, Engine: "vllm"})
-	if err != nil {
-		t.Fatalf("PickModel(1×L4, best-effort): %v", err)
-	}
-	if pick.Manifest.ModelID != "big-vllm" || pick.ContextFloorSatisfied {
-		t.Errorf("best-effort fallback expected (big-vllm, floor unsatisfied); got %s floorOK=%v",
-			pick.Manifest.ModelID, pick.ContextFloorSatisfied)
+	if pick, err = PickModel(PickInput{Catalog: onlyBig, Hardware: oneL4, Engine: "vllm"}); !errors.Is(err, ErrHardwareInsufficient) {
+		t.Errorf("PickModel(1×L4, only big-vllm) = %s, %v; want ErrHardwareInsufficient", pick.Manifest.ModelID, err)
 	}
 }

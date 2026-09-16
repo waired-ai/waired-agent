@@ -109,8 +109,8 @@ request itself.
 Every entry uses only a computer whose context window holds 200,704 tokens,
 and every `[1m]` entry only one that holds 1,048,576. That includes
 `waired/local` and `waired/peer-<name>`. A computer serving less, such as one
-where vLLM sized the window down to fit the GPU's VRAM, answers none of the
-entries, not even `waired/local` on itself.
+whose VRAM cannot hold 200,704 tokens with the model it runs, answers none of
+the entries, not even `waired/local` on itself.
 
 The plugin gives each entry its window as `limit.context`, taken from the
 entry's name alone: 1048576 on every `[1m]` entry and 200704 on every other

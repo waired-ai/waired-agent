@@ -383,7 +383,7 @@ func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, 
 
 // ModelProjection is everything ProjectModelFrom needs. It exists because
 // the vLLM recommendation grew a clause about THIS host — whether the
-// engine would have to clamp the window below the coding target — and that
+// KV pool here would hold less than the coding target — and that
 // arithmetic reads the per-device GPU detail, which Host deliberately does
 // not carry (see modelrank.PickInput.GPUs). ProjectModel's signature is
 // published and cannot grow a sixth parameter, so the inputs arrive as a

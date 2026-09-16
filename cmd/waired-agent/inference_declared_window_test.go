@@ -48,13 +48,13 @@ func TestDeclaredContextWindow(t *testing.T) {
 		}
 	})
 
-	t.Run("a wider applied window is declared as it is", func(t *testing.T) {
-		// The mode is a floor to compare against, not a value to round to:
-		// a peer serving 262144 can take 200k traffic AND is worth knowing
-		// about for anything that wants more.
+	t.Run("a window between the tiers declares the tier it holds", func(t *testing.T) {
+		// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+		// waired-agent#1396 — a device declares 200704 or 1048576 or nothing
+		// (#1434). It used to declare 262144 as it was.
 		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 262144, WindowFits: true}, "big")
-		if got := p.DeclaredContextWindow(); got != 262144 {
-			t.Errorf("got %d, want 262144", got)
+		if got := p.DeclaredContextWindow(); got != 200704 {
+			t.Errorf("got %d, want 200704", got)
 		}
 	})
 

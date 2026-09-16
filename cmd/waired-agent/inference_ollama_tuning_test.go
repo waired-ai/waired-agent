@@ -387,16 +387,18 @@ func TestComputeOllamaTuning(t *testing.T) {
 			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on a CPU-only host",
 				got.KVCacheType, got.FlashAttention)
 		}
-		if got.ContextLength != 0 {
-			t.Errorf("ContextLength = %d, want 0 (never guess a window)", got.ContextLength)
+		// The 200k tier, not the engine's own default (#1434): a window
+		// between the tiers is one this product does not serve. Unproven.
+		if got.ContextLength != 200704 || got.WindowFits {
+			t.Errorf("ContextLength/WindowFits = %d/%v, want 200704/false", got.ContextLength, got.WindowFits)
 		}
 	})
 
-	t.Run("unknown-kv-leaves-context-unset", func(t *testing.T) {
+	t.Run("unknown-kv-still-asks-for-the-tier", func(t *testing.T) {
 		v := catalog.Variant{VariantID: "no-kv", EstimatedWeightGB: 21.0}
 		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0", ollamaObservedServe{})
-		if got.ContextLength != 0 {
-			t.Errorf("ContextLength = %d, want 0 (never guess a window)", got.ContextLength)
+		if got.ContextLength != 200704 {
+			t.Errorf("ContextLength = %d, want 200704", got.ContextLength)
 		}
 		if got.NumParallel != 1 || got.KVCacheType != "q8_0" {
 			t.Errorf("KV type / parallel should still be set: %+v", got)
@@ -513,11 +515,17 @@ func TestOllamaTuningEnv(t *testing.T) {
 		}
 	}
 
-	// Unknown sizing: the context var is omitted, everything else stays.
+	// Unknown sizing still exports the 200k tier (#1434), where it used to
+	// leave the engine to pick 32k to 262k from VRAM; a model whose own
+	// window is under the tier — CI's internal_only one — still omits it.
 	unsized := computeOllamaTuning(m, catalog.Variant{VariantID: "no-kv"}, discrete24GB(), "q8_0", ollamaObservedServe{})
-	for _, kv := range unsized.Env() {
+	if !slices.Contains(unsized.Env(), "OLLAMA_CONTEXT_LENGTH=200704") {
+		t.Errorf("unknown sizing should export the 200k tier: %v", unsized.Env())
+	}
+	small := catalog.Manifest{ModelID: "ci-tiny", ContextLength: 32768}
+	for _, kv := range computeOllamaTuning(small, catalog.Variant{VariantID: "no-kv"}, discrete24GB(), "q8_0", ollamaObservedServe{}).Env() {
 		if strings.HasPrefix(kv, "OLLAMA_CONTEXT_LENGTH=") {
-			t.Errorf("context var should be omitted when sizing is unknown: %v", unsized.Env())
+			t.Errorf("a sub-tier model's unknown sizing should omit the context var: %s", kv)
 		}
 	}
 

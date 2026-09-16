@@ -382,16 +382,17 @@ func RankModels(in PickInput) ([]Pick, error) {
 			ErrHardwareInsufficient, in.Engine)
 	}
 
-	// Three-pass gating, best bar first, each falling through only when
-	// it would leave nothing. An explicit PreferredModelID bypasses all
-	// of it, with the status still reported on the Pick.
+	// Three-pass gating, best bar first. Pass 1 is a hard filter on vLLM;
+	// passes 2 and 3 fall through when they would leave nothing. An
+	// explicit PreferredModelID bypasses all of it, with the status still
+	// reported on the Pick.
 	//
 	//  1. The coding-agent context floor. It was the model's own
 	//     advertised window until waired-ai/waired-agent#1400, when the
 	//     catalog began admitting only builds whose window reaches ~200k
 	//     (decisions 3 and 4 of docs/decisions/20260916/0340). What is left
-	//     is the vLLM host gate — would the engine clamp the window below
-	//     the floor here — and on ollama this pass removes nothing.
+	//     is the vLLM host gate — does the KV pool hold the 200k window
+	//     here — and on ollama this pass removes nothing.
 	//  2. hostfit.OllamaRecommendModel: would this host actually declare
 	//     the ~200k coding window with this model? That is what
 	//     "recommended" means since the 2026-08-03 owner decision
@@ -422,11 +423,14 @@ func RankModels(in PickInput) ([]Pick, error) {
 	// 20260804/1937 §4 drew when it removed the predicted pass and
 	// reserved this one (waired-ai/waired-agent#466, #784).
 	//
-	// Every pass is a narrow() rung rather than a hard filter for the
+	// Passes 2 and 3 are narrow() rungs rather than hard filters for the
 	// same reason: on a host where nothing clears a bar, excluding
 	// everything would leave an installer with nothing to offer and the
 	// machine with no local inference, which waired-ai/waired#1056
-	// decision 1 forbids.
+	// decision 1 forbade. Pass 1 on vLLM was one too until #1434: a build
+	// whose KV pool cannot hold the 200k window is one this product does
+	// not serve (owner decision 2026-09-16, waired-agent#1396), and a host
+	// with no such build has no vLLM model rather than a best-effort one.
 	narrow := func(keep func(candidate) bool) {
 		var pass []candidate
 		for _, c := range fits {
@@ -439,7 +443,26 @@ func RankModels(in PickInput) ([]Pick, error) {
 		}
 	}
 	if in.PreferredModelID == "" {
-		narrow(func(c candidate) bool { return c.gateOK })
+		// Pass 1 is a hard filter on vLLM, not a rung: a build whose KV
+		// pool cannot hold the 200k session is one this host does not
+		// serve (owner decision 2026-09-16, waired-agent#1396; #1434),
+		// even when it is the only one. On ollama pass 1 removes nothing
+		// (gateOK is always true there): the capacity gate above already
+		// prices every build at the 200k rung and refuses one that does
+		// not fit.
+		if in.Engine == catalog.RuntimeVLLM {
+			var pass []candidate
+			for _, c := range fits {
+				if c.gateOK {
+					pass = append(pass, c)
+				}
+			}
+			if len(pass) == 0 {
+				return nil, fmt.Errorf("%w: no build holds the 200,704-token window within GPU memory (engine=%s)",
+					ErrHardwareInsufficient, in.Engine)
+			}
+			fits = pass
+		}
 		narrow(func(c candidate) bool { return c.rec.Fits })
 		narrow(func(c candidate) bool { return !c.measuredSlow })
 	}

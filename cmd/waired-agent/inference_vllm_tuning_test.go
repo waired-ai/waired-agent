@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,9 +13,9 @@ import (
 )
 
 func vllmTuningFixture() (catalog.Manifest, catalog.Variant, hardware.Profile) {
-	m := catalog.Manifest{ModelID: "gpt-oss-20b", ContextLength: 131072}
+	m := catalog.Manifest{ModelID: "big-model", ContextLength: 262144}
 	v := catalog.Variant{
-		VariantID:           "mxfp4-safetensors",
+		VariantID:           "awq-safetensors",
 		EstimatedWeightGB:   14.0,
 		KVBytesPerTokenFP16: 73728,
 	}
@@ -24,69 +25,88 @@ func vllmTuningFixture() (catalog.Manifest, catalog.Variant, hardware.Profile) {
 	return m, v, hw
 }
 
-func TestComputeVLLMTuning_ClampsBelowNative(t *testing.T) {
+// vLLM serves one of the two tiers and nothing between them, or — when the
+// KV pool cannot hold 200,704 — marks the build as one this host does not
+// serve.
+//
+// PRODUCT CONTRACT, ratifying source: owner decision 2026-09-16 on
+// waired-agent#1396 (engines serve only 200,704 or 1,048,576), implemented
+// by #1434. It inverts #675's clamp to any window the pool fits and the
+// native window whenever the pool covered it.
+
+func TestComputeVLLMTuning_BelowTheTierIsNotServed(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
-	// 1×L4 @ 0.85: ~18.1 GB budget (util×VRAM − per-GPU overhead −
-	// activation reserve) − 14×1.15 GB weights → ~27k tokens (see
+	// 1×L4 @ 0.85: ~18.1 GB budget − 14×1.15 GB weights → ~27k tokens (see
 	// router.TestVLLMMaxModelLen).
 	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	if maxLen != 26624 {
-		t.Fatalf("maxLen = %d, want 26624", maxLen)
+		t.Fatalf("maxLen = %d, want the pool's 26624", maxLen)
 	}
-	if mt.ContextLength != maxLen {
-		t.Errorf("ModelTuning.ContextLength = %d, want %d", mt.ContextLength, maxLen)
+	if mt.ContextLength != maxLen || mt.WindowFits {
+		t.Errorf("ContextLength/WindowFits = %d/%v, want %d/false", mt.ContextLength, mt.WindowFits, maxLen)
 	}
-	if mt.ModelID != "gpt-oss-20b" || mt.VariantID != "mxfp4-safetensors" {
+	if mt.ModelID != "big-model" || mt.VariantID != "awq-safetensors" {
 		t.Errorf("identity fields not filled: %+v", mt)
 	}
-	if !strings.Contains(mt.Warning, "clamped to 26624 tokens") ||
-		!strings.Contains(mt.Warning, "131072") {
-		t.Errorf("clamp warning should name both windows, got %q", mt.Warning)
-	}
-	// A 131072-native manifest used to be exempt from the coding-target
-	// phrasing, because the native floor gate never admitted it. That gate
-	// left with waired-ai/waired-agent#1400 (decisions 3 and 4 of
-	// docs/decisions/20260916/0340): no such model ships, and a clamp below
-	// the floor is named the same way for any manifest.
-}
-
-func TestComputeVLLMTuning_SubFloorClampNamesCodingTarget(t *testing.T) {
-	m, v, hw := vllmTuningFixture()
-	m.ContextLength = 262144 // above the native floor → floor phrasing applies
-	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
-	if maxLen != 26624 {
-		t.Fatalf("maxLen = %d, want 26624", maxLen)
-	}
-	if !strings.Contains(mt.Warning, "~200k coding") {
-		t.Errorf("expected the ~200k coding-target phrasing, got %q", mt.Warning)
+	if want := fmt.Sprintf(vllmBelowTierWarning, 26624, 0.85, 1); mt.Warning != want {
+		t.Errorf("warning = %q\nwant      %q", mt.Warning, want)
 	}
 }
 
-func TestComputeVLLMTuning_NoClampWhenBudgetCovers(t *testing.T) {
+func TestComputeVLLMTuning_ServesThe200kTierNotTheNativeWindow(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
-	// TP=2 doubles the budget past the 131072 native window.
+	// TP=2 doubles the budget past the 262144 native window, which used to
+	// be served as it was.
 	hw.GPUs = append(hw.GPUs, hw.GPUs[0])
 	maxLen, mt := computeVLLMTuning(m, v, hw, 2, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
-	if maxLen != m.ContextLength {
-		t.Fatalf("maxLen = %d, want native %d", maxLen, m.ContextLength)
+	if maxLen != 200704 {
+		t.Fatalf("maxLen = %d, want the 200k tier", maxLen)
 	}
-	if mt.Warning != "" {
-		t.Errorf("no warning expected when the native window fits, got %q", mt.Warning)
-	}
-	if mt.ContextLength != m.ContextLength {
-		t.Errorf("ModelTuning.ContextLength = %d, want %d", mt.ContextLength, m.ContextLength)
+	if mt.Warning != "" || !mt.WindowFits || mt.ContextLength != 200704 {
+		t.Errorf("tuning = %+v, want 200704, fits, no warning", mt)
 	}
 }
 
-func TestComputeVLLMTuning_UnknownInputsPassThrough(t *testing.T) {
+func TestComputeVLLMTuning_Serves1MOnlyWhenThePoolHoldsIt(t *testing.T) {
+	m := catalog.Manifest{ModelID: "long-model", ContextLength: 1 << 20}
+	v := catalog.Variant{VariantID: "fp8", EstimatedWeightGB: 8.0, KVBytesPerTokenFP16: 65536}
+	for _, tc := range []struct {
+		name string
+		gpus int
+		vram int
+		want int
+	}{
+		{"a pool between the tiers serves 200k", 1, 24463, 200704},
+		{"a pool past 1M serves 1M", 4, 81920, 1 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hw hardware.Profile
+			for i := 0; i < tc.gpus; i++ {
+				hw.GPUs = append(hw.GPUs, hardware.GPU{Vendor: "nvidia", VRAMTotalMB: tc.vram, ComputeCap: "12.0"})
+			}
+			est := router.VLLMMaxModelLenFor(v, 0, tc.gpus, 0.85, scoring.KVFactorFP8, hw)
+			maxLen, mt := computeVLLMTuning(m, v, hw, tc.gpus, 0.85, scoring.KVFactorFP8, router.VLLMSpeculation{})
+			if maxLen != tc.want || mt.ContextLength != tc.want || !mt.WindowFits {
+				t.Errorf("maxLen = %d (pool estimate %d), tuning %+v, want %d", maxLen, est, mt, tc.want)
+			}
+		})
+	}
+}
+
+func TestComputeVLLMTuning_UnknownInputsServeTheTier(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
-	v.KVBytesPerTokenFP16 = 0 // sizing unknown → never guess
+	v.KVBytesPerTokenFP16 = 0 // sizing unknown → never guess upward
 	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
-	if maxLen != m.ContextLength {
-		t.Fatalf("maxLen = %d, want manifest window %d", maxLen, m.ContextLength)
+	if maxLen != 200704 {
+		t.Fatalf("maxLen = %d, want 200704, not the native %d", maxLen, m.ContextLength)
 	}
 	if mt.Warning != "" {
 		t.Errorf("unknown inputs must not warn, got %q", mt.Warning)
+	}
+	// CI's internal_only model is the one exception: its own window.
+	small := catalog.Manifest{ModelID: "tiny", ContextLength: 32768}
+	if got, _ := computeVLLMTuning(small, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{}); got != 32768 {
+		t.Errorf("a 32k model's unsized window = %d, want its own 32768", got)
 	}
 }
 
@@ -94,27 +114,26 @@ func TestComputeVLLMTuning_WeightsExceedBudgetWarns(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
 	v.EstimatedWeightGB = 40.0 // padded weights alone exceed a single L4
 	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
-	if maxLen != m.ContextLength {
-		t.Fatalf("maxLen = %d, want manifest window %d (no invented clamp)", maxLen, m.ContextLength)
+	if maxLen != 200704 {
+		t.Fatalf("maxLen = %d, want the 200k tier (no invented clamp)", maxLen)
 	}
 	if !strings.Contains(mt.Warning, "exceed") || !strings.Contains(mt.Warning, "engine.log") {
 		t.Errorf("expected a weights-exceed-budget warning pointing at engine.log, got %q", mt.Warning)
 	}
 }
 
-func TestComputeVLLMTuning_FP8DoublesTheClampedWindow(t *testing.T) {
+func TestComputeVLLMTuning_FP8DoublesThePool(t *testing.T) {
 	m, v, hw := vllmTuningFixture()
-	m.ContextLength = 262144
 	f16, _ := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
 	fp8, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, router.VLLMSpeculation{})
 	if fp8 <= f16 {
 		t.Fatalf("fp8 window %d should exceed the f16 window %d", fp8, f16)
 	}
 	if fp8 != 54272 {
-		t.Errorf("fp8 clamp = %d, want 54272 (halved KV → ~2× f16 26624)", fp8)
+		t.Errorf("fp8 pool = %d, want 54272 (halved KV → ~2× f16 26624)", fp8)
 	}
-	if mt.ContextLength != fp8 {
-		t.Errorf("ModelTuning.ContextLength = %d, want %d", mt.ContextLength, fp8)
+	if mt.ContextLength != fp8 || mt.WindowFits {
+		t.Errorf("ModelTuning = %+v, want %d and not fitting the tier", mt, fp8)
 	}
 }
 
@@ -155,8 +174,9 @@ func TestVLLMKVCacheDType(t *testing.T) {
 	}
 }
 
-// An MTP draft is sized into the window and recorded on the tuning; no
-// draft sizes exactly as before (waired-ai/waired#1432).
+// An MTP draft is sized into the pool and recorded on the tuning
+// (waired-ai/waired#1432); the window served is still a tier. The draft's
+// effect on the pool estimate itself is pinned in the router's tests.
 func TestComputeVLLMTuning_SizesTheMTPDraft(t *testing.T) {
 	m := catalog.Manifest{ModelID: "qwen3.5-4b", ContextLength: 1 << 20}
 	v := catalog.Variant{VariantID: "bf16", EstimatedWeightGB: 8.5, KVBytesPerTokenFP16: 32768,
@@ -165,16 +185,20 @@ func TestComputeVLLMTuning_SizesTheMTPDraft(t *testing.T) {
 
 	none, plain := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, router.VLLMSpeculation{})
 	legacy := router.VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, 1, 0.85, scoring.KVFactorFP8, hw)
-	if none != legacy {
-		t.Errorf("no draft: max_model_len %d, want the draft-free estimate %d", none, legacy)
+	if want := vllmTierWindow(m, legacy); none != want {
+		t.Errorf("no draft: max_model_len %d, want the tier %d of the draft-free estimate %d", none, want, legacy)
 	}
 	if plain.SpeculativeMethod != "" || plain.SpeculativeTokens != 0 {
 		t.Errorf("no draft recorded as %q/%d", plain.SpeculativeMethod, plain.SpeculativeTokens)
 	}
 	spec := router.VLLMSpeculative(v, false, false, true)
 	withMTP, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorFP8, spec)
-	if withMTP <= 0 || withMTP >= none {
-		t.Errorf("MTP draft: max_model_len %d, want below the draft-free %d", withMTP, none)
+	drafted := router.VLLMMaxModelLenFor(v, spec.DraftTokens(), 1, 0.85, scoring.KVFactorFP8, hw)
+	if drafted >= legacy {
+		t.Errorf("MTP draft: pool estimate %d, want below the draft-free %d", drafted, legacy)
+	}
+	if want := vllmTierWindow(m, drafted); withMTP != want {
+		t.Errorf("MTP draft: max_model_len %d, want the tier %d of the drafted estimate %d", withMTP, want, drafted)
 	}
 	if mt.SpeculativeMethod != "mtp" || mt.SpeculativeTokens != 1 {
 		t.Errorf("MTP recorded as %q/%d, want mtp/1", mt.SpeculativeMethod, mt.SpeculativeTokens)

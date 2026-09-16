@@ -314,7 +314,18 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	if plan.ContextLength <= 0 {
 		// Unknown sizing: recommend a single slot (we cannot prove more fit).
 		t.RecommendedMaxParallel = 1
-		return t // unknown sizing inputs: leave ContextLength 0
+		// And still the 200k tier, not the engine's own default: ollama
+		// picks 4,096 to 262,144 from VRAM when no OLLAMA_CONTEXT_LENGTH is
+		// set (docs/knowledges/20260906/0230-ollama-pin-0333.md §5), and a
+		// window between the tiers is one this product does not
+		// serve (owner decision 2026-09-16, waired-agent#1396; #1434).
+		// Unproven, so WindowFits stays false. A model whose own window is
+		// under the tier — only CI's internal_only one — keeps the engine
+		// default, as it always did.
+		if m.ContextLength >= hostfit.ServingWindow200k {
+			t.ContextLength = hostfit.ServingWindow200k
+		}
+		return t
 	}
 	maxCtx, ctx := plan.NoSpillCapacityTokens, plan.ContextLength
 	t.ContextLength = ctx

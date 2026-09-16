@@ -3476,11 +3476,11 @@ func (p *agentInferenceProvider) ServeTuning() (degraded bool, warning string) {
 // different claims: a routing consumer can act safely on the second and
 // cannot act on the first without also having to decide what a 98k peer
 // means for a 200k session, which is the decision the two-window contract
-// exists to avoid. Since waired-agent#1395 the second is also a refusal for
-// every row carrying a window floor, on this device and on its peers, so a
-// computer serving a 131k model no longer answers the 200k rows. The engine
-// keeps serving that window through the rows that name this computer —
-// "Waired local", and its per-computer row on a peer's list.
+// exists to avoid. Since waired-agent#1395 and #1396 every Waired row carries
+// a floor of 200,704 or 1,048,576, on this device and on its peers, so a
+// computer that declares nothing answers none of them, "Waired local" and its
+// per-computer row on a peer's list included. The engine keeps serving that
+// window to a client that names the catalog model directly.
 //
 // SPILL IS NOT A REASON TO WITHHOLD. A host whose weights partly sit in
 // system RAM is serving the window it names — spill costs decode speed,
@@ -3521,10 +3521,24 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	if m.ContextLength > 0 && win > m.ContextLength {
 		win = m.ContextLength
 	}
-	if win < hostfit.ServingWindow200k {
+	return declaredTier(win)
+}
+
+// declaredTier is the tier a served window declares: 1048576 at or above the
+// 1M tier, 200704 at or above the 200k tier, and nothing below (owner decision
+// 2026-09-16, waired-agent#1396; #1434). Both tunings size by tier, so today
+// this returns the window itself. The snap is a backstop: a window from a path
+// that does not size by tier still reaches the mesh as a tier or as nothing,
+// never as a number between them.
+func declaredTier(window int) int {
+	switch {
+	case window >= hostfit.ServingWindow1M:
+		return hostfit.ServingWindow1M
+	case window >= hostfit.ServingWindow200k:
+		return hostfit.ServingWindow200k
+	default:
 		return 0
 	}
-	return win
 }
 
 func (p *agentInferenceProvider) Runtimes(ctx context.Context) []management.RuntimeStatus {
