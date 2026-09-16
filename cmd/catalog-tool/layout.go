@@ -147,6 +147,17 @@ func layoutDrift(shipped catalog.Variant, derived layoutResult) string {
 	if derived.Error != "" {
 		return "registry read failed: " + derived.Error
 	}
+	// The product writes mtp_draft_tokens onto a tag that publishes no
+	// draft (waired-ai/waired#1433). Two changes upstream make that write
+	// wrong, and each is named rather than left to the field dump below.
+	if d := shipped.MTPDraftTokens; d > 0 {
+		if g := derived.Manifest.GGUF; g.DraftMaxTokens > 0 {
+			return fmt.Sprintf("mtp_draft_tokens = %d is written onto the tag, but the tag now sets draft_num_predict %d itself: "+
+				"remove mtp_draft_tokens and take gguf.draft_max_tokens", d, g.DraftMaxTokens)
+		} else if g.NextNLayers == 0 {
+			return fmt.Sprintf("mtp_draft_tokens = %d, but the tag's GGUF no longer has nextn layers to draft with", d)
+		}
+	}
 	if *shipped.GGUF != derived.Manifest.GGUF {
 		return fmt.Sprintf("gguf = %+v, header derives %+v", *shipped.GGUF, derived.Manifest.GGUF)
 	}
