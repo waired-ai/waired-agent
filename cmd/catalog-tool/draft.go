@@ -53,6 +53,10 @@ type draftVariant struct {
 	MeasuredWeightGB float64 `json:"measured_weight_gb,omitempty"`
 	MinEngineVersion string  `json:"min_engine_version,omitempty"`
 
+	// MTPDraftTokens is the product's measured choice of MTP draft length
+	// for this build (Variant.MTPDraftTokens); 0 leaves the draft off.
+	MTPDraftTokens int `json:"mtp_draft_tokens,omitempty"`
+
 	// ContextForSizing sizes the suggested min_vram_mb/min_ram_gb. Defaults to
 	// the manifest ContextLength when 0.
 	ContextForSizing int `json:"context_for_sizing,omitempty"`
@@ -190,6 +194,13 @@ func expandVariant(spec draftSpec, dv draftVariant) (catalog.Variant, []string, 
 		MXFP4Native:         dv.MXFP4Native,
 		MinEngineVersion:    dv.MinEngineVersion,
 	}
+	// The MTP head is a fact about a safetensors checkpoint; an ollama
+	// build records it from the GGUF (gguf.nextn_layers, `layout`).
+	if dv.Format == catalog.FormatSafetensors && cfg.MTPNumHiddenLayers > 0 {
+		v.MTPLayers = cfg.MTPNumHiddenLayers
+		v.MTPKVBytesPerTokenFP16 = scoring.MTPKVBytesPerTokenFP16(cfg, headDim)
+	}
+	v.MTPDraftTokens = dv.MTPDraftTokens
 	// min_ram_gb applies to ollama runtimes, min_vram_mb to vllm.
 	if slices.Contains(dv.RuntimeSupport, catalog.RuntimeVLLM) {
 		v.MinVRAMMB = scoring.SuggestMinVRAMMB(vramAtCtx)

@@ -220,13 +220,14 @@ func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, pa
 	// ollama offloads beside the model and the device copy of a tied
 	// embedding.
 	loaded := g.TensorBytes + g.ProjectorBytes + g.TiedOutputBytes
-	if g.DraftMaxTokens <= 0 {
+	draft := catalog.MTPDraftTokens(v)
+	if draft <= 0 {
 		loaded -= g.NextNBytes
 	}
 	out.DeviceWeightsMB = max(bytesToMiB(float64(loaded))-hostMB, 0)
 	out.TotalLayers = g.BlockCount + 1
 	unified := h.Class() == ClassUnified
-	copies := int64(parallel) * int64(1+max(g.DraftMaxTokens, 0))
+	copies := int64(parallel) * int64(1+max(draft, 0))
 	out.RecurrentStateMB = bytesToMiB(float64(g.RecurrentStateBytes * copies))
 	layerKVPerCell := 0.0
 	if g.FullAttentionLayers > 0 {
@@ -239,7 +240,7 @@ func ollamaEstimateMemoryAt(v catalog.Variant, h Host, kvType string, window, pa
 		compute += layerKVPerCell * float64(cells)
 	}
 	out.ComputeMB = base + bytesToMiB(compute)
-	if g.DraftMaxTokens > 0 && layerKVPerCell > 0 {
+	if draft > 0 && layerKVPerCell > 0 {
 		draftKV := bytesToMiB(layerKVPerCell * float64(cells))
 		out.DraftKVCacheMB = draftKV
 		if unified {

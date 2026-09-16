@@ -57,6 +57,11 @@ type ArchConfig struct {
 	// model's own config.json and re-derive the annotation.
 	IndexerKVHeads int `json:"indexer_kv_heads"`
 	IndexerHeadDim int `json:"indexer_head_dim"`
+
+	// Multi-token prediction head (Qwen3.5 onward): layers after the
+	// decoder that vLLM can run as a speculative-decoding draft
+	// (waired-ai/waired#1432). Zero when the checkpoint carries none.
+	MTPNumHiddenLayers int `json:"mtp_num_hidden_layers"`
 }
 
 // UnmarshalJSON decodes a config.json, reaching into "text_config" when the
