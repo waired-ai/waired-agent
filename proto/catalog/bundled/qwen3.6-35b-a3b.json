@@ -109,6 +109,7 @@
       "quantization_tier": 3,
       "attention_arch": "hybrid_mamba",
       "kv_bytes_per_token_fp16": 20480,
+      "mtp_draft_tokens": 2,
       "renderer": "qwen3.5",
       "parser": "qwen3.5",
       "vendor_support": {
@@ -149,6 +150,7 @@
       "quantization_tier": 2,
       "attention_arch": "hybrid_mamba",
       "kv_bytes_per_token_fp16": 20480,
+      "mtp_draft_tokens": 2,
       "renderer": "qwen3.5",
       "parser": "qwen3.5",
       "vendor_support": {

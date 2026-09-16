@@ -105,6 +105,8 @@
       "quantization_tier": 8,
       "attention_arch": "hybrid_mamba",
       "kv_bytes_per_token_fp16": 65536,
+      "mtp_layers": 1,
+      "mtp_kv_bytes_per_token_fp16": 4096,
       "vendor_support": {
         "nvidia": {"vllm": "stable"},
         "amd":    {"vllm": "experimental"},
