@@ -20,17 +20,18 @@ var (
 )
 
 // OllamaDefaultKVCacheType is the KV-cache type the ollama serve tuning
-// exports on this host when nothing narrows it: q4_0 wherever there is
-// GPU-addressable memory, f16 on a CPU-only host (waired-ai/waired-agent#29:
-// quantised KV needs flash attention, which buys nothing on the CPU).
+// exports on this host when nothing narrows it: q4_0, on a CPU-only host as
+// on one with GPU-addressable memory
+// (docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md). Until
+// then a CPU-only host was held at f16 (waired-ai/waired-agent#29); a
+// measurement on ollama 0.34.0 found no crash with a quantised cache and
+// flash attention on the CPU.
 //
 // It does not know the build. A variant whose kv_cache_types does not
 // allow q4_0 serves the next rung up, so a caller holding a variant asks
-// ResolveKVCacheType instead; this is the host's half of that answer.
-func OllamaDefaultKVCacheType(h Host) string {
-	if !h.HasGPU() {
-		return catalog.KVCacheF16
-	}
+// ResolveKVCacheType instead; this is the host's half of that answer. The
+// host is still a parameter: the signature is published.
+func OllamaDefaultKVCacheType(_ Host) string {
 	return catalog.KVCacheQ4_0
 }
 
@@ -40,12 +41,11 @@ func OllamaDefaultKVCacheType(h Host) string {
 // buttons by and the serve tuning resolves a request with, so the two
 // cannot disagree (waired-ai/waired-agent#1348, waired-ai/waired#1387).
 //
-// The set is the engine's ladder narrowed three ways:
+// The set is the engine's ladder narrowed two ways:
 //
 //   - by the build: v.KVCacheTypes; an empty list is what the engines
 //     served before the list existed (f16 and q8_0 on ollama, fp16 and
 //     fp8 on vLLM);
-//   - by the host on ollama: without GPU-addressable memory only f16;
 //   - by the GPU on vLLM: fp8 only where VLLMUsesFP8KV (Ada and newer).
 //
 // The unquantised type (f16 / fp16) is always offered: it is what an
@@ -56,9 +56,8 @@ func KVCacheChoices(engine string, v catalog.Variant, h Host, gpus []signer.Hard
 	var full string
 	switch engine {
 	case catalog.RuntimeOllama:
-		if !h.HasGPU() {
-			return []string{catalog.KVCacheF16}
-		}
+		// A CPU-only host gets the same ladder as a GPU host
+		// (docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md).
 		ladder, full = ollamaKVLadder, catalog.KVCacheF16
 		unset = []string{catalog.KVCacheQ8_0, catalog.KVCacheF16}
 	case catalog.RuntimeVLLM:

@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md
 supersedes:
   - docs/decisions/20260727/1715-ollama-kv-quant-only-when-it-buys-ctx.md
   - docs/decisions/20260804/1937-capacity-computation-and-window-recommendation.md
@@ -12,6 +14,8 @@ supersedes:
 
 ## Status
 Accepted。オーナー裁定 2026-09-13。一次記録は private monorepo の waired-ai/waired#1357（裁定コメント 5654063492、訂正 5654089278）とその決定記録 `docs/decisions/20260913/2350-l107-catalog-rulings-variant-kv-residency.md`（番号と path のみ。リポ間の supersede は guard が解決できないので散文で指す）。実装は #1346（proto）、#1347（hostfit / modelrank）、#1348（agent）、#1349（カタログ）、コントロールプレーンと NAVI は waired-ai/waired#1387 / waired-ai/waired#1388。#1349 は waired-ai/waired#1349 と番号が衝突するので、常にリポ名付きで書く。
+
+決定 1 の「CPU-only は `f16` 固定（#29）」は `docs/decisions/20260916/2250-cpu-kv-cache-defaults-to-q4-0.md`（オーナー裁定 2026-09-16）が置き換えた。CPU だけのホストも同じ段で、既定は `q4_0`。ほかの決定はそのまま有効。
 
 次の記録を**部分的に狭める（覆さない）**。各記録の `## Status` に鏡の一文を置いた。
 

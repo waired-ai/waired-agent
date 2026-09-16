@@ -625,7 +625,7 @@ func TestOllamaFit_ShortfallNumbers(t *testing.T) {
 	// would serve, rather than 32 GB short of a threshold somebody typed.
 	cpu := hostfit.Host{RAMTotalGB: 64}
 	ram := hostfit.OllamaFit(big, cpu)
-	// At the cache type this host serves: f16 on a CPU-only host.
+	// At the cache type this host serves.
 	served := hostfit.ResolveKVCacheType(catalog.RuntimeOllama, big, cpu, nil, "")
 	if want := hostfit.OllamaEstimateMemory(big, cpu, served, hostfit.ServingWindow200k, 1).TotalMB(); ram.NeedMB != want {
 		t.Errorf("capacity shortfall = need %d, want %d (the window-inclusive requirement at %s)",
