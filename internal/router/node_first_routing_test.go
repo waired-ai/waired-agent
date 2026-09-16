@@ -204,6 +204,10 @@ func TestNodeFirst_PinStillObeysTheWindowFilter(t *testing.T) {
 	if err == nil {
 		t.Fatal("a pin that cannot hold the demanded window must not be selected")
 	}
+	// And it says why, naming the pin (waired-agent#1395).
+	if e, ok := PinnedPeerDeclined(err); !ok || e.Reason != PinDeclinedWindow || e.Declared != 8192 {
+		t.Errorf("err = %v, want the pin declined for its window", err)
+	}
 }
 
 // The union want set has to resolve one engine identifier to one model,

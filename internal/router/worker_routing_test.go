@@ -388,6 +388,11 @@ func TestWorkerRouting_Pinned_PublicPeerLacksModelEventNamesThePseudonym(t *test
 		RoutingMode:        state.RoutingModePinned,
 		PinnedPeerDeviceID: "peer-foreign",
 		Recorder:           rec,
+		// Admitted, so the unknown model is the only thing wrong with the
+		// pin. Without a policy the Public Share gate removes it first, and
+		// a pin a filter removed is refused rather than fallen through
+		// (waired-agent#1395).
+		PublicPolicyFn: func() PublicPolicy { return allowAll() },
 	})
 	if _, err := s.Select(t.Context(), Request{Model: "waired/default"}); err != nil {
 		t.Fatalf("soft fallback should still select a peer: %v", err)

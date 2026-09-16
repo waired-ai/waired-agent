@@ -23,7 +23,7 @@ Claude Codeのターンは、`/model`で選んだモデルが指す場所で実�
 | **Waired public share** | *Someone else's computer* | 別のWairedユーザーが貸し出しているパソコン。[パブリック共有](/ja/public-share/)をオンにしたあとでだけ表示されます。 |
 | **Waired peer: studio-desktop** | 動かしているモデル | そのパソコンだけ。いま答えられるパソコンごとに1行ずつ表示されます。 |
 
-通常の**Waired**の行では、200,000トークンの会話を保持できるモデルを動かしているパソコンだけが使われます。ほとんどのパソコンはこの条件を満たします。自分のパソコンのどれが選ばれるかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
+Wairedがコンピュータを選ぶ行、つまり**Waired**、**Waired peer**、**Waired public share**では、200,000トークンの会話を保持できるモデルを動かしているコンピュータだけが使われます。ほとんどのコンピュータはこの条件を満たします。それより小さいコンテキストウィンドウのコンピュータ、たとえば`gpt-oss`のモデル（約131,000トークン）を動かしているコンピュータは、これらの行には使われません。そのコンピュータ自身の**Waired local**と、そのコンピュータの名前を持つ**Waired peer: &lt;名前&gt;**の行には引き続き答え、これらの行はそのコンピュータ自身のコンテキストウィンドウを示します。自分のコンピュータのどれが選ばれるかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
 これらの行は、自分の`~/.claude/settings.json`（Windowsでは`%USERPROFILE%\.claude\settings.json`）の`modelPicker`に書き込まれます。このファイルに自分で書いた`modelPicker`の行がすでにある場合、Wairedはそれに触れず、何も書き込みません。`waired claude status`の`/model rows:`の行に`left alone`と表示されます。
 
@@ -49,7 +49,7 @@ Waired peer: attic-server      qwen3.5-122b-a10b
 
 ## <a id="the-1m-context-twins"></a>(1M context)付きの行
 
-自分のパソコンのどれかが1Mトークンのコンテキストウィンドウを持つモデルを動かしていると、そのパソコンに届く行のそれぞれが、`(1M context)`を付けてもう一度表示されます。この行を選ぶと、1Mのウィンドウを持つパソコンで、1Mのウィンドウで会話を実行します。そのようなパソコンが答えられない場合、ターンは失敗して理由を表示します。黙って小さいウィンドウで実行することはありません。**Waired public share**にはこの行がありません。他人のパソコンが何を保持できるかは、答えが返ってきて初めて分かるからです。
+自分のパソコンのどれかが1Mトークンのコンテキストウィンドウを持つモデルを動かしていると、そのパソコンに届く行のそれぞれが、`(1M context)`を付けてもう一度表示されます。この行を選ぶと、1Mのウィンドウを持つパソコンで、1Mのウィンドウで会話を実行します。そのようなパソコンが答えられない場合、ターンは失敗して理由を表示します。黙って小さいウィンドウで実行することはありません。**Waired public share**にも、自分が使える公開コンピュータが1Mのコンテキストウィンドウを宣言していればこの行が出ます。公開コンピュータもほかのコンピュータと同じようにコンテキストウィンドウを公開しています。所有者が［Serve main conversation］をオフにしたコンピュータは、この行の対象になりません。この行で送られるのはメイン会話だからです。
 
 ## <a id="long-sessions-get-compacted"></a>長いセッションは要約されます
 
@@ -58,7 +58,7 @@ Waired peer: attic-server      qwen3.5-122b-a10b
 答えるパソコンにとって長すぎるプロンプトは`prompt is too long`として返り、Claude Codeが自動で要約して再試行します。セッションは失敗したのではなく、続いています。
 
 <Aside type="note" title="131kのウィンドウを持つモデル">
-	`gpt-oss`のモデルは、200,000トークンではなく約131,000トークンを保持します。Wairedがこれらを自動で選ぶことはありませんが、自分で選ぶことはできます。選んだ場合は、限界に達してから要約するのではなく、早めに要約するようClaude Codeに設定します。
+	`gpt-oss`のモデルは、200,000トークンではなく約131,000トークンを保持します。Wairedがこれらを自動で選ぶことはありません。これらを動かしているコンピュータは、**Waired**、**Waired peer**、**Waired public share**の行には使われません。使うには、そのコンピュータで**Waired local**を選ぶか、そのコンピュータの名前を持つ**Waired peer: &lt;名前&gt;**の行を選びます。選んだ場合は、限界に達してから要約するのではなく、早めに要約するようClaude Codeに設定します。
 
 	```sh
 	export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
@@ -75,13 +75,19 @@ Waired peer: attic-server      qwen3.5-122b-a10b
 API Error: 400 Waired is not set up to answer on this computer, so this turn has nowhere to run. Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.
 ```
 
+行が必要とするコンテキストウィンドウを自分のコンピュータのどれも満たさない場合も、同じ形で失敗し、メッセージにその値が示されます。次は**Waired**の行で、ターンを受けられるコンピュータがすべて200,704トークン未満だった例です。
+
+```
+API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
 そのターンをクラウドで実行したければ、Anthropicのモデルを選択します。足りないものを直したければ、`waired doctor`を実行します。自分のパソコンのどれも次のターンを受けられないことをWairedが把握している場合は、送信する前にフッターが赤くなります。エラーを見て初めて気づくことはあまりありません。
 
 ```
 ⚠ waired: Waired cannot answer (local disabled, no peer)
 ```
 
-Wairedが500ではなく400で答えるのは意図的です。Claude Codeは5xxのエラーを最大10回再試行しますが、400は一度だけそのまま表示します。対処を伝えるメッセージには、その動作が適しています。例外は、[固定したパソコンが使用中](#a-pinned-computer-is-never-substituted)の場合だけです。そのターンは503で答えます。再試行が、そのターンを通す手段だからです。
+Wairedが500ではなく400で答えるのは意図的で、コンテキストウィンドウを満たさない場合もほかの場合と同じです。Claude Codeは5xxのエラーを最大10回再試行しますが、400は一度だけそのまま表示します。対処を伝えるメッセージには、その動作が適しています。例外は、[固定したパソコンが使用中](#a-pinned-computer-is-never-substituted)の場合だけです。そのターンは503で答えます。再試行が、そのターンを通す手段だからです。
 
 ## <a id="a-slow-computer-is-not-a-failure"></a>遅いパソコンは失敗ではありません
 
@@ -106,6 +112,14 @@ API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and 
 ```
 API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
+
+固定したコンピュータに届くが、このターンを受けられない場合も同じ形で失敗し、メッセージに理由が示されます。固定は`waired worker set --pin`によるものでも、**Waired peer: &lt;名前&gt;**の行によるものでも同じです。次は行のコンテキストウィンドウを満たさない例です。
+
+```
+API Error: 400 The computer this turn is pinned to, sv-mag, cannot take it: its context window is 131072 tokens, and the model you picked needs 200704. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+```
+
+同じ位置にほかの理由も入ります。`Serve main conversation is turned off on it`、`Serve subagents is turned off on it`、`your Public Share settings do not let this computer use it`、そして**Waired peer: &lt;名前&gt;**の行だけに出る`it is running a model this version of Waired does not know`です。`waired worker`で固定したコンピュータがWairedの知らないモデルを動かしている場合は、これまでどおり別のコンピュータがターンを受けます。
 
 固定したパソコンが起動しているがほかの処理で手一杯、というのがもう1つの場合です。Wairedは会話のどれかが空くのを最長1分ほど待ってから、400ではなく503で答えます。このターンは再試行する価値があるからです。
 

@@ -138,9 +138,12 @@ type Request struct {
 	// with that reason — nothing carries it to the real Anthropic API
 	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
 	//
-	// An endpoint that declares NOTHING (0) passes: that is every agent
-	// predating the field, and treating silence as failure would empty
-	// the mesh the moment one node upgraded.
+	// An endpoint that declares NOTHING (0) does not pass. It used to, for
+	// agents predating the field, and that let every computer serving under
+	// the smallest declarable window — a gpt-oss host, a 32k model — answer
+	// the 200k row, because such a computer declares 0 rather than a
+	// smaller number. There are no agents predating the field to carry
+	// (owner decision 2026-09-16, waired-agent#1395).
 	MinContextWindow int `json:"min_context_window,omitempty"`
 
 	// NodeDirective is the /model directive id the client picked, when
@@ -186,10 +189,11 @@ type Inputs struct {
 	// when it declares none (waired#1031).
 	//
 	// The Selector reads it only to answer Request.MinContextWindow: a
-	// local candidate is dropped when the device declares a window and
-	// that window falls short. nil, or 0, keeps the local candidate,
-	// matching how an undeclared PEER is treated — a device that says
-	// nothing is not a device that said no.
+	// local candidate is dropped when the window it reports falls short of
+	// the floor, and 0 — or nil — falls short of every floor, exactly as an
+	// undeclared PEER does (waired-agent#1395). The overlay-side Selector
+	// leaves it nil, and a request that arrived from a peer never carries a
+	// floor.
 	LocalContextWindow func() int
 
 	// MeshSnapshotFn, when non-nil, is called once per Select to
@@ -355,6 +359,15 @@ type Inputs struct {
 	// guest pass that lapsed — where the snapshot can no longer say whose
 	// machine it is and the raw pin would be another account's device id.
 	PinnedPeerDisplayID string
+
+	// PinnedStrict is set when the pin came from a model row that names one
+	// computer (waired/peer-<name>) rather than from `waired worker`. Such a
+	// row says "that computer and nothing else", so a pin running nothing
+	// the catalog knows is refused, where a `waired worker` pin keeps its
+	// fallthrough to the rest of the mesh (docs/decisions/20260819/
+	// 1900-routing-selects-a-node-not-a-model.md). Every OTHER reason a pin
+	// cannot take a turn is refused for both (waired-agent#1395).
+	PinnedStrict bool
 
 	// Prefer is what the operator asked the ordering to optimise for
 	// (waired-agent#1128): state.RoutingPreferSpeed answers as fast as
@@ -574,11 +587,21 @@ var (
 	// it (waired#1031). Distinct from ErrModelNotReady ("nobody has the
 	// model") because the operator's remedy is different: the model is
 	// there, the window is not, and the fix is a model or a machine that
-	// can hold one. The Claude surface answers it with the fail-closed
-	// 400 naming that remedy; it used to become a fallback to the real
+	// can hold one. Both listeners answer it with a 400 naming that remedy
+	// (waired-agent#1395); it used to become a fallback to the real
 	// Anthropic API, and no longer does
 	// (docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md).
+	//
+	// The Selector returns it as a *WindowFloorError.
 	ErrNoEndpointForWindow = errors.New("router: no endpoint declares the required context window")
+	// ErrPinnedPeerDeclined is returned when a pin — a model row naming one
+	// computer, or `waired worker` pinned — is reachable but a filter
+	// removed it: the window a row demands, the computer's own "Serve main
+	// conversation / Serve subagents" switches, or the Public Share gate.
+	// Before waired-agent#1395 the request fell through to the rest of the
+	// mesh, which is the substitution a pin exists to rule out. The
+	// Selector returns it as a *PinnedPeerDeclinedError.
+	ErrPinnedPeerDeclined = errors.New("router: the pinned computer cannot take this turn")
 	// ErrAllPeersOverloaded is returned when at least one mesh peer
 	// matched the request's model/runtime requirements but every
 	// such peer's in-flight count was already at its advertised
@@ -1269,6 +1292,32 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			LocalArmOnlyFloor: localBelowFloor && localArmMiss(err),
 		}
 	}()
+	// The window floor's exit, registered after the size floor's so it runs
+	// first and the size floor stays outermost: that one is the operator's
+	// own setting, and naming it outranks naming the row.
+	//
+	// A miss where the floor removed at least one candidate that would
+	// otherwise have answered is the floor's miss, and says so. Before
+	// waired-agent#1395 it came back as the generic mesh miss, which names
+	// neither the window nor the row. Left alone: a refusal that already
+	// names something more specific (a pin, a busy mesh), and weights that
+	// are still arriving — waiting for those does end.
+	defer func() {
+		if err == nil || short.belowWindow == 0 {
+			return
+		}
+		if _, ok := WindowFloor(err); ok {
+			return
+		}
+		if errors.Is(err, ErrAllPeersOverloaded) ||
+			errors.Is(err, ErrPinnedPeerUnreachable) ||
+			errors.Is(err, ErrPinnedPeerDeclined) ||
+			errors.Is(err, ErrPeersDidNotAnswer) ||
+			ModelIsArriving(err) {
+			return
+		}
+		err = &WindowFloorError{Need: req.MinContextWindow, Public: s.publicOnly()}
+	}()
 
 	// Emit one selection event per successful return with at least
 	// one candidate. The first candidate's ExecutionMode is the
@@ -1566,13 +1615,22 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	}
 
 	// waired#1031: the tier filter, local half. Same rule as the mesh
-	// half in buildMeshCandidates — a device that declares a window and
-	// falls short is not an answer to a tiered request; one that declares
-	// nothing is left alone.
-	if req.MinContextWindow > 0 && s.in.LocalContextWindow != nil {
-		if w := s.in.LocalContextWindow(); w > 0 && w < req.MinContextWindow {
-			return nil, fmt.Errorf("%w: this device serves %d, request needs %d",
-				ErrNoEndpointForWindow, w, req.MinContextWindow)
+	// half in buildMeshCandidates — a device whose declared window falls
+	// short of the floor, or that declares none, is not an answer to a
+	// tiered request (waired-agent#1395).
+	if req.MinContextWindow > 0 {
+		w := 0
+		if s.in.LocalContextWindow != nil {
+			w = s.in.LocalContextWindow()
+		}
+		if w < req.MinContextWindow {
+			return nil, &WindowFloorError{
+				Need: req.MinContextWindow,
+				// Only local-only is a refusal about this computer alone;
+				// the other arms that reach here consulted the mesh first.
+				Local:       s.in.RoutingMode == state.RoutingModeLocalOnly,
+				LocalWindow: w,
+			}
 		}
 	}
 
@@ -1641,8 +1699,8 @@ type meshCandidate struct {
 	tag      string
 	// contextWindow is the window this peer says its engine is loaded
 	// with for tag (InferenceState.ContextWindow). 0 = the peer declares
-	// nothing, which is also what every agent predating the field sends,
-	// so it must read as "unknown" and never as "serves nothing".
+	// nothing. The overflow guard reads that as "unknown"; a window floor
+	// has already dropped such a peer (waired-agent#1395).
 	contextWindow int
 	// priority is the admin routing preference the CP folded into the peer's
 	// InferenceState: High(1) / Middle(0) / Low(-1). It is the dominant sort
@@ -1807,6 +1865,16 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	if localDropped.belowFloor && short != nil {
 		short.belowFloor++
 	}
+	if localDropped.belowWindow && short != nil {
+		short.belowWindow++
+	}
+	if drops.belowWindow > 0 {
+		reasons = withReason(reasons, fmt.Sprintf(
+			"%d peer(s) excluded: their context window is under the %d tokens this request needs", drops.belowWindow, req.MinContextWindow))
+		if short != nil {
+			short.belowWindow += drops.belowWindow
+		}
+	}
 	if drops.belowOperatorFloor > 0 {
 		reasons = withReason(reasons, fmt.Sprintf(
 			"%d peer(s) excluded: their model is smaller than %q (routing floor)", drops.belowOperatorFloor, s.in.MinModelSize))
@@ -1837,9 +1905,18 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 			// on the pin with what it is running; same ruling as the
 			// not-hoisted branch below, and the only branch that can
 			// reach it when the mesh is otherwise empty of the model.
-			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
+			pinned, pinDrops := s.pinnedNodeCandidates(snap, req, &gate)
+			if len(pinned) > 0 {
 				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID, pinned[0].manifest.ModelID))
 				raw = pinned
+			} else if pinDrops.belowOperatorFloor > 0 {
+				// Under the operator's routing floor: the empty result below
+				// becomes the size-floor refusal, which names that setting.
+				if short != nil {
+					short.belowFloor += pinDrops.belowOperatorFloor
+				}
+			} else if err := s.pinDeclined(snap, req, want.modelID, pinDrops); err != nil {
+				return nil, err
 			}
 		}
 		if len(raw) == 0 {
@@ -1912,16 +1989,36 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 			// The pin is up and running something the request did not
 			// ask for. Build its candidate from the whole catalog and
 			// put it in front.
-			if pinned := s.pinnedNodeCandidates(snap, req, &gate); len(pinned) > 0 {
+			pinned, pinDrops := s.pinnedNodeCandidates(snap, req, &gate)
+			switch {
+			case len(pinned) > 0:
 				reasons = append(reasons, pinSubstitutionReason(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID, pinned[0].manifest.ModelID))
 				raw = pinned
-			} else if s.in.Recorder != nil {
-				// Nothing the catalog knows: there is no model to serve
-				// with, so the request does soft-fall to another peer.
-				// Emit lacks_model so the tray surfaces the silent miss.
-				// Named by pinDisplayID for the reason pinUnreachable is.
-				s.in.Recorder.RecordPinnedPeerUnreachable(
-					pinDisplayID(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID), want.modelID, "lacks_model")
+			case pinDrops.belowOperatorFloor > 0:
+				// Under the operator's routing floor. The rest of the mesh
+				// is not an answer to a pin; nothing is, and the size-floor
+				// wrapper names the setting that removed it.
+				if short != nil {
+					short.belowFloor += pinDrops.belowOperatorFloor
+				}
+				short.record(snap, gate, NudgeReasonNoCandidate)
+				return nil, nil
+			default:
+				// A filter removed the pin, or it serves nothing the
+				// catalog knows. Either way the rest of the mesh behind it
+				// is not an answer — except for the one case decision 1900
+				// kept, which pinDeclined leaves to fall through.
+				if err := s.pinDeclined(snap, req, want.modelID, pinDrops); err != nil {
+					return nil, err
+				}
+				if s.in.Recorder != nil {
+					// Nothing the catalog knows: there is no model to serve
+					// with, so the request does soft-fall to another peer.
+					// Emit lacks_model so the tray surfaces the silent miss.
+					// Named by pinDisplayID for the reason pinUnreachable is.
+					s.in.Recorder.RecordPinnedPeerUnreachable(
+						pinDisplayID(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID), want.modelID, "lacks_model")
+				}
 			}
 		}
 	}
@@ -2102,9 +2199,9 @@ func pinDisplayLabel(snap inferencemesh.Snapshot, pin, saved string) string {
 // so every filter that applies to any other candidate applies here too:
 // the declared context window a /model tier demands, the per-class
 // serving exclusions, and the Public Share admission gate. A pin that
-// fails one of those is not a candidate, and the request falls through
-// to the rest of the mesh exactly as before.
-func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request, gate *publicGate) []meshCandidate {
+// fails one of those is not a candidate, and the drops say which one, so
+// the refusal can name it (pinDeclined, waired-agent#1395).
+func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request, gate *publicGate) ([]meshCandidate, meshDrops) {
 	var only inferencemesh.Snapshot
 	only.MapAgeMS = snap.MapAgeMS
 	for i := range snap.Peers {
@@ -2114,11 +2211,38 @@ func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request
 		}
 	}
 	if len(only.Peers) == 0 {
-		return nil
+		return nil, meshDrops{}
 	}
 	o, v := wantSetsFor(s.in.Manifests)
-	pinned, _ := s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate)
-	return pinned
+	return s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate)
+}
+
+// pinDeclined is the refusal for a reachable pin that yielded no candidate,
+// or nil when the request may go on without one.
+//
+// nil for a `waired worker` pin serving nothing the catalog knows: decision
+// 1900 let that one fall through to the rest of the mesh, and a model row
+// naming the computer (PinnedStrict) is the only pin that now refuses it.
+// A pin under the operator's routing floor never reaches here — the callers
+// leave that to the size-floor refusal, which names the setting.
+func (s *Selector) pinDeclined(snap inferencemesh.Snapshot, req Request, modelID string, d meshDrops) error {
+	reason := pinDeclineReason(d)
+	if reason == "" {
+		if !s.in.PinnedStrict {
+			return nil
+		}
+		reason = PinDeclinedUnknownModel
+	}
+	e := &PinnedPeerDeclinedError{
+		PeerDisplayID: pinDisplayID(snap, s.in.PinnedPeerDeviceID, s.in.PinnedPeerDisplayID),
+		PeerName:      pinDisplayName(snap, s.in.PinnedPeerDeviceID),
+		ModelID:       modelID,
+		Reason:        reason,
+	}
+	if reason == PinDeclinedWindow {
+		e.Need, e.Declared = req.MinContextWindow, d.declaredWindow
+	}
+	return e
 }
 
 // makeMeshCandidate freezes one meshCandidate into the Candidate
@@ -2584,6 +2708,7 @@ func (s *Selector) buildMeshCandidates(
 				continue
 			}
 			if !gate.admit {
+				drops.publicDeclined++
 				continue
 			}
 			tier := s.peerTier(p.InferenceState.Type, p.InferenceState.Models)
@@ -2601,6 +2726,7 @@ func (s *Selector) buildMeshCandidates(
 				drops.belowPublicFloor++
 				continue
 			default:
+				drops.publicDeclined++
 				continue
 			}
 			displayID, isPublic = pseudonym, true
@@ -2611,10 +2737,12 @@ func (s *Selector) buildMeshCandidates(
 		switch class {
 		case state.ClaudeClassMain:
 			if p.InferenceState.ExcludeMain {
+				drops.excludedMain++
 				continue
 			}
 		case state.ClaudeClassSub:
 			if p.InferenceState.ExcludeSub {
+				drops.excludedSub++
 				continue
 			}
 		}
@@ -2631,19 +2759,22 @@ func (s *Selector) buildMeshCandidates(
 		default:
 			continue
 		}
-		// waired#1031: a tier is a promise about the serving node. Drop a
-		// peer whose DECLARED window falls short of what this request
-		// demands. A peer declaring nothing (0) stays — that is every
-		// agent predating the field, and reading silence as refusal would
-		// empty the mesh the moment one node upgraded.
-		if minWindow > 0 && p.InferenceState.ContextWindow > 0 &&
-			p.InferenceState.ContextWindow < minWindow {
-			continue
-		}
 		for _, m := range p.InferenceState.Models {
 			e, ok := want[m]
 			if !ok {
 				continue
+			}
+			// waired#1031: a tier is a promise about the serving node. Drop
+			// a peer whose declared window falls short of what this request
+			// demands — and one declaring nothing (0), which is what a
+			// computer serving under the smallest declarable window
+			// publishes (waired-agent#1395). Tested after the model matched,
+			// so the count is of peers the floor alone removed, which is
+			// what lets the refusal name the window.
+			if minWindow > 0 && p.InferenceState.ContextWindow < minWindow {
+				drops.belowWindow++
+				drops.declaredWindow = p.InferenceState.ContextWindow
+				break
 			}
 			v := e.variant
 			// The operator's minimum model class (waired-agent#1128).
@@ -2711,6 +2842,17 @@ func (s *Selector) buildMeshCandidates(
 type meshDrops struct {
 	belowOperatorFloor int
 	belowPublicFloor   int
+	// belowWindow counts peers that served what the request wanted but
+	// declared a window under its floor, and declaredWindow is the last such
+	// peer's figure — exact when the pass was over one pinned peer
+	// (waired-agent#1395).
+	belowWindow    int
+	declaredWindow int
+	// excludedMain / excludedSub / publicDeclined are the other filters a
+	// pinned peer can fail. Only pinDeclineReason reads them.
+	excludedMain   int
+	excludedSub    int
+	publicDeclined int
 }
 
 // acquireSlot returns (release, true) when the candidate is eligible

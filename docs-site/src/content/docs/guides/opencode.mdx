@@ -36,11 +36,12 @@ Waired model.
 
 	| Model | Where the turn runs |
 	|---|---|
-	| `waired/default` (shown as **Waired**) | Any of your computers — Waired picks |
+	| `waired/default` (shown as **Waired**) | Any of your computers — Waired picks one with a 200k context window |
 	| `waired/local` (**Waired local**) | This computer |
-	| `waired/peer` (**Waired peer**) | Another of your computers, never this one |
+	| `waired/peer` (**Waired peer**) | Another of your computers, never this one, with a 200k context window |
 	| `waired/peer-<name>` (**Waired peer: &lt;name&gt;**) | The computer you name |
-	| `waired/public` (**Waired public share**) | Someone else's computer |
+	| `waired/public` (**Waired public share**) | Someone else's computer, with a 200k context window |
+	| `waired/default[1m]` and the other `[1m]` entries (**… (1M context)**) | The same, on a computer with a 1M context window. Listed while a computer that could answer the entry declares one |
 </Expected>
 
 No API key and no environment variable are involved. Waired connects OpenCode
@@ -54,6 +55,11 @@ of yours that is serving right now.
 
 If the computer an entry names cannot answer, the turn fails and says so
 rather than quietly running somewhere else.
+
+The list is the one Claude Code shows in `/model`, `(1M context)` twins
+included. See
+[How a Claude Code turn is routed](/guides/claude-code/how-turns-are-routed/)
+for what each row means.
 
 ## Subagents
 
@@ -96,6 +102,39 @@ request itself.
 	`waired link` with no name sets up every tool it finds: Claude Code,
 	OpenCode, and OpenClaw.
 </Aside>
+
+## Context windows
+
+The entries where Waired picks the computer, `waired/default`, `waired/peer`
+and `waired/public`, use only a computer whose context window holds 200,704
+tokens, and every `[1m]` entry only one that holds 1,048,576. A computer
+serving less, such as one running a `gpt-oss` model, is not used for them. It
+still answers `waired/local` on itself and its own `waired/peer-<name>`
+entry, which ask nothing of the computer they name.
+
+Each entry states its window as `max_input_tokens` in the list at
+`http://127.0.0.1:9473/v1/models`, and OpenCode reads it at every start as
+the entry's `limit.context`, so it compacts the conversation before the
+window the entry states: 200704 on `waired/default`, `waired/peer` and
+`waired/public`, 1048576 on every `[1m]` entry, this computer's own window on
+`waired/local`, and the named computer's own on `waired/peer-<name>`. A
+computer that states no window gets no number, and OpenCode uses its own
+default for that entry.
+
+The plugin shows the any-computer entry as `waired/default`, so a config
+written against it keeps working, and sends it as `waired`, the id Claude
+Code sends; `waired/default[1m]` goes as `waired[1m]`. Those ids carry the
+200k and 1M windows above. A chat app that sends `waired/default` itself gets
+no such window; see
+[Use Waired from a chat app](/guides/chat-clients/#what-to-put-in-the-settings).
+
+When no computer meets the entry's window, the turn fails and OpenCode shows
+the error. It does not compact or retry, because the conversation's length is
+not the problem:
+
+```
+None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. A model row that names one computer does not ask for this.
+```
 
 ## What it changed
 

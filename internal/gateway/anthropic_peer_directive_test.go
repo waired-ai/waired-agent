@@ -8,6 +8,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/router"
 	runtime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // The "Waired peer" /model entry names a NODE, and the node has to survive
@@ -77,9 +78,11 @@ func TestAnthropicMessages_PeerDirectiveSurvivesTheModelRemap(t *testing.T) {
 }
 
 // A tier promise and a node choice are different questions about the same
-// id, so an id that names a node makes no window demand: naming a node and
-// then refusing it for its window would refuse the very machine the operator
-// chose.
+// id. An id that names ONE computer makes no window demand: naming a machine
+// and then refusing it for its window would refuse the very machine the
+// operator chose. The peer and public rows name a kind of computer and let
+// Waired choose which, so they carry the 200k floor the any-node row does
+// (owner decision 2026-09-16, waired-agent#1395).
 //
 // PIN: product contract. The rows name where the turn runs
 // (docs/decisions/20260828/0252-the-model-you-pick-is-where-the-turn-runs.md),
@@ -93,10 +96,20 @@ func TestAnthropicMessages_PeerDirectiveSurvivesTheModelRemap(t *testing.T) {
 // peer-only. The ids that still name no node are the any-node row (Waired
 // chooses, which is what the row means) and the retired cloud id.
 func TestPeerDirectiveMakesNoWindowDemand(t *testing.T) {
-	for _, id := range []string{ModelWairedPeer, ModelWairedLocal, ModelWairedPublic} {
-		if got := RequiredWindowFor(id); got != 0 {
-			t.Errorf("RequiredWindowFor(%q) = %d, want 0", id, got)
+	for _, tc := range []struct {
+		id   string
+		want int
+	}{
+		{ModelWairedLocal, 0},
+		{ModelWairedPeerPrefix + "linux-gpu", 0},
+		{ModelWairedPeer, hostfit.ServingWindow200k},
+		{ModelWairedPublic, hostfit.ServingWindow200k},
+	} {
+		if got := RequiredWindowFor(tc.id); got != tc.want {
+			t.Errorf("RequiredWindowFor(%q) = %d, want %d", tc.id, got, tc.want)
 		}
+	}
+	for _, id := range []string{ModelWairedPeer, ModelWairedLocal, ModelWairedPublic} {
 		if got := NodeDirectiveFor(id); got != id {
 			t.Errorf("NodeDirectiveFor(%q) = %q, want the id itself", id, got)
 		}

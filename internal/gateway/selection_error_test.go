@@ -289,11 +289,23 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 			want: http.StatusServiceUnavailable, wantAnthropic: http.StatusBadRequest, defensive: true,
 		},
 		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: http.StatusServiceUnavailable},
+		// waired-agent#1395: a 400 on both wires. The window refusal was a
+		// 500 on both, which Claude Code retries ten times; the declined pin
+		// used to run on another computer instead of failing.
+		{name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: http.StatusBadRequest},
 		{
-			// Record of today's behaviour on both sides, not a considered
-			// choice — the same note management's table carries for it.
-			name: "no endpoint for window", err: router.ErrNoEndpointForWindow,
-			want: http.StatusInternalServerError,
+			name: "no endpoint for window, as the Selector returns it",
+			err:  &router.WindowFloorError{Need: 200704}, want: http.StatusBadRequest,
+		},
+		{
+			name: "no endpoint for window, under the operator's size floor",
+			err:  &router.SizeFloorError{Err: &router.WindowFloorError{Need: 200704}, Floor: "large"},
+			want: http.StatusNotFound, wantAnthropic: http.StatusBadRequest,
+		},
+		{
+			name: "pinned peer declined",
+			err:  &router.PinnedPeerDeclinedError{PeerDisplayID: "linux-gpu", Reason: router.PinDeclinedServeMain},
+			want: http.StatusBadRequest,
 		},
 		{
 			name: "an error no switch handles", err: errors.New("router: a sentinel from the future"),

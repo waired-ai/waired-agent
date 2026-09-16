@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260916/0410-the-window-floor-is-the-same-on-every-client.md
 ---
 
 # `/model` の項目はノードを名指せる — route 軸と node 軸を分ける (20260820 02:00)

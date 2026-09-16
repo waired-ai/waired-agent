@@ -29,11 +29,12 @@ Waired model.
 
 	| Model | Where the turn runs |
 	|---|---|
-	| `waired/default` | Any of your computers — Waired picks |
+	| `waired/default` | Any of your computers — Waired picks one with a 200k context window |
 	| `waired/local` | This computer |
-	| `waired/peer` | Another of your computers, never this one |
+	| `waired/peer` | Another of your computers, never this one, with a 200k context window |
 	| `waired/peer-<name>` | The computer you name |
-	| `waired/public` | Someone else's computer |
+	| `waired/public` | Someone else's computer, with a 200k context window |
+	| `waired/default[1m]` and the other `[1m]` entries | The same, on a computer with a 1M context window. Written while a computer that could answer the entry declares one |
 </Expected>
 
 No API key and no environment variable are involved. Waired connects OpenClaw
@@ -46,7 +47,18 @@ turned Public Share on. There is one `waired/peer-<name>` entry per computer
 of yours that was serving when you linked.
 
 If the computer an entry names cannot answer, the turn fails and says so
-rather than quietly running somewhere else.
+rather than quietly running somewhere else. The entries where Waired picks
+the computer, `waired/default`, `waired/peer` and `waired/public`, use only a
+computer whose context window holds 200,704 tokens, and every `[1m]` entry
+only one that holds 1,048,576; when none does, the turn fails and says which
+window it needed. The list is the one Claude Code shows in `/model`; see
+[How a Claude Code turn is routed](/guides/claude-code/how-turns-are-routed/)
+for what each row means.
+
+The plugin shows the any-computer entry as `waired/default`, so a config
+written against it keeps working, and sends it as `waired`, the id Claude
+Code sends; `waired/default[1m]` goes as `waired[1m]`. Those ids carry the
+200k and 1M windows above.
 
 <Aside type="note" title="Run `waired link openclaw` again after your computers change">
 	OpenClaw reads its model list from `openclaw.json`, which Waired writes
@@ -88,23 +100,31 @@ copy as they are.
 
 ## How much context OpenClaw is told about
 
-The plugin records how long a prompt this computer can take, so OpenClaw does
-not start shortening your conversation earlier than it has to.
+The plugin records a context window for each Waired entry, so OpenClaw
+compacts your conversation before the window the entry states and not
+earlier. `waired/default`, `waired/peer` and `waired/public` state 200704
+tokens, the window Waired holds them to. Every `[1m]` entry states 1048576.
+`waired/local` states this computer's own window and `waired/peer-<name>` the
+named computer's own; a computer that states none gets no number, and
+OpenClaw uses its own default for that entry.
 
-That number comes from the computer itself, so it is known only once a model
-is loaded. During first-time setup it usually is not, so the plugin says
-nothing about it and OpenClaw uses its own default. Setup fills it in on its
-way out and says so:
+The entries are written when you link. During first-time setup this computer
+is usually not serving yet, so the plugin starts with `waired/default` alone.
+`waired init`, `waired link all` and `waired doctor --fix` bring the plugin up
+to date when any entry changed, by name or by window, or when the plugin was
+written by an older version of Waired, and say so:
 
 ```
-OpenClaw now knows this computer serves 200704 tokens of context.
+Updated OpenClaw's list of Waired models and their context windows.
 ```
 
-The number changes when you change model, so it can fall behind what this
-computer serves today. `waired doctor` says when it has:
+`waired doctor` warns when the plugin is out of date, with one of these
+lines:
 
 ```
-! openclaw context window   the plugin declares 200704 tokens; this computer now serves 124928
+! openclaw context window   the plugin was written by an older version of Waired
+! openclaw context window   the plugin's list of Waired models is out of date
+! openclaw context window   the plugin declares no window for waired/default; Waired now gives it 200704 tokens
 ```
 
 Press `f` to bring it up to date.

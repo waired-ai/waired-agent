@@ -113,10 +113,12 @@ func TestRenderEntry_UnknownWindowIsNotDeclared(t *testing.T) {
 	if !strings.Contains(s, "const CONTEXT_WINDOW = 0;") {
 		t.Errorf("expected CONTEXT_WINDOW = 0:\n%s", s)
 	}
-	// The row's own window wins where it has one; CONTEXT_WINDOW is the
-	// fallback, and 0 has to leave the field off rather than declare a zero.
-	if !strings.Contains(s, ": CONTEXT_WINDOW;") {
-		t.Errorf("a row with no window of its own must fall back to CONTEXT_WINDOW:\n%s", s)
+	// A row carries the window the gateway stated for it, and a row that
+	// states none carries none: CONTEXT_WINDOW is only waired/default's, for a
+	// plugin written before the rows existed (waired-agent#1395). 0 has to
+	// leave the field off rather than declare a zero.
+	if !strings.Contains(s, `row ? row.contextWindow || 0 : key === "default" ? CONTEXT_WINDOW : 0`) {
+		t.Errorf("a row's window must be its own, and only waired/default may fall back to CONTEXT_WINDOW:\n%s", s)
 	}
 	if !strings.Contains(s, "if (window > 0)") {
 		t.Errorf("plugin has no guard, so it would declare contextWindow: 0:\n%s", s)

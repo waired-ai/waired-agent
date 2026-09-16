@@ -163,10 +163,17 @@ func TestPickerModels(t *testing.T) {
 		if has(got, claudecode.Tier1M(claudecode.DirectiveModelLocal)) {
 			t.Error("the local row got a 1M twin from a peer's window")
 		}
-		// Someone else's computer is not asked for a tier: this host learns
-		// a public machine's window only when it answers.
+		// One of YOUR computers declaring 1M is not a public machine that
+		// does: the public row's twin needs its own (waired-agent#1395).
 		if has(got, claudecode.Tier1M(claudecode.DirectiveModelPublic)) {
-			t.Error("the public row got a 1M twin")
+			t.Error("the public row got a 1M twin from one of your own computers")
+		}
+		public := pickerModels(modelrows.Facts{LocalServes: true, PublicShareOn: true, PublicWindow1M: true})
+		if !has(public, claudecode.Tier1M(claudecode.DirectiveModelPublic)) {
+			t.Error("a public machine declares 1M and the public row got no twin")
+		}
+		if has(public, claudecode.Tier1M(claudecode.DirectiveModelAny)) {
+			t.Error("a public machine earned the any-computer row's twin")
 		}
 	})
 }

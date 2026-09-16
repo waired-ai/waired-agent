@@ -37,9 +37,11 @@ type openAIErrorEnvelope struct {
 // its static aliases are all listed so client SDKs that pre-validate
 // the model field accept any spelling.
 //
-// Each entry also carries max_input_tokens, the same field and the same
-// source (Deps.ContextWindowFor) the Anthropic listing stamps — the window
-// this host can ACTUALLY serve, not the manifest's native claim (#408).
+// Each entry also carries max_input_tokens. On a catalog entry it is the same
+// field and the same source (Deps.ContextWindowFor) the Anthropic listing
+// stamps — the window this host can ACTUALLY serve, not the manifest's native
+// claim (#408). On a route row it is the window the row states, which routing
+// guarantees for it (waired-agent#1395; see the loop below).
 // The field is not part of OpenAI's model object, and clients that do not
 // know it ignore it; the one that needs it is `waired link`, which bakes
 // the number into the coding-agent plugins it writes. Without it those
@@ -83,19 +85,24 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 	seen := map[string]struct{}{}
 	// The route directives first, so a picker built from this listing shows
 	// the choices about WHERE a turn runs above the catalog it could run on.
-	// Same table, same order as the Claude intercept advertises
-	// (anthropicModelList), so one machine reads the same on both surfaces.
+	// The same rows, "[1m]" twins included, that Claude Code's /model shows
+	// (modelrows.Rows), so one machine reads the same on both surfaces
+	// (waired-agent#1395).
 	//
-	// No "[1m]" twins. That suffix exists because Claude Code sizes a session
-	// from the id string; on this surface the window is a field, and every
-	// row already carries it.
+	// max_input_tokens is the window the row states, which is the one routing
+	// guarantees for it (modelrows.Row.ContextWindow). Only the local row
+	// falls back to this host's own figure when its declaration is missing —
+	// it is the one row this host answers. A per-computer row whose computer
+	// declares nothing omits the field: filling it with this host's window,
+	// as every undeclared row used to be, stated a number about a machine
+	// that had not said it.
 	for _, r := range h.routeDirectiveRows() {
 		if _, dup := seen[r.ID]; dup {
 			continue
 		}
 		seen[r.ID] = struct{}{}
 		win := r.ContextWindow
-		if win == 0 {
+		if win == 0 && r.ID == ModelWairedLocal {
 			win = window(r.ID)
 		}
 		out = append(out, model{
@@ -762,6 +769,16 @@ func respondSelectionError(w http.ResponseWriter, err error, queuedFor time.Dura
 			w.Header().Set(HeaderMinModelSize, floor)
 		}
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", err.Error())
+	case errors.Is(err, router.ErrPinnedPeerDeclined):
+		// The Anthropic twin's arm, in this dialect (waired-agent#1395).
+		stagePinnedPeerDeclinedHeaders(w, err)
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "waired_pinned_peer_declined", sentence(pinnedPeerDeclinedDetail(err)))
+	case errors.Is(err, router.ErrNoEndpointForWindow):
+		// A 400 rather than the default arm's 500, and a sentence that no
+		// client reads as a prompt too long for its model — OpenCode would
+		// compact and retry on one (waired-agent#1395).
+		stageWindowFloorHeaders(w, err)
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "waired_no_computer_for_window", sentence(windowFloorDetail(err)))
 	case errors.Is(err, router.ErrModelNotFound):
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
@@ -825,6 +842,7 @@ func respondSelectionError(w http.ResponseWriter, err error, queuedFor time.Dura
 		// environmental, clears when the peer returns — 503, not the
 		// default:'s 500. Naming the peer keeps the general surface's
 		// diagnosis as good as the Claude one's.
+		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerUnreachable)
 		if peer := pinnedPeerOf(err); peer != "" {
 			w.Header().Set(HeaderInferencePeer, peer)
 		}

@@ -616,9 +616,18 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		// No divergence to explain: the gateway answers a client 422 here
 		// too, and since waired-agent#740 records that same 422.
 		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: 422, gateway: 422},
+		// waired-agent#1395: both were a 500 (the window) or a quiet run on
+		// another computer (the pin); both are a 400 on both wires now.
+		{name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: 400, gateway: 400},
 		{
-			name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: 500, gateway: 500,
-			why: "record of today's behaviour on both sides, not a considered choice",
+			name: "no endpoint for window, as the Selector returns it",
+			err:  &router.WindowFloorError{Need: 200704},
+			want: 400, gateway: 400,
+		},
+		{
+			name: "pinned peer declined",
+			err:  &router.PinnedPeerDeclinedError{PeerDisplayID: "workshop-mac", Reason: router.PinDeclinedWindow},
+			want: 400, gateway: 400,
 		},
 	}
 	for _, tc := range cases {

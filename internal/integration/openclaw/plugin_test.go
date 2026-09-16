@@ -14,7 +14,14 @@ func TestRenderEntry_BaseURLAndHooks(t *testing.T) {
 	for _, want := range []string{
 		`const BASE_URL = "http://127.0.0.1:9473/v1";`,
 		`SYNTHETIC_KEY = "waired-local"`,
-		`const MODELS = [{"key":"default","name":"Waired Default"}];`,
+		`const MODELS = [{"key":"default","name":"Waired"}];`,
+		`const PLUGIN_REV = 2;`,
+		// The any-computer row and its twin are sent as the ids Claude Code
+		// sends, which carry the row's window floor; waired/default itself is
+		// the no-floor alias chat apps send (waired-agent#1395).
+		`if (key === "default") return "waired";`,
+		`if (key === "default[1m]") return "waired[1m]";`,
+		"id: wireId(key),",
 		"resolveDynamicModel",
 		"resolveSyntheticAuth",
 		"registerProvider",

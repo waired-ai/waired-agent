@@ -115,6 +115,13 @@ func nextTurnReason(err error) string {
 		return "local inference is off, and no other computer can answer"
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		return "the pinned computer is not answering"
+	case errors.Is(err, router.ErrPinnedPeerDeclined):
+		// A `waired worker` pin whose computer is switched off for main
+		// conversations, say. It used to fall through to another computer,
+		// and the footer showed green for it (waired-agent#1395).
+		return "the pinned computer cannot take this turn"
+	case errors.Is(err, router.ErrNoEndpointForWindow):
+		return "no computer has the context window this needs"
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		return "every computer is busy"
 	case errors.Is(err, router.ErrPeersDidNotAnswer):

@@ -89,9 +89,13 @@ a pin is set.
 
 <Aside type="caution" title="A pin is a firm instruction">
 	If the pinned computer is switched off, unreachable, or not sharing,
-	requests fail rather than running somewhere else. You asked for that
-	computer, so Waired tells you when it cannot have it. Use **Peer
-	preferred** when you want a preference rather than a rule. See
+	requests fail rather than running somewhere else. So do requests it is
+	reachable for but cannot take: **Serve main conversation** or **Serve
+	subagents** turned off on it, your Public Share settings, or a model row's
+	context window it does not hold. The error names the computer and the
+	reason. You asked for that computer, so Waired tells you when it cannot
+	have it. Use **Peer preferred** when you want a preference rather than a
+	rule. See
 	[Requests stopped working after I pinned a computer](/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer).
 </Aside>
 

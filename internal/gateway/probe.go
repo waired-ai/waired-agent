@@ -209,6 +209,19 @@ const (
 	// (waired-agent#1303).
 	LocalErrorPinnedPeerBusy = "pinned_peer_busy"
 
+	// LocalErrorPinnedPeerDeclined is the pin's third refusal: the computer
+	// is reachable, but something rules it out for this turn — the window
+	// the row demands, its owner's serving switches, the Public Share gate.
+	// It used to fall through to another computer (waired-agent#1395).
+	LocalErrorPinnedPeerDeclined = "pinned_peer_declined"
+
+	// LocalErrorNoComputerForWindow is staged when the model row's window
+	// floor removed every computer that could otherwise have answered
+	// (waired-agent#1395), and HeaderRequiredWindow carries that floor.
+	// Distinct from model_not_served: the model is there, the window is not.
+	LocalErrorNoComputerForWindow = "no_computer_for_window"
+	HeaderRequiredWindow          = "X-Waired-Required-Window"
+
 	// LocalErrorPeerStillBusy is the wait ending at its ceiling while the
 	// peer was still reporting work. Distinct from peer_ttfb_timeout, which
 	// says only that nothing arrived: this one says the computer was busy,

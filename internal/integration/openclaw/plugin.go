@@ -88,10 +88,17 @@ func pluginRows(rows []modelrows.Row) []pluginRow {
 		out = append(out, pluginRow{Key: key, Name: r.DisplayName, ContextWindow: r.ContextWindow})
 	}
 	if len(out) == 0 {
-		out = append(out, pluginRow{Key: defaultModelKey, Name: "Waired Default"})
+		out = append(out, pluginRow{Key: defaultModelKey, Name: "Waired"})
 	}
 	return out
 }
+
+// pluginRevision is PLUGIN_REV in the template: the revision of the plugin's
+// own logic. Raise it whenever what a written plugin DOES changes, so the
+// refresh after a link and `waired doctor` rewrite plugins that are still
+// correct row for row but behave the old way. 2: the any-computer row is sent
+// as "waired" (waired-agent#1395).
+const pluginRevision = 2
 
 // modelRefs is the set of picker references the adapter allowlists in
 // agents.defaults.models, derived from the same rows the plugin carries.
@@ -133,6 +140,7 @@ func renderEntry(gatewayBaseURL string, contextWindow int, rows []pluginRow) ([]
 		"BaseURLLiteral":       string(baseLit),
 		"ContextWindowLiteral": strconv.Itoa(contextWindow),
 		"ModelsLiteral":        string(rowsLit),
+		"PluginRevLiteral":     strconv.Itoa(pluginRevision),
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, fmt.Errorf("openclaw: render plugin: %w", err)

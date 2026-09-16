@@ -604,6 +604,10 @@ type publicShortfall struct {
 	// never triggers the SizeFloorError wrapper, which names the operator's
 	// `waired worker set --min-model-size` (waired-agent#1201).
 	belowPublicFloor int
+	// belowWindow counts candidates — peers, and this device — removed only
+	// by the request's window floor. SelectK's exit turns a miss with any
+	// into a WindowFloorError (waired-agent#1395).
+	belowWindow int
 }
 
 // record keeps the FIRST shortfall seen. There is at most one mesh

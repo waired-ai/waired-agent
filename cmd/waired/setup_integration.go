@@ -354,11 +354,16 @@ func topUpOpenClawWindow(ctx context.Context, gatewayBaseURL string) {
 	if err != nil {
 		return
 	}
-	window, changed, err := openclaw.TopUpContextWindow(ctx, home, gatewayBaseURL)
+	// The window it returns is the waired/default row's, which states the
+	// row's floor rather than this computer's own window since
+	// waired-agent#1395, and a rewrite can be about any row or about an older
+	// plugin — so the line says what was refreshed, not a number about this
+	// computer.
+	_, changed, err := openclaw.TopUpContextWindow(ctx, home, gatewayBaseURL)
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "Warning: couldn't record the OpenClaw context window (%v)\n", err)
+		fmt.Fprintf(stderr, "Warning: couldn't update OpenClaw's list of Waired models (%v)\n", err)
 	case changed:
-		fmt.Fprintf(stdout, "OpenClaw now knows this computer serves %d tokens of context.\n", window)
+		fmt.Fprintln(stdout, "Updated OpenClaw's list of Waired models and their context windows.")
 	}
 }

@@ -6,10 +6,9 @@
 // on every link and deleted on unlink. The provider points at waired's
 // no-token loopback gateway. `resolveDynamicModel` maps a reference like
 // `waired/peer` to a runtime model whose `id` is the wire string the gateway
-// expects. No manifest owns those names — the gateway resolves them at
-// request time, `waired/default` to this host's coding default (#632) and the
-// rest to a computer on your mesh (waired-agent#1306) — so a config written
-// once survives a model switch. `resolveSyntheticAuth` supplies a non-secret
+// expects. No manifest owns those names — the gateway resolves each to a
+// computer at request time (waired-agent#1306) — so a config written once
+// survives a model switch. `resolveSyntheticAuth` supplies a non-secret
 // local marker so no API key or environment variable is ever required — the
 // same pattern OpenClaw's own local Ollama / LM Studio providers use.
 //
@@ -22,20 +21,26 @@
 // (2026-09-12): a provider plugin's own catalog hooks do not reach the picker,
 // and a `waired/*` wildcard in the allowlist is taken literally.
 const BASE_URL = {{ .BaseURLLiteral }};
+// Which revision of this file's own logic wrote it. `waired doctor` and the
+// refresh after `waired link all` rewrite a plugin whose revision is older
+// than the build's, so a change in what the plugin SENDS reaches a user who
+// never links again (waired-agent#1395).
+const PLUGIN_REV = {{ .PluginRevLiteral }};
 const SYNTHETIC_KEY = "waired-local";
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-// The input window this host reported it can actually serve when the plugin
-// was written (waired's gateway, max_input_tokens). It is 0 when the gateway
-// could not be asked — during `waired init`, before anything is serving —
-// and then the field is left out entirely so OpenClaw uses its own default.
-// A wrong number is worse than none: a value below what the host serves makes
-// OpenClaw compact its context on the first turn (#1001). It is the fallback
-// for a row that carries no window of its own.
+// The window the gateway stated for waired/default when the plugin was written
+// (max_input_tokens). It is 0 when the gateway could not be asked — during
+// `waired init`, before anything is serving — and then the field is left out
+// so OpenClaw uses its own default. A wrong number is worse than none: a value
+// below what the answering computer holds makes OpenClaw compact on the first
+// turn (#1001), one above it lets a prompt through that the computer refuses.
+// Only waired/default falls back to it, for a plugin written before the rows.
 const CONTEXT_WINDOW = {{ .ContextWindowLiteral }};
-// One entry per row the gateway offered: {key, name, contextWindow}. A row
-// that names one computer carries that computer's own window rather than this
-// one's, which is the difference between a compaction hint that fits and one
-// that does not.
+// One entry per row the gateway offered: {key, name, contextWindow}. Each row
+// carries the window the gateway states for it — the floor routing holds a
+// row to where Waired picks the computer, and the computer's own window where
+// the row names one. A computer that states none carries none, rather than
+// borrowing another row's number (waired-agent#1395).
 const MODELS = {{ .ModelsLiteral }};
 
 function rowFor(key) {
@@ -45,10 +50,23 @@ function rowFor(key) {
   return null;
 }
 
+// wireId is the model string the gateway receives for a picker key. The key
+// is the listed id minus "waired/", except for the row where Waired picks any
+// of your computers: it is listed as waired/default and waired/default[1m],
+// which is what every config written so far holds, and SENT as "waired" and
+// "waired[1m]", the ids Claude Code sends. Those carry the row's window floor;
+// waired/default itself is the daemon's no-floor alias that chat apps send
+// (waired-agent#1395).
+function wireId(key) {
+  if (key === "default") return "waired";
+  if (key === "default[1m]") return "waired[1m]";
+  return "waired/" + key;
+}
+
 function wairedModel(key) {
   const row = rowFor(key);
   const model = {
-    id: "waired/" + key,
+    id: wireId(key),
     name: row && row.name ? row.name : "Waired " + key.charAt(0).toUpperCase() + key.slice(1),
     provider: "waired",
     api: "openai-completions",
@@ -59,7 +77,7 @@ function wairedModel(key) {
     maxTokens: 8192,
     compat: { supportsTools: true, supportsUsageInStreaming: true },
   };
-  const window = row && row.contextWindow > 0 ? row.contextWindow : CONTEXT_WINDOW;
+  const window = row ? row.contextWindow || 0 : key === "default" ? CONTEXT_WINDOW : 0;
   if (window > 0) {
     model.contextWindow = window;
   }

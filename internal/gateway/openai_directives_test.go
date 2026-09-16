@@ -67,11 +67,17 @@ func openAIModels(t *testing.T, deps Deps) ([]openAIModel, map[string]openAIMode
 // listing (which keys carry the label and the marker) is a record of today's
 // behaviour; the plugins those keys feed are in this repo.
 func TestOpenAIModels_ListsTheRouteRows(t *testing.T) {
-	rows := []modelrows.Row{
-		{DirectiveModel: claudecode.DirectiveModel{ID: claudecode.DirectiveModelAny, DisplayName: "Waired", Description: "Any of your computers"}},
-		{DirectiveModel: claudecode.DirectiveModel{ID: claudecode.DirectiveModelLocal, DisplayName: "Waired local", Description: "This computer"}, ContextWindow: 131072},
-		{DirectiveModel: claudecode.DirectiveModel{ID: "waired/peer-linux-gpu", DisplayName: "Waired peer: linux-gpu", Description: "qwen3.5-35b-a3b"}, ContextWindow: 200704},
-	}
+	rows := modelrows.Rows(modelrows.Facts{
+		LocalServes: true,
+		LocalWindow: 131072,
+		PeerLimit:   5,
+		Peers: []claudecode.PeerFact{
+			{DisplayID: "linux-gpu", Key: "dev-1", Model: "qwen3.5-35b-a3b", ContextWindow: 200704},
+			{DisplayID: "big-box", Key: "dev-2", Model: "deepseek-v4-flash", Window1M: true, ContextWindow: hostfit.ServingWindow1M},
+			{DisplayID: "quiet-box", Key: "dev-3", Model: "gpt-oss-20b"},
+		},
+		PeerWindow1M: true,
+	})
 	data, byID := openAIModels(t, Deps{
 		RouteDirectives:    true,
 		RouteDirectiveRows: func() []modelrows.Row { return rows },
@@ -105,25 +111,63 @@ func TestOpenAIModels_ListsTheRouteRows(t *testing.T) {
 	if peer := byID["waired/peer-linux-gpu"]; peer.MaxInputTokens != 200704 || !peer.WairedRoute {
 		t.Errorf("peer row = %+v, want the peer's own window and the marker", peer)
 	}
-	// A row with no window of its own falls back to what this host can size.
-	if any.MaxInputTokens != 65536 {
-		t.Errorf("any-node window = %d, want the fallback 65536", any.MaxInputTokens)
+	// A row where Waired chooses the computer states the floor routing holds
+	// it to — never this host's own window, which is what it used to say
+	// (waired-agent#1395).
+	if any.MaxInputTokens != hostfit.ServingWindow200k {
+		t.Errorf("any-node window = %d, want the 200k floor it routes by", any.MaxInputTokens)
+	}
+	if p := byID[claudecode.DirectiveModelPeer]; p.MaxInputTokens != hostfit.ServingWindow200k {
+		t.Errorf("peer row window = %d, want the 200k floor", p.MaxInputTokens)
+	}
+	// A computer that states no window gets no number: this host's would be
+	// a claim about a machine that had not made it.
+	if q, ok := byID["waired/peer-quiet-box"]; !ok || q.MaxInputTokens != 0 {
+		t.Errorf("undeclared computer row = %+v (listed %v), want it listed with no window", q, ok)
+	}
+
+	// The same twins Claude Code's /model shows, each right after its row, and
+	// the any-node one spelled like its row.
+	for _, tc := range []struct{ row, twin string }{
+		{router.DefaultModelAlias, claudecode.Tier1M(router.DefaultModelAlias)},
+		{claudecode.DirectiveModelPeer, claudecode.Tier1M(claudecode.DirectiveModelPeer)},
+		{"waired/peer-big-box", claudecode.Tier1M("waired/peer-big-box")},
+	} {
+		twin, ok := byID[tc.twin]
+		if !ok {
+			t.Errorf("no twin %q", tc.twin)
+			continue
+		}
+		if !twin.WairedRoute || twin.MaxInputTokens != hostfit.ServingWindow1M {
+			t.Errorf("twin %q = %+v, want a route row stating 1M", tc.twin, twin)
+		}
+		for i := range data {
+			if data[i].ID == tc.row && (i+1 >= len(data) || data[i+1].ID != tc.twin) {
+				t.Errorf("twin %q does not follow %q", tc.twin, tc.row)
+			}
+		}
+	}
+	if _, bare := byID[claudecode.Tier1M(claudecode.DirectiveModelAny)]; bare {
+		t.Errorf("the bare any-node twin is offered; it cannot be addressed by these clients")
+	}
+	for _, none := range []string{claudecode.Tier1M(claudecode.DirectiveModelLocal), claudecode.Tier1M("waired/peer-linux-gpu")} {
+		if _, ok := byID[none]; ok {
+			t.Errorf("twin %q offered for a side that declares no 1M window", none)
+		}
 	}
 
 	// The route rows come first, so a picker built from this listing shows
 	// the choices about where a turn runs above the catalog it could run on.
-	if len(data) < 4 || !data[0].WairedRoute || !data[1].WairedRoute || !data[2].WairedRoute {
-		t.Errorf("route rows are not at the head of the listing: %+v", data)
+	routeRows := 0
+	for routeRows < len(data) && data[routeRows].WairedRoute {
+		routeRows++
 	}
-	if data[3].WairedRoute {
-		t.Errorf("a catalog model is marked as a route row: %+v", data[3])
+	if routeRows != len(rows) {
+		t.Errorf("%d route rows at the head of the listing, want %d: %+v", routeRows, len(rows), data)
 	}
-
-	// No "[1m]" twins. That suffix exists because Claude Code sizes a session
-	// from the id string; here the window is a field on every row.
-	for _, m := range data {
-		if m.ID != claudecode.Tier1M(m.ID) && byID[claudecode.Tier1M(m.ID)].ID != "" {
-			t.Errorf("the listing carries a 1M twin (%q)", claudecode.Tier1M(m.ID))
+	for _, m := range data[routeRows:] {
+		if m.WairedRoute {
+			t.Errorf("a route row after the catalog began: %+v", m)
 		}
 	}
 }
@@ -179,18 +223,23 @@ func TestApplyRouteDirective(t *testing.T) {
 		wantModel     string
 		wantWindow    int
 	}{
-		// No 200k floor: that floor is a fact about Claude Code sizing a
-		// session from the id string, and this surface states the window per
-		// row instead.
-		{"the any-node row names no node and demands no window", claudecode.DirectiveModelAny, true, "", router.DefaultModelAlias, 0},
-		{"the local row names this computer", claudecode.DirectiveModelLocal, true, claudecode.DirectiveModelLocal, router.DefaultModelAlias, 0},
-		{"the peer row names another", claudecode.DirectiveModelPeer, true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, 0},
-		{"a per-peer row names one", "waired/peer-linux-gpu", true, "waired/peer-linux-gpu", router.DefaultModelAlias, 0},
-		{"the public row names someone else's", claudecode.DirectiveModelPublic, true, claudecode.DirectiveModelPublic, router.DefaultModelAlias, 0},
-		{"a pre-#1185 spelling still routes", "claude-waired-peer", true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, 0},
+		// The same floors the Claude listener routes by (owner decision
+		// 2026-09-16, waired-agent#1395): 200k where Waired chooses the
+		// computer, nothing where the row names one, 1M on every twin.
+		{"the any-node row demands the 200k floor", claudecode.DirectiveModelAny, true, "", router.DefaultModelAlias, hostfit.ServingWindow200k},
+		{"the local row names this computer and demands nothing", claudecode.DirectiveModelLocal, true, claudecode.DirectiveModelLocal, router.DefaultModelAlias, 0},
+		{"the peer row names another and demands the floor", claudecode.DirectiveModelPeer, true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, hostfit.ServingWindow200k},
+		{"a per-peer row names one and demands nothing", "waired/peer-linux-gpu", true, "waired/peer-linux-gpu", router.DefaultModelAlias, 0},
+		{"the public row names someone else's and demands the floor", claudecode.DirectiveModelPublic, true, claudecode.DirectiveModelPublic, router.DefaultModelAlias, hostfit.ServingWindow200k},
+		{"a pre-#1185 spelling still routes", "claude-waired-peer", true, claudecode.DirectiveModelPeer, router.DefaultModelAlias, hostfit.ServingWindow200k},
 		{"a tier spelled into the id is a window demand", claudecode.Tier1M(claudecode.DirectiveModelAny), true, "", router.DefaultModelAlias, hostfit.ServingWindow1M},
-		// The catalog alias is not a directive: it already resolves, and
-		// mapping it would be a second mechanism for one behaviour.
+		{"a per-peer twin demands 1M", claudecode.Tier1M("waired/peer-linux-gpu"), true, "waired/peer-linux-gpu", router.DefaultModelAlias, hostfit.ServingWindow1M},
+		// The listing's spelling of the any-node twin, which a plugin from
+		// before the wire-id mapping sends as it is.
+		{"the listed any-node twin routes as the twin", claudecode.Tier1M(router.DefaultModelAlias), true, "", router.DefaultModelAlias, hostfit.ServingWindow1M},
+		{"in any case", "WAIRED/DEFAULT[1M]", true, "", router.DefaultModelAlias, hostfit.ServingWindow1M},
+		// The catalog alias is not a directive: chat apps and `waired infer`
+		// send it, and they never picked a row that promises a window.
 		{"the default alias is left alone", router.DefaultModelAlias, false, "", router.DefaultModelAlias, 0},
 		// A typo'd model name is a typo. Mapping every catalog miss to the
 		// host's default — which is what the Anthropic leg does, because

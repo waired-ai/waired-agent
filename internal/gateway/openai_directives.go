@@ -37,7 +37,21 @@ import (
 // default silently serves a model nobody asked for. So only the ids this build
 // recognises as directives are mapped, and everything else keeps its 404.
 func (h *HandlerSet) applyRouteDirective(req *router.Request) bool {
-	if !h.deps.RouteDirectives || !isWairedDirective(req.Model) {
+	if !h.deps.RouteDirectives {
+		return false
+	}
+	id := req.Model
+	// "waired/default[1m]" is the any-computer twin as this listing spells it
+	// (routeDirectiveRows), and a plugin written before its wire-id mapping
+	// sends the listed id as it is. The bare "waired/default" is NOT mapped:
+	// it is the router's own "the caller named no model" alias, which chat
+	// apps and `waired infer` send, and giving it the row's floor would refuse
+	// every computer serving under 200k to clients that never picked a row
+	// (owner decision 2026-09-16, waired-agent#1395).
+	if NormalizeModelID(id) == router.DefaultModelAlias && strings.Contains(strings.ToLower(id), tierMarker1M) {
+		id = Tier1M(ModelWairedAny)
+	}
+	if !isWairedDirective(id) {
 		return false
 	}
 	// The directive travels in its own field because Model does not survive:
@@ -46,22 +60,21 @@ func (h *HandlerSet) applyRouteDirective(req *router.Request) bool {
 	// nodes for (router.DefaultModelAlias). Reading the choice back off Model
 	// later would read the alias (docs/decisions/20260820/0200-model-picker-
 	// can-name-a-node.md §2).
-	req.NodeDirective = NodeDirectiveFor(req.Model)
-	// Same seat, same reason: a tier the client spelled into the id is a
-	// promise about the serving node, and it has to outlive the rewrite. This
-	// surface has no Anthropic-Beta header, so the id itself is the only place
-	// a tier can be stated — which is why RequiredWindowFor is asked here and
+	req.NodeDirective = NodeDirectiveFor(id)
+	// Same seat, same reason: the window a row promises is a promise about the
+	// serving node, and it has to outlive the rewrite. This surface has no
+	// Anthropic-Beta header, so the id itself is the only place a tier can be
+	// stated — which is why RequiredWindowFor is asked here and
 	// RequiredWindowForRequest is not.
 	//
-	// Only an EXPLICIT tier, though. RequiredWindowFor also gives the any-node
-	// row a 200k floor, and that floor is a fact about Claude Code: it sizes a
-	// session to 200k from the id string, so the node that answers has to be
-	// able to hold one. Nothing sizes a session here — this surface states the
-	// window per row in max_input_tokens instead — so carrying the floor over
-	// would refuse nodes on a promise no client made.
-	if strings.Contains(strings.ToLower(req.Model), tierMarker1M) {
-		req.MinContextWindow = RequiredWindowFor(req.Model)
-	}
+	// The same table the Claude listener routes by, 200k floor included. This
+	// surface used to take only an explicit "[1m]", on the reasoning that the
+	// listing states each row's window in max_input_tokens so nothing here is
+	// sized from the id. The number that listing stated for the rows where
+	// Waired chooses the computer was the REQUESTING computer's window, which
+	// routing did not enforce (waired-agent#1395). Those rows now state 200k,
+	// and this is what keeps it true.
+	req.MinContextWindow = RequiredWindowFor(id)
 	slog.Debug("openai route directive",
 		"requested", req.Model, "node_directive", req.NodeDirective,
 		"min_context_window", req.MinContextWindow)
@@ -80,19 +93,22 @@ func (h *HandlerSet) applyRouteDirective(req *router.Request) bool {
 // Share — are exactly the ones that need the daemon's facts, so a hook-less
 // listener errs towards the pre-waired-agent#830 table.
 //
-// The any-node row is spelled waired/default here, not "waired". They are one
-// destination: DefaultModelAlias is the router's "the caller named no model,
-// rank the nodes" (#632), which is what the any-node row asks for, and it is
-// the id this listing has advertised since long before the route directives
-// reached it. The bare spelling cannot be the one offered here because both
-// clients that read this listing address a model as <provider>/<model> —
-// OpenCode composes the picker ref from the map key, OpenClaw from the
-// allowlist entry — so a bare "waired" has no second segment to be. Measured
-// on OpenClaw 2026.9.4 (2026-09-12): an allowlist entry of "waired" is read as
-// the model "waired" on the provider "openai". The bare id is still ACCEPTED
-// on the wire — isWairedDirective knows it, and a person who types it, or a
-// config written against the Claude picker, must not get a 404 for naming the
-// same thing a different way.
+// The any-node row is listed as waired/default here, not "waired", and its
+// twin as waired/default[1m]. The bare spelling cannot be the one offered
+// because both clients that read this listing address a model as
+// <provider>/<model> — OpenCode composes the picker ref from the map key,
+// OpenClaw from the allowlist entry — so a bare "waired" has no second segment
+// to be. Measured on OpenClaw 2026.9.4 (2026-09-12): an allowlist entry of
+// "waired" is read as the model "waired" on the provider "openai". And
+// waired/default is the ref every OpenCode and OpenClaw config written so far
+// holds.
+//
+// What the plugins SEND for it is "waired" / "waired[1m]", the ids Claude
+// Code sends, which carry the row's floor. waired/default itself stays the
+// router's "the caller named no model" alias (#632) with no floor, because
+// chat apps and `waired infer` send it too (owner decision 2026-09-16,
+// waired-agent#1395). A plugin from before that mapping sends the listed id:
+// bare, it routes as it always did; as the twin, applyRouteDirective maps it.
 func (h *HandlerSet) routeDirectiveRows() []modelrows.Row {
 	if !h.deps.RouteDirectives {
 		return nil
@@ -101,15 +117,18 @@ func (h *HandlerSet) routeDirectiveRows() []modelrows.Row {
 	if rows == nil {
 		rows = func() []modelrows.Row { return modelrows.Rows(modelrows.Facts{LocalServes: true}) }
 	}
-	// Copied before the one id is re-spelled: the hook belongs to the caller,
-	// and a caller that returns a cached slice must not find this handler has
-	// edited it. Cheap — there are five rows and a handful of peers.
+	// Copied before the two ids are re-spelled: the hook belongs to the
+	// caller, and a caller that returns a cached slice must not find this
+	// handler has edited it. Cheap — a dozen rows at most.
 	src := rows()
 	out := make([]modelrows.Row, len(src))
 	copy(out, src)
 	for i := range out {
-		if out[i].ID == ModelWairedAny {
+		switch out[i].ID {
+		case ModelWairedAny:
 			out[i].ID = router.DefaultModelAlias
+		case Tier1M(ModelWairedAny):
+			out[i].ID = Tier1M(router.DefaultModelAlias)
 		}
 	}
 	return out

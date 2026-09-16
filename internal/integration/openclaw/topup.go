@@ -67,6 +67,13 @@ func DeclaredContextWindow(home string) (int, bool) {
 // agents.defaults.models, because that allowlist is what OpenClaw's picker
 // actually shows.
 //
+// A row is compared whole — its name and its window as well as its key. The
+// refresh used to compare the keys alone, so a computer that switched to a
+// model with a different window kept the old number in the plugin until the
+// next link (waired-agent#1395). A plugin written by an older revision of the
+// template is rewritten even when every row still matches, because what it
+// sends is what changed.
+//
 // changed=false with a nil error is the ordinary outcome and not a failure:
 // no plugin, no answer from the gateway, or the plugin already says the
 // right thing. The window is only ever rewritten to a POSITIVE value — a
@@ -83,12 +90,17 @@ func TopUpContextWindow(ctx context.Context, home, gatewayBaseURL string) (windo
 	if live > 0 {
 		window = live
 	}
-	rows := pluginRows(fetched)
-	refs := modelRefs(rows)
-	rowsChanged := len(fetched) > 0 && !sameRefs(refs, declaredRefs(home))
-	if window == declared && !rowsChanged {
+	rows := declaredRows(home)
+	refsChanged := false
+	if len(fetched) > 0 {
+		refsChanged = !sameRefs(modelRefs(pluginRows(fetched)), modelRefs(rows))
+		rows = pluginRows(fetched)
+	}
+	rowsChanged := len(fetched) > 0 && !sameRows(rows, declaredRows(home))
+	if window == declared && !rowsChanged && declaredRevision(home) >= pluginRevision {
 		return declared, false, nil
 	}
+	refs := modelRefs(rows)
 	entry, err := renderEntry(gatewayBaseURL, window, rows)
 	if err != nil {
 		return declared, false, err
@@ -96,7 +108,7 @@ func TopUpContextWindow(ctx context.Context, home, gatewayBaseURL string) (windo
 	if err := writeFileAtomic(PluginEntryFile(home), entry, 0o644); err != nil {
 		return declared, false, fmt.Errorf("openclaw: rewrite plugin: %w", err)
 	}
-	if rowsChanged {
+	if refsChanged {
 		if err := mergeConfigFile(ConfigFile(home), PluginDir(home), refs); err != nil {
 			return window, true, fmt.Errorf("openclaw: refresh model list: %w", err)
 		}
@@ -104,11 +116,11 @@ func TopUpContextWindow(ctx context.Context, home, gatewayBaseURL string) (windo
 	return window, true, nil
 }
 
-// declaredRefs reads the picker references the installed plugin currently
-// carries, so a refresh that would write the same list writes nothing. It
-// reads the plugin rather than openclaw.json because the plugin is the file
-// this package owns outright; the config is the user's, merged into.
-func declaredRefs(home string) []string {
+// declaredRows reads the rows the installed plugin currently carries, so a
+// refresh that would write the same list writes nothing. It reads the plugin
+// rather than openclaw.json because the plugin is the file this package owns
+// outright; the config is the user's, merged into.
+func declaredRows(home string) []pluginRow {
 	body, err := os.ReadFile(PluginEntryFile(home))
 	if err != nil {
 		return nil
@@ -121,7 +133,41 @@ func declaredRefs(home string) []string {
 	if err := json.Unmarshal(m[1], &rows); err != nil {
 		return nil
 	}
-	return modelRefs(rows)
+	return rows
+}
+
+// declaredRevRe reads PLUGIN_REV off a written plugin, unanchored at the end
+// for the CRLF reason declaredModelsRe gives.
+var declaredRevRe = regexp.MustCompile(`(?m)^const PLUGIN_REV = (\d+);`)
+
+// declaredRevision is the template revision that wrote the installed plugin,
+// 1 for a plugin from before the line existed.
+func declaredRevision(home string) int {
+	body, err := os.ReadFile(PluginEntryFile(home))
+	if err != nil {
+		return 0
+	}
+	m := declaredRevRe.FindSubmatch(body)
+	if m == nil {
+		return 1
+	}
+	n, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+func sameRows(a, b []pluginRow) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // declaredModelsRe reads the rows a written plugin carries. It matches the one

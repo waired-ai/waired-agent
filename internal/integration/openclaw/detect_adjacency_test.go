@@ -45,8 +45,11 @@ func TestRenderedPluginIsWhatTheReadersRead(t *testing.T) {
 	if got, ok := DeclaredContextWindow(home); !ok || got != 200704 {
 		t.Errorf("DeclaredContextWindow = %d, %v — the window line and its reader moved apart", got, ok)
 	}
-	if got := declaredRefs(home); len(got) != 1 || got[0] != "waired/default" {
-		t.Errorf("declaredRefs = %v — the rows line and its reader moved apart", got)
+	if got := modelRefs(declaredRows(home)); len(got) != 1 || got[0] != "waired/default" {
+		t.Errorf("declaredRows = %v — the rows line and its reader moved apart", got)
+	}
+	if got := declaredRevision(home); got != pluginRevision {
+		t.Errorf("declaredRevision = %d, want %d — the revision line and its reader moved apart", got, pluginRevision)
 	}
 }
 
@@ -76,8 +79,11 @@ func TestReadersSurviveCRLFLineEndings(t *testing.T) {
 	if got, ok := DeclaredContextWindow(home); !ok || got != 200704 {
 		t.Errorf("DeclaredContextWindow = %d, %v — the window line is unreadable with CRLF endings", got, ok)
 	}
-	if got := declaredRefs(home); len(got) != 1 || got[0] != "waired/default" {
-		t.Errorf("declaredRefs = %v — the rows line is unreadable with CRLF endings", got)
+	if got := modelRefs(declaredRows(home)); len(got) != 1 || got[0] != "waired/default" {
+		t.Errorf("declaredRows = %v — the rows line is unreadable with CRLF endings", got)
+	}
+	if got := declaredRevision(home); got != pluginRevision {
+		t.Errorf("declaredRevision = %d — the revision line is unreadable with CRLF endings", got)
 	}
 	if r := detect.OpenClaw(home, "http://127.0.0.1:9473/v1"); !r.Configured || r.Stale {
 		t.Errorf("the detector cannot read a CRLF plugin: %+v", r)

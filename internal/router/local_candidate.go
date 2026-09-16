@@ -51,8 +51,9 @@ type LocalNode struct {
 	// reason line say why the turn is running on something else.
 	PendingModelID string
 	// ContextWindow is the input-token window the engine is loaded with.
-	// 0 = this device declares nothing, the same reading a peer's 0 has,
-	// and never "serves nothing".
+	// 0 = this device declares nothing, the same reading a peer's 0 has:
+	// not an answer to a request with a window floor (waired-agent#1395),
+	// and never "serves nothing" to one without.
 	ContextWindow int
 	// Capacity is how many conversations this host holds warm, and
 	// CapacityUsed how many are in use right now — the same pair a peer
@@ -68,11 +69,15 @@ type LocalNode struct {
 }
 
 // localDrop says why this device was not put in the candidate list, for the
-// reasons the caller assembles. Only the floor needs to travel: it is the
-// operator's own setting and the surfaces name it rather than reporting a
-// fault (waired-agent#1128).
+// reasons the caller assembles. Only the two floors need to travel: the
+// operator's size floor, which the surfaces name rather than reporting a
+// fault (waired-agent#1128), and the request's window floor, which they name
+// the same way (waired-agent#1395).
 type localDrop struct {
 	belowFloor bool
+	// belowWindow: the request's window floor removed this device, which
+	// the terminal refusal names (waired-agent#1395).
+	belowWindow bool
 }
 
 // buildLocalCandidate turns a LocalNode into a candidate in the same shape,
@@ -101,11 +106,6 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 	if s.publicOnly() {
 		return meshCandidate{}, false, drop
 	}
-	// The declared-window filter, in the one place that now applies it to
-	// both sides (waired#1031). 0 is "declares nothing" and is left alone.
-	if minWindow > 0 && ln.ContextWindow > 0 && ln.ContextWindow < minWindow {
-		return meshCandidate{}, false, drop
-	}
 	entries := want.ollama
 	if ln.Runtime == catalog.RuntimeVLLM {
 		entries = want.vllm
@@ -115,6 +115,14 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 		// This device does not serve what the request wants. Identical to
 		// the peer rule: a request that NAMED a model finds no candidate
 		// here, and one that named none matched against the whole catalog.
+		return meshCandidate{}, false, drop
+	}
+	// The declared-window filter, in the one place that now applies it to
+	// both sides (waired#1031). 0 falls short of every floor, exactly as a
+	// peer's 0 does (waired-agent#1395), and like the peer rule it is
+	// tested after the model matched, so the drop is the floor's alone.
+	if minWindow > 0 && ln.ContextWindow < minWindow {
+		drop.belowWindow = true
 		return meshCandidate{}, false, drop
 	}
 	// The operator's floor, on this device's own engine as much as on a
@@ -252,6 +260,9 @@ func localCandidateReason(ln LocalNode, in bool, drop localDrop, servingOff bool
 		// Verbatim from the arm this replaces, so an operator reads the
 		// string they already know.
 		return fmt.Sprintf("this computer's model is smaller than %q (routing floor)", floor)
+	case drop.belowWindow:
+		return fmt.Sprintf("this computer's context window (%d tokens) is under what this request needs, so only other computers are candidates",
+			ln.ContextWindow)
 	case !in && !ln.Serving:
 		return fmt.Sprintf("this computer is not serving right now (local state for %q is %q), so only other computers are candidates",
 			ln.ModelID, localState)

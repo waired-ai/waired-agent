@@ -1578,6 +1578,8 @@ func anthropicSelectionStatus(err error) int {
 		errors.Is(err, router.ErrRuntimeNotInstalled):
 		return http.StatusServiceUnavailable
 	case router.BelowModelSizeFloor(err),
+		errors.Is(err, router.ErrPinnedPeerDeclined),
+		errors.Is(err, router.ErrNoEndpointForWindow),
 		errors.Is(err, router.ErrModelNotFound),
 		errors.Is(err, router.ErrCapabilityNotMet),
 		errors.Is(err, router.ErrLocalInferenceOff),
@@ -1612,6 +1614,19 @@ func respondAnthropicSelectionError(w http.ResponseWriter, class string, err err
 		// is the setting to change, which is the exit specific to this one.
 		writeFailClosed(w, class, "waired_model_too_small",
 			err.Error()+". Change the floor with `waired worker set --min-model-size`")
+	case errors.Is(err, router.ErrPinnedPeerDeclined):
+		// A pinned computer a filter rules out. Ahead of the window arm: a
+		// pin declined for its window names the one computer considered,
+		// which is more use than a sentence about all of them
+		// (waired-agent#1395).
+		stagePinnedPeerDeclinedHeaders(w, err)
+		writeFailClosed(w, class, "waired_pinned_peer_declined", pinnedPeerDeclinedDetail(err))
+	case errors.Is(err, router.ErrNoEndpointForWindow):
+		// The row's window floor removed every computer. It used to reach
+		// the default arm as a 500, which Claude Code retries ten times
+		// before saying anything (waired-agent#1395).
+		stageWindowFloorHeaders(w, err)
+		writeFailClosed(w, class, "waired_no_computer_for_window", windowFloorDetail(err))
 	case errors.Is(err, router.ErrModelNotFound):
 		writeFailClosed(w, class, "not_found_error", err.Error())
 	case errors.Is(err, router.ErrCapabilityNotMet):
