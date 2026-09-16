@@ -337,6 +337,8 @@ $script:ContractBlocking = @{
     '801' = $true    # waired-agent#801: a log-level choice survives a service restart (FIXED)
     '832' = $true    # waired-agent#832: the installer registers the tray autostart, or says it could not (FIXED)
     '793' = $true    # waired-agent#793: the uninstall summary describes what happened (FIXED)
+    # Blocking from the start: the fix ships in the same PR.
+    '1398' = $true   # waired-agent#1398: uninstall removes Claude Code's Waired settings when waired.exe is missing, refused, or old (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -2899,6 +2901,19 @@ try {
         else { ItBad ("Get-ExitCodeReason wrong: " + ($bad -join '; ')) }
     }
 
+    # --- the Claude Code leftovers rules, under Windows PowerShell 5.1 --------
+    # (waired-agent#1398) uninstall.ps1 carries its own copy of the Go rules for
+    # a host whose waired.exe is gone or refused. installtest-pwsh.ps1 runs the
+    # shared corpus through it under pwsh 7; this is the 5.1 run, which is the
+    # one production gets and the one whose JSON and array handling differ.
+    ItStep "uninstall.ps1 Claude Code leftovers rules vs the corpus, PowerShell 5.1 (#1398)"
+    $corpusOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $Root 'scripts\dev\claude-leftovers-corpus.ps1') -Script $uninstallPs1 2>&1
+    $corpusRc = $LASTEXITCODE
+    $corpusOut | Where-Object { "$_" -notmatch '^ok ' } | ForEach-Object { Write-Host "  $_" }
+    if ($corpusRc -eq 0) { ItOk "uninstall.ps1's copy of the rules matches the corpus under 5.1" }
+    else { ItBad "uninstall.ps1's copy of the rules disagrees with the corpus under 5.1 (exit $corpusRc)" }
+
     # --- Test-InstallComplete / Format-LockHolders ---------------------------
     # The two predicates #660 turns on, lifted out and driven directly for the
     # same reason as the decoder above: the wrecked half-state they exist for
@@ -4644,6 +4659,14 @@ if ($Contract) {
   }
 }
 '@
+        # (waired-agent#1398) And the two per-user files nothing removed before
+        # it: the retired picker cache and the retired Stop hook's markers.
+        $retiredCache = Join-Path $env:USERPROFILE '.claude\cache\gateway-models.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $retiredCache) -Force | Out-Null
+        Set-Content -LiteralPath $retiredCache -Encoding ascii -Value '{"baseUrl":"http://127.0.0.1:9472","models":[{"id":"claude-waired-auto"}]}'
+        $fallbackMarkers = Join-Path $env:LOCALAPPDATA 'waired\claude-fallback'
+        New-Item -ItemType Directory -Path $fallbackMarkers -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $fallbackMarkers 'session') -Encoding ascii -Value '1'
         & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes
         if ($LASTEXITCODE -ne 0) { ItBad "uninstall.ps1 -Clean exited $LASTEXITCODE" }
 
@@ -4676,6 +4699,8 @@ if ($Contract) {
         $claudeSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
         if ((Get-Content -LiteralPath $claudeSettings -Raw -ErrorAction SilentlyContinue) -match 'waired') { $left += '~/.claude/settings.json waired entry' }
         if (Get-ChildItem -LiteralPath (Join-Path $env:USERPROFILE '.claude\skills') -Filter '*waired*' -ErrorAction SilentlyContinue) { $left += '~/.claude/skills waired skill' }
+        if (Test-Path -LiteralPath $retiredCache) { $left += '~/.claude/cache/gateway-models.json (#1398)' }
+        if (Test-Path -LiteralPath $fallbackMarkers) { $left += '%LOCALAPPDATA%\waired\claude-fallback (#1398)' }
         foreach ($g in @(
                 (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Waired'),
                 (Join-Path $env:AppData     'Microsoft\Windows\Start Menu\Programs\Waired'))) {
@@ -4697,6 +4722,66 @@ if ($Contract) {
             'uninstall.ps1 on an empty system does not claim Waired was removed' 'waired-agent'
         ItSoft '793' ($emptyOut -notmatch 'was deregistered') `
             'uninstall.ps1 on an empty system does not claim a deregistration' 'waired-agent'
+
+        # (waired-agent#1398) The host the issue was filed from: Waired gone,
+        # Claude Code still pointed at it. Every leg above ran with a working
+        # waired.exe; these are the three ways it isn't there to help.
+        #   missing  no InstallDir at all
+        #   blocked  a waired.exe Windows won't start (a non-PE file fails
+        #            CreateProcess the way a Smart App Control refusal does)
+        #   old      a waired.exe that runs, exits 0, and removes nothing --
+        #            a build too old to know a rule
+        $corpusDir = Join-Path $Root 'packaging\install\testdata\claude-leftovers'
+        $userClaude = Join-Path $env:USERPROFILE '.claude'
+        $plantLeftovers = {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $managedJson), (Join-Path $userClaude 'skills\waired-doctor'), `
+                (Split-Path -Parent $retiredCache), $fallbackMarkers -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $corpusDir 'managed\01-windows-host-waired-gone\input.json') -Destination $managedJson -Force
+            Copy-Item -LiteralPath (Join-Path $corpusDir 'user-settings\02-everything-waired-wrote\input.json') -Destination (Join-Path $userClaude 'settings.json') -Force
+            Copy-Item -LiteralPath (Join-Path $corpusDir 'retired-cache\01-windows-host-waired-gone\input.json') -Destination $retiredCache -Force
+            Set-Content -LiteralPath (Join-Path $userClaude 'skills\waired-doctor\SKILL.md') -Encoding ascii -Value 'skill'
+            Set-Content -LiteralPath (Join-Path $fallbackMarkers 'session') -Encoding ascii -Value '1'
+        }
+        $leftoversOnHost = {
+            $l = @()
+            if (Test-Path -LiteralPath $managedJson) { $l += 'managed-settings.json' }
+            if ((Get-Content -LiteralPath (Join-Path $userClaude 'settings.json') -Raw -ErrorAction SilentlyContinue) -match 'waired') { $l += '~/.claude/settings.json' }
+            if (Test-Path -LiteralPath (Join-Path $userClaude 'skills\waired-doctor\SKILL.md')) { $l += 'waired-doctor skill' }
+            if (Test-Path -LiteralPath $retiredCache) { $l += 'gateway-models.json' }
+            if (Test-Path -LiteralPath $fallbackMarkers) { $l += 'claude-fallback' }
+            return ,$l
+        }
+        $noopDir = Join-Path $env:TEMP ('waired-noop-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $noopDir -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $noopDir 'main.go') -Encoding ascii -Value "package main`n`nfunc main() {}"
+        $noopExe = Join-Path $noopDir 'waired.exe'
+        & go build -o $noopExe (Join-Path $noopDir 'main.go')
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $noopExe)) { ItBad "couldn't build the no-op waired.exe for the #1398 old-binary leg" }
+        foreach ($leg in @('missing', 'blocked', 'old')) {
+            & $plantLeftovers
+            if ($leg -eq 'blocked') {
+                New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $InstallDir 'waired.exe') -Encoding ascii -Value 'not a program'
+            } elseif ($leg -eq 'old') {
+                New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+                Copy-Item -LiteralPath $noopExe -Destination (Join-Path $InstallDir 'waired.exe') -Force
+            }
+            $legOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Yes *>&1 | Out-String)
+            Write-Host $legOut
+            $legLeft = & $leftoversOnHost
+            ItSoft '1398' ($legLeft.Count -eq 0) `
+                "uninstall.ps1 with waired.exe $leg removes Claude Code's Waired settings (left: $(if ($legLeft) { $legLeft -join ', ' } else { 'none' }))" 'waired-agent'
+            if ($leg -eq 'blocked') {
+                ItSoft '1398' ($legOut -match "waired\.exe couldn't run") `
+                    'uninstall.ps1 says a refused waired.exe couldn''t run instead of swallowing it' 'waired-agent'
+            }
+            if ($leg -eq 'missing') {
+                ItSoft '1398' ($legOut -match 'Claude Code still had Waired''s settings' -and $legOut -notmatch 'Nothing to remove') `
+                    'uninstall.ps1 on a host with only Claude Code leftovers says so' 'waired-agent'
+            }
+            Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Item -LiteralPath $noopDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     catch {
         ItBad "uninstall teardown threw: $($_.Exception.Message)"

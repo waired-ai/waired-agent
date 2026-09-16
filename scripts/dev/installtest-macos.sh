@@ -2059,6 +2059,76 @@ MANAGEDEOF
     ok "nothing of ours in the System keychain (#680)"
   fi
 
+  # --- waired-agent#1398: Claude Code settings Waired left behind ----------
+  #
+  # Everything above ran with a working binary. The issue came from a host
+  # whose binary was already gone, where the uninstall used to skip the whole
+  # Claude teardown and leave the managed ANTHROPIC_BASE_URL routing every
+  # Claude Code request at a port nothing listens on.
+  it_step "#1398 Claude Code leftovers without a working binary"
+
+  # The JavaScript for Automation copy of the rules, on the one OS that runs it.
+  if corpus_out="$(bash "$ROOT/scripts/dev/claude-leftovers-corpus.sh" osascript 2>&1)"; then
+    ok "uninstall.sh's JavaScript copy of the rules matches the corpus (#1398)"
+  else
+    printf '%s\n' "$corpus_out" | grep -v '^ok' >&2
+    bad "uninstall.sh's JavaScript copy of the rules disagrees with the corpus (#1398)"
+  fi
+
+  cl_corpus="$ROOT/packaging/install/testdata/claude-leftovers"
+  cl_user="$(id -un)"
+  cl_claude="$HOME/.claude"
+  cl_markers="$HOME/Library/Caches/waired/claude-fallback"
+  cl_bindir="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
+  for cl_leg in missing blocked; do
+    sudo mkdir -p "$MANAGED_DIR"
+    sudo cp "$cl_corpus/managed/02-posix-current-form/input.json" "$MANAGED_JSON"
+    mkdir -p "$cl_claude/skills/waired-status" "$cl_claude/cache" "$cl_markers"
+    # The wrapped status line: the one case where the file is rewritten rather
+    # than removed, so the owner of the rewritten file can be checked.
+    cp "$cl_corpus/user-settings/03-wrapped-statusline-restored/input.json" "$cl_claude/settings.json"
+    printf 'wrapper\n' >"$cl_claude/waired-statusline.sh"
+    printf 'npx ccusage statusline\n' >"$cl_claude/waired-statusline.orig"
+    printf 'skill\n' >"$cl_claude/skills/waired-status/SKILL.md"
+    cp "$cl_corpus/retired-cache/01-windows-host-waired-gone/input.json" "$cl_claude/cache/gateway-models.json"
+    printf '1' >"$cl_markers/session"
+    if [ "$cl_leg" = blocked ]; then
+      # Present and executable, and not a program: the exec fails the way a
+      # binary the OS refuses does.
+      printf 'not a program\n' | sudo tee "$cl_bindir/waired" >/dev/null
+      sudo chmod +x "$cl_bindir/waired"
+    fi
+    cl_rc=0
+    sudo -E bash "$ROOT/packaging/install/uninstall.sh" --yes >/tmp/it-uninstall-1398.log 2>&1 || cl_rc=$?
+    [ "$cl_rc" -eq 0 ] || bad "uninstall.sh ($cl_leg binary) exited $cl_rc: $(tail -5 /tmp/it-uninstall-1398.log)"
+    cl_left=""
+    if sudo test -e "$MANAGED_JSON"; then cl_left="$cl_left managed-settings.json"; fi
+    if grep -q 'waired' "$cl_claude/settings.json" 2>/dev/null; then cl_left="$cl_left settings.json"; fi
+    for f in waired-statusline.sh waired-statusline.orig skills/waired-status/SKILL.md cache/gateway-models.json; do
+      if [ -e "$cl_claude/$f" ]; then cl_left="$cl_left $f"; fi
+    done
+    if [ -e "$cl_markers" ]; then cl_left="$cl_left claude-fallback"; fi
+    if [ -z "$cl_left" ]; then
+      ok "uninstall.sh with the binary $cl_leg removed Claude Code's Waired settings (#1398)"
+    else
+      cat /tmp/it-uninstall-1398.log >&2
+      bad "uninstall.sh with the binary $cl_leg left:$cl_left (#1398)"
+    fi
+    if grep -q '"npx ccusage statusline"' "$cl_claude/settings.json" 2>/dev/null \
+       && [ "$(stat -f %Su "$cl_claude/settings.json")" = "$cl_user" ]; then
+      ok "the user's own status line is back, in a file they still own ($cl_leg binary, #1398)"
+    else
+      bad "settings.json after the $cl_leg-binary uninstall: owner $(stat -f %Su "$cl_claude/settings.json" 2>/dev/null || echo none), $(cat "$cl_claude/settings.json" 2>/dev/null || echo absent)"
+    fi
+    if [ "$cl_leg" = blocked ]; then
+      grep -qF "waired claude disable failed. Checking Claude Code's settings by hand." /tmp/it-uninstall-1398.log \
+        && ok "a binary that won't run is reported, not swallowed (#1398)" \
+        || bad "the uninstall didn't say the binary failed (#1398)"
+    fi
+    rm -f "$cl_claude/settings.json"
+    sudo rm -f "$cl_bindir/waired"
+  done
+
   # --- the other real deployment: a root shell (waired-agent#990) ---------
   #
   # Everything above ran the installer un-rooted, the way the documented

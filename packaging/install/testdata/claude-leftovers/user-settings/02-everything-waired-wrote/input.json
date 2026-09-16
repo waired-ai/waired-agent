@@ -1,0 +1,24 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "command -v waired >/dev/null 2>&1 && exec waired claude statusline"
+  },
+  "modelPicker": {
+    "options": [
+      {
+        "model": "claude-waired-any",
+        "label": "Waired",
+        "description": "Your computers"
+      },
+      {
+        "model": "claude-waired-local[1m]",
+        "label": "Waired local"
+      }
+    ]
+  },
+  "model": "claude-waired-any[1m]",
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-waired-any",
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
+  }
+}

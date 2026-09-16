@@ -1,0 +1,18 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gateway.example.com"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "command -v waired >/dev/null 2>&1 && waired claude _fallback-hook || true",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

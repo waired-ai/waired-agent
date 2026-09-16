@@ -295,6 +295,10 @@ public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 # through, so counting here cannot drift from what the steps did.
 $script:DidCount = 0
 $script:Deregistered = $false
+# How many of those steps took out Claude Code settings Waired left behind
+# (waired-agent#1398), so Show-Done can tell "Waired removed" from "Waired was
+# already gone, and Claude Code still pointed at it".
+$script:ClaudeLeftovers = 0
 
 # Common-Run runs a scriptblock, or prints its description in dry-run mode.
 function Common-Run {
@@ -565,6 +569,438 @@ function Remove-FromMachinePath {
 }
 
 # -------------------------------------------------------------------
+# Claude Code settings Waired left behind (waired-agent#1398)
+# -------------------------------------------------------------------
+#
+# `waired.exe claude disable` is what removes Waired from Claude Code's
+# settings, and until #1398 this script ran nothing else: with waired.exe
+# missing, refused by Windows (Smart App Control and the like), or too old to
+# know a newer rule, the settings stayed. The one that matters is
+# %ProgramFiles%\ClaudeCode\managed-settings.json: its ANTHROPIC_BASE_URL beats
+# anything a user sets, so Claude Code went on sending every request to a
+# 127.0.0.1 port nothing listened on, and failed with "Connection refused -- a
+# firewall or proxy may be blocking it".
+#
+# So after the binary has had its turn (or when there is no binary), the
+# functions below look at the files themselves and take out what is Waired's.
+# The rules are the Go removers', copied: claudemanaged.RemoveWithOptions for
+# the managed file, and runClaudeDisable's per-user steps for
+# ~/.claude/settings.json. packaging/install/testdata/claude-leftovers holds
+# the cases both copies are held to (scripts/install runs the Go side,
+# installtest-pwsh.ps1 and installtest-windows.ps1 run these functions), and
+# uninstall.sh carries the same copy for Linux and macOS.
+#
+# The JSON is read and written by the small parser below rather than
+# ConvertFrom-Json / ConvertTo-Json, because those two differ between
+# PowerShell 5.1 and 7 in ways that change a file they only round-trip: 5.1
+# refuses keys that differ only by case, 7 turns date-looking strings into
+# DateTime, both unroll one-element arrays and cap nesting depth. This parser
+# keeps keys case-sensitive and in order, and numbers exactly as written.
+#
+# The parse and rule functions are pure (text in, result out; no Common-*, no
+# files), so the harnesses lift them out of this file and run the corpus
+# through them.
+
+# ConvertFrom-ClaudeJson parses JSON text into OrderedDictionary (objects),
+# ArrayList (arrays), string, bool, $null, and a PSCustomObject carrying the
+# number as written. Throws on anything that is not a single JSON value.
+function ConvertFrom-ClaudeJson {
+    param([string]$Text)
+    $state = @{ T = $Text; I = 0 }
+    $value = Read-ClaudeJsonValue -S $state
+    Skip-ClaudeJsonSpace -S $state
+    if ($state.I -lt $state.T.Length) { throw "json: unexpected text at offset $($state.I)" }
+    return ,$value
+}
+
+function Skip-ClaudeJsonSpace {
+    param($S)
+    while ($S.I -lt $S.T.Length -and " `t`r`n".IndexOf($S.T[$S.I]) -ge 0) { $S.I++ }
+}
+
+# Read-ClaudeJsonValue reads one value at $S.I. Every return goes through the
+# comma operator: an ArrayList returned bare would be unrolled by the pipeline.
+function Read-ClaudeJsonValue {
+    param($S)
+    Skip-ClaudeJsonSpace -S $S
+    if ($S.I -ge $S.T.Length) { throw 'json: unexpected end of text' }
+    $c = $S.T[$S.I]
+    if ($c -eq [char]'{') {
+        $S.I++
+        $obj = New-Object System.Collections.Specialized.OrderedDictionary
+        Skip-ClaudeJsonSpace -S $S
+        if ($S.I -lt $S.T.Length -and $S.T[$S.I] -eq [char]'}') { $S.I++; return ,$obj }
+        while ($true) {
+            Skip-ClaudeJsonSpace -S $S
+            if ($S.I -ge $S.T.Length -or $S.T[$S.I] -ne [char]'"') { throw "json: expected a key at offset $($S.I)" }
+            $key = Read-ClaudeJsonString -S $S
+            Skip-ClaudeJsonSpace -S $S
+            if ($S.I -ge $S.T.Length -or $S.T[$S.I] -ne [char]':') { throw "json: expected a colon at offset $($S.I)" }
+            $S.I++
+            $member = Read-ClaudeJsonValue -S $S
+            # Last one wins, as in encoding/json.
+            if ($obj.Contains($key)) { $obj.Remove($key) }
+            $obj.Add($key, $member)
+            Skip-ClaudeJsonSpace -S $S
+            if ($S.I -ge $S.T.Length) { throw 'json: unexpected end of text' }
+            if ($S.T[$S.I] -eq [char]',') { $S.I++; continue }
+            if ($S.T[$S.I] -eq [char]'}') { $S.I++; return ,$obj }
+            throw "json: expected a comma or a closing brace at offset $($S.I)"
+        }
+    }
+    if ($c -eq [char]'[') {
+        $S.I++
+        $list = New-Object System.Collections.ArrayList
+        Skip-ClaudeJsonSpace -S $S
+        if ($S.I -lt $S.T.Length -and $S.T[$S.I] -eq [char]']') { $S.I++; return ,$list }
+        while ($true) {
+            $item = Read-ClaudeJsonValue -S $S
+            [void]$list.Add($item)
+            Skip-ClaudeJsonSpace -S $S
+            if ($S.I -ge $S.T.Length) { throw 'json: unexpected end of text' }
+            if ($S.T[$S.I] -eq [char]',') { $S.I++; continue }
+            if ($S.T[$S.I] -eq [char]']') { $S.I++; return ,$list }
+            throw "json: expected a comma or a closing bracket at offset $($S.I)"
+        }
+    }
+    if ($c -eq [char]'"') { return ,(Read-ClaudeJsonString -S $S) }
+    foreach ($lit in @(@('true', $true), @('false', $false), @('null', $null))) {
+        $word = [string]$lit[0]
+        if ($S.I + $word.Length -le $S.T.Length -and
+            [string]::CompareOrdinal($S.T, $S.I, $word, 0, $word.Length) -eq 0) {
+            $S.I += $word.Length
+            return ,$lit[1]
+        }
+    }
+    $m = [regex]::Match($S.T.Substring($S.I), '^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?')
+    if ($m.Success -and $m.Length -gt 0) {
+        $S.I += $m.Length
+        return ,([pscustomobject]@{ ClaudeJsonNumber = $m.Value })
+    }
+    throw "json: unexpected character at offset $($S.I)"
+}
+
+function Read-ClaudeJsonString {
+    param($S)
+    $S.I++
+    $sb = New-Object System.Text.StringBuilder
+    while ($true) {
+        if ($S.I -ge $S.T.Length) { throw 'json: unterminated string' }
+        $ch = $S.T[$S.I]
+        if ($ch -eq [char]'"') { $S.I++; return $sb.ToString() }
+        if ([int]$ch -lt 0x20) { throw "json: control character in a string at offset $($S.I)" }
+        if ($ch -ne [char]'\') { [void]$sb.Append($ch); $S.I++; continue }
+        if ($S.I + 1 -ge $S.T.Length) { throw 'json: unterminated string' }
+        $esc = $S.T[$S.I + 1]
+        $S.I += 2
+        switch -CaseSensitive ([string]$esc) {
+            '"' { [void]$sb.Append([char]'"') }
+            '\' { [void]$sb.Append([char]'\') }
+            '/' { [void]$sb.Append([char]'/') }
+            'b' { [void]$sb.Append([char]8) }
+            'f' { [void]$sb.Append([char]12) }
+            'n' { [void]$sb.Append([char]10) }
+            'r' { [void]$sb.Append([char]13) }
+            't' { [void]$sb.Append([char]9) }
+            'u' {
+                if ($S.I + 4 -gt $S.T.Length) { throw 'json: short unicode escape' }
+                $hex = $S.T.Substring($S.I, 4)
+                if ($hex -notmatch '^[0-9a-fA-F]{4}$') { throw 'json: bad unicode escape' }
+                [void]$sb.Append([char][Convert]::ToInt32($hex, 16))
+                $S.I += 4
+            }
+            default { throw "json: bad escape at offset $($S.I - 1)" }
+        }
+    }
+}
+
+# ConvertTo-ClaudeJson writes what ConvertFrom-ClaudeJson reads, indented by
+# two spaces the way encoding/json's MarshalIndent does.
+function ConvertTo-ClaudeJson {
+    param($Value, [int]$Depth = 0)
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [bool]) { if ($Value) { return 'true' } else { return 'false' } }
+    if ($Value -is [string]) { return (Format-ClaudeJsonString -Value $Value) }
+    $pad = '  ' * ($Depth + 1)
+    $end = '  ' * $Depth
+    if ($Value -is [System.Collections.Specialized.OrderedDictionary]) {
+        if ($Value.Count -eq 0) { return '{}' }
+        $parts = New-Object System.Collections.ArrayList
+        foreach ($k in @($Value.Keys)) {
+            [void]$parts.Add($pad + (Format-ClaudeJsonString -Value ([string]$k)) + ': ' + (ConvertTo-ClaudeJson -Value $Value[$k] -Depth ($Depth + 1)))
+        }
+        return "{`n" + ($parts -join ",`n") + "`n$end}"
+    }
+    if ($Value -is [System.Collections.ArrayList]) {
+        if ($Value.Count -eq 0) { return '[]' }
+        $parts = New-Object System.Collections.ArrayList
+        foreach ($item in $Value) {
+            [void]$parts.Add($pad + (ConvertTo-ClaudeJson -Value $item -Depth ($Depth + 1)))
+        }
+        return "[`n" + ($parts -join ",`n") + "`n$end]"
+    }
+    if ($Value.PSObject.Properties['ClaudeJsonNumber']) { return [string]$Value.ClaudeJsonNumber }
+    throw "json: can't write a value of type $($Value.GetType().FullName)"
+}
+
+function Format-ClaudeJsonString {
+    param([string]$Value)
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append([char]'"')
+    foreach ($ch in $Value.ToCharArray()) {
+        $n = [int]$ch
+        if ($ch -eq [char]'"') { [void]$sb.Append('\"') }
+        elseif ($ch -eq [char]'\') { [void]$sb.Append('\\') }
+        elseif ($n -eq 10) { [void]$sb.Append('\n') }
+        elseif ($n -eq 13) { [void]$sb.Append('\r') }
+        elseif ($n -eq 9) { [void]$sb.Append('\t') }
+        elseif ($n -lt 0x20) { [void]$sb.Append('\u' + $n.ToString('x4')) }
+        else { [void]$sb.Append($ch) }
+    }
+    [void]$sb.Append([char]'"')
+    return $sb.ToString()
+}
+
+# Test-WairedModelId is claudecode.IsWairedModelID: lower-cased, trimmed, every
+# "[1m]" tier marker taken out, then any id containing "waired" is Waired's.
+function Test-WairedModelId {
+    param([string]$Id)
+    $bare = $Id.Trim().ToLowerInvariant()
+    while ($true) {
+        $i = $bare.IndexOf('[1m]', [StringComparison]::Ordinal)
+        if ($i -lt 0) { break }
+        $bare = $bare.Remove($i, 4)
+    }
+    return $bare.Contains('waired')
+}
+
+# Test-ClaudeJsonObject / Test-ClaudeJsonList name the two container types the
+# parser produces, so the rules below read as JSON shapes.
+function Test-ClaudeJsonObject { param($Value) return ($Value -is [System.Collections.Specialized.OrderedDictionary]) }
+function Test-ClaudeJsonList { param($Value) return ($Value -is [System.Collections.ArrayList]) }
+
+# Test-ClaudeHookEntryIsWaired is claudemanaged's entryCommandAny: an entry is
+# Waired's when any command inside its hooks list carries one of the markers.
+function Test-ClaudeHookEntryIsWaired {
+    param($Entry, [string[]]$Markers)
+    if (-not (Test-ClaudeJsonObject $Entry) -or -not $Entry.Contains('hooks')) { return $false }
+    $inner = $Entry['hooks']
+    if (-not (Test-ClaudeJsonList $inner)) { return $false }
+    foreach ($h in $inner) {
+        if (-not (Test-ClaudeJsonObject $h) -or -not $h.Contains('command')) { continue }
+        $cmd = $h['command']
+        if (-not ($cmd -is [string])) { continue }
+        foreach ($m in $Markers) {
+            if ($cmd.Contains($m)) { return $true }
+        }
+    }
+    return $false
+}
+
+# Get-ClaudePickerKind is claudecode.DetectPickerLineup on a parsed value:
+# 'none', 'ours' (every row a Waired id), 'foreign', or 'unreadable' (a shape
+# encoding/json would refuse to decode into the lineup).
+function Get-ClaudePickerKind {
+    param($Picker)
+    if ($null -eq $Picker) { return 'none' }
+    if (-not (Test-ClaudeJsonObject $Picker)) { return 'unreadable' }
+    if ($Picker.Contains('replaceBuiltInOptions')) {
+        $r = $Picker['replaceBuiltInOptions']
+        if (-not ($null -eq $r -or $r -is [bool])) { return 'unreadable' }
+    }
+    if (-not $Picker.Contains('options') -or $null -eq $Picker['options']) { return 'none' }
+    $options = $Picker['options']
+    if (-not (Test-ClaudeJsonList $options)) { return 'unreadable' }
+    $models = New-Object System.Collections.ArrayList
+    foreach ($row in $options) {
+        if ($null -eq $row) { [void]$models.Add(''); continue }
+        if (-not (Test-ClaudeJsonObject $row)) { return 'unreadable' }
+        foreach ($field in @('model', 'label', 'description')) {
+            if ($row.Contains($field) -and -not ($null -eq $row[$field] -or $row[$field] -is [string])) { return 'unreadable' }
+        }
+        $model = ''
+        if ($row.Contains('model') -and $row['model'] -is [string]) { $model = $row['model'] }
+        [void]$models.Add($model)
+    }
+    if ($models.Count -eq 0) { return 'none' }
+    foreach ($model in $models) {
+        if (-not (Test-WairedModelId $model)) { return 'foreign' }
+    }
+    return 'ours'
+}
+
+# Edit-ClaudeLeftovers applies one kind of file's rules to its text.
+#
+#   -Kind managed  %ProgramFiles%\ClaudeCode\managed-settings.json
+#   -Kind user     ~\.claude\settings.json
+#   -Kind cache    ~\.claude\cache\gateway-models.json
+#
+# State is 'unchanged', 'rewrite' (Text is the new file), 'delete', or
+# 'unreadable' (not a JSON object this can read; left alone). Removed names
+# what was taken out, Kept names a value left behind that may be Waired's, and
+# Wrapper says the status line was Waired's wrapper script, whose files the
+# caller removes.
+function Edit-ClaudeLeftovers {
+    param([string]$Kind, [string]$Text)
+    $removed = New-Object System.Collections.ArrayList
+    $kept = New-Object System.Collections.ArrayList
+    $result = [pscustomobject]@{ State = 'unchanged'; Text = ''; Removed = @(); Kept = @(); Wrapper = $false }
+    if ($Text.Length -gt 0 -and [int]$Text[0] -eq 0xFEFF) { $Text = $Text.Substring(1) }
+    if ($Text.Trim().Length -eq 0) { return $result }
+    try {
+        $doc = ConvertFrom-ClaudeJson -Text $Text
+    } catch {
+        $result.State = 'unreadable'
+        return $result
+    }
+    if (-not (Test-ClaudeJsonObject $doc)) {
+        # A bare null reads as an empty settings file to claudecode, and as
+        # nothing to claudemanaged; neither changes it.
+        if ($null -ne $doc) { $result.State = 'unreadable' }
+        return $result
+    }
+
+    $loopback = 'http://127.0.0.1:'
+    if ($Kind -eq 'managed') {
+        if ($doc.Contains('env') -and (Test-ClaudeJsonObject $doc['env'])) {
+            $envBlock = $doc['env']
+            $envChanged = $false
+            $url = $envBlock['ANTHROPIC_BASE_URL']
+            if ($url -is [string] -and $url.StartsWith($loopback, [StringComparison]::Ordinal)) {
+                $envBlock.Remove('ANTHROPIC_BASE_URL')
+                [void]$removed.Add('ANTHROPIC_BASE_URL')
+                $envChanged = $true
+                foreach ($pair in @(@('CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY', '1'),
+                                    @('CLAUDE_CODE_AUTO_COMPACT_WINDOW', '200000'),
+                                    @('CLAUDE_CODE_MAX_CONTEXT_TOKENS', '250000'))) {
+                    $cur = $envBlock[$pair[0]]
+                    if ($cur -is [string] -and $cur -ceq $pair[1]) {
+                        $envBlock.Remove($pair[0])
+                        [void]$removed.Add($pair[0])
+                    }
+                }
+                $window = $envBlock['CLAUDE_CODE_MAX_CONTEXT_TOKENS']
+                if ($window -is [string]) { [void]$kept.Add("CLAUDE_CODE_MAX_CONTEXT_TOKENS=$window") }
+            }
+            $sub = $envBlock['CLAUDE_CODE_SUBAGENT_MODEL']
+            if ($sub -is [string] -and $sub -ceq 'waired/subagent') {
+                $envBlock.Remove('CLAUDE_CODE_SUBAGENT_MODEL')
+                [void]$removed.Add('CLAUDE_CODE_SUBAGENT_MODEL')
+                $envChanged = $true
+            }
+            if ($envChanged -and $envBlock.Count -eq 0) { $doc.Remove('env') }
+        }
+        if ($doc.Contains('hooks') -and (Test-ClaudeJsonObject $doc['hooks'])) {
+            $hooks = $doc['hooks']
+            $events = @(
+                @('Stop', @('waired claude _fallback-hook')),
+                @('SessionStart', @('waired claude _picker write --from-managed', 'waired claude _models-cache write --from-managed'))
+            )
+            foreach ($ev in $events) {
+                $name = [string]$ev[0]
+                if (-not $hooks.Contains($name) -or -not (Test-ClaudeJsonList $hooks[$name])) { continue }
+                $keepEntries = New-Object System.Collections.ArrayList
+                $dropped = 0
+                foreach ($entry in $hooks[$name]) {
+                    if (Test-ClaudeHookEntryIsWaired -Entry $entry -Markers $ev[1]) { $dropped++ } else { [void]$keepEntries.Add($entry) }
+                }
+                if ($dropped -eq 0) { continue }
+                if ($keepEntries.Count -eq 0) { $hooks.Remove($name) } else { $hooks[$name] = $keepEntries }
+                [void]$removed.Add("hooks.$name")
+                if ($hooks.Count -eq 0) { $doc.Remove('hooks') }
+            }
+        }
+    } elseif ($Kind -eq 'user') {
+        if ($doc.Contains('statusLine')) {
+            $line = $doc['statusLine']
+            $cmd = ''
+            $shapeOk = $null -eq $line -or (Test-ClaudeJsonObject $line)
+            if (Test-ClaudeJsonObject $line) {
+                if ($line.Contains('type') -and -not ($null -eq $line['type'] -or $line['type'] -is [string])) { $shapeOk = $false }
+                if ($line.Contains('command')) {
+                    if ($line['command'] -is [string]) { $cmd = $line['command'] }
+                    elseif ($null -ne $line['command']) { $shapeOk = $false }
+                }
+            }
+            if ($shapeOk -and $cmd.Contains('waired claude statusline')) {
+                $doc.Remove('statusLine')
+                $doc.Remove('waired_original_statusLine')
+                [void]$removed.Add('statusLine')
+            } elseif ($shapeOk -and $cmd.Contains('waired-statusline')) {
+                if ($doc.Contains('waired_original_statusLine')) {
+                    $doc['statusLine'] = $doc['waired_original_statusLine']
+                } else {
+                    $doc.Remove('statusLine')
+                }
+                $doc.Remove('waired_original_statusLine')
+                [void]$removed.Add('statusLine')
+                $result.Wrapper = $true
+            }
+        }
+        if ($doc.Contains('modelPicker') -and (Get-ClaudePickerKind -Picker $doc['modelPicker']) -eq 'ours') {
+            $doc.Remove('modelPicker')
+            [void]$removed.Add('modelPicker')
+        }
+        if ($doc.Contains('model')) {
+            $model = $doc['model']
+            if ($model -is [string] -and $model -ne '' -and (Test-WairedModelId $model)) {
+                $doc.Remove('model')
+                [void]$removed.Add('model')
+            }
+        }
+        if ($doc.Contains('env') -and (Test-ClaudeJsonObject $doc['env'])) {
+            $envBlock = $doc['env']
+            $allStrings = $true
+            foreach ($k in @($envBlock.Keys)) { if (-not ($envBlock[$k] -is [string])) { $allStrings = $false } }
+            $cur = ''
+            if ($envBlock.Contains('CLAUDE_CODE_SUBAGENT_MODEL')) { $cur = [string]$envBlock['CLAUDE_CODE_SUBAGENT_MODEL'] }
+            if ($allStrings -and ($cur -eq '' -or (Test-WairedModelId $cur))) {
+                $envChanged = $false
+                foreach ($k in @('CLAUDE_CODE_SUBAGENT_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE')) {
+                    if ($envBlock.Contains($k)) { $envBlock.Remove($k); [void]$removed.Add($k); $envChanged = $true }
+                }
+                if ($envChanged -and $envBlock.Count -eq 0) { $doc.Remove('env') }
+            }
+        }
+    } elseif ($Kind -eq 'cache') {
+        $base = ''
+        if ($doc.Contains('baseUrl')) {
+            if ($doc['baseUrl'] -is [string]) { $base = $doc['baseUrl'] }
+            elseif ($null -ne $doc['baseUrl']) { return $result }
+        }
+        $models = $null
+        if ($doc.Contains('models')) { $models = $doc['models'] }
+        if ($null -ne $models -and -not (Test-ClaudeJsonList $models)) { return $result }
+        if (-not $base.StartsWith($loopback, [StringComparison]::Ordinal) -or $null -eq $models -or $models.Count -eq 0) { return $result }
+        foreach ($row in $models) {
+            if ($null -eq $row) { return $result }
+            if (-not (Test-ClaudeJsonObject $row)) { return $result }
+            $id = ''
+            if ($row.Contains('id')) {
+                if ($row['id'] -is [string]) { $id = $row['id'] } elseif ($null -ne $row['id']) { return $result }
+            }
+            if (-not (Test-WairedModelId $id)) { return $result }
+        }
+        $result.State = 'delete'
+        $result.Removed = @('gateway-models.json')
+        return $result
+    } else {
+        throw "Edit-ClaudeLeftovers: unknown kind $Kind"
+    }
+
+    if ($removed.Count -eq 0) { return $result }
+    $result.Removed = @($removed)
+    $result.Kept = @($kept)
+    if ($doc.Count -eq 0) {
+        $result.State = 'delete'
+    } else {
+        $result.State = 'rewrite'
+        $result.Text = (ConvertTo-ClaudeJson -Value $doc) + "`n"
+    }
+    return $result
+}
+
+# -------------------------------------------------------------------
 # Removal steps
 # -------------------------------------------------------------------
 
@@ -576,16 +1012,192 @@ function Remove-FromMachinePath {
 # (waired#750/#754). The per-user half (~/.claude, HKCU) is Remove-UserIntegration.
 function Remove-ClaudeManaged {
     $exe = Join-Path $InstallDir 'waired.exe'
-    if (-not (Test-Path -LiteralPath $exe)) { return }
-    Common-Log "Removing Claude Code managed settings (+ any retired MITM proxy artifacts)"
-    # Output is NOT discarded here (it is in the per-user twin, which runs
-    # unelevated and can only report the permission it does not have). This is
-    # the elevated call that owns the machine-wide file, and when it cannot
-    # confirm CLAUDE_CODE_MAX_CONTEXT_TOKENS as waired's it keeps the key and
-    # says so on stderr -- a warning written for the uninstall transcript
-    # (waired-agent#1174, measured leaking on macOS in waired-agent#1308).
-    Common-Run "$exe claude disable" {
-        try { & $exe claude disable 2>&1 | ForEach-Object { Write-Host $_ } } catch { }
+    if (Test-Path -LiteralPath $exe) {
+        Common-Log "Removing Claude Code managed settings (+ any retired MITM proxy artifacts)"
+        # Output is NOT discarded here (it is in the per-user twin, which runs
+        # unelevated and can only report the permission it does not have). This is
+        # the elevated call that owns the machine-wide file, and when it cannot
+        # confirm CLAUDE_CODE_MAX_CONTEXT_TOKENS as waired's it keeps the key and
+        # says so on stderr -- a warning written for the uninstall transcript
+        # (waired-agent#1174, measured leaking on macOS in waired-agent#1308).
+        Common-Run "$exe claude disable" {
+            $run = Invoke-WairedExe -Exe $exe -ArgList @('claude', 'disable') -Show
+            Write-WairedExeProblem -Run $run -Command 'waired.exe claude disable'
+        }
+    }
+    # Whatever the binary did or could not do, look at the file itself
+    # (waired-agent#1398).
+    Repair-ManagedClaudeSettings
+}
+
+# Invoke-WairedExe runs waired.exe and reports whether it ran and how it
+# exited, instead of letting either question disappear into a catch.
+#
+# $ErrorActionPreference is 'Continue' for the call. Under this script's
+# 'Stop', Windows PowerShell 5.1 turns the first stderr line of a native
+# command into a terminating error, 2>$null or not -- and `claude disable`
+# writes a warning to stderr before it gets to the per-user cleanup, so the
+# old try { } catch { } could stop reading it half way through its work.
+function Invoke-WairedExe {
+    param([string]$Exe, [string[]]$ArgList, [switch]$Show)
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Exe @ArgList 2>&1
+        $code = $LASTEXITCODE
+        if ($Show) { foreach ($line in @($out)) { Write-Host "$line" } }
+        return [pscustomobject]@{ Ran = $true; ExitCode = $code; Error = '' }
+    } catch {
+        # The innermost exception is the OS's own words. The outer message
+        # carries PowerShell's position in this script on the same line, which
+        # says nothing about waired.exe
+        # (docs/knowledges/20260829/1740-sac-verdict-is-per-file-and-moves.md, 5).
+        $inner = $_.Exception
+        while ($inner.InnerException) { $inner = $inner.InnerException }
+        $why = (($inner.Message.Trim()) -split "`r?`n")[0]
+        return [pscustomobject]@{ Ran = $false; ExitCode = -1; Error = $why }
+    }
+}
+
+# Write-WairedExeProblem says when waired.exe couldn't start or failed, and that
+# the settings are checked by hand next -- the same shape Remove-WairedService
+# uses for waired-agent.exe.
+function Write-WairedExeProblem {
+    param($Run, [string]$Command)
+    if (-not $Run.Ran) {
+        Common-Warn "waired.exe couldn't run ($($Run.Error)). Checking Claude Code's settings by hand."
+    } elseif ($Run.ExitCode -ne 0) {
+        Common-Warn "$Command exited with code $($Run.ExitCode). Checking Claude Code's settings by hand."
+    }
+}
+
+function Read-ClaudeSettingsText {
+    param([string]$Path)
+    # ReadAllText drops a UTF-8 BOM; Edit-ClaudeLeftovers drops one too, for
+    # text that arrives some other way.
+    return [System.IO.File]::ReadAllText($Path)
+}
+
+# Write-ClaudeSettingsText replaces the file through a temporary sibling, so a
+# failure part way leaves the old file rather than half a new one. UTF-8
+# without a BOM, as Claude Code and waired write it.
+function Write-ClaudeSettingsText {
+    param([string]$Path, [string]$Text)
+    $tmp = "$Path.waired-tmp"
+    [System.IO.File]::WriteAllText($tmp, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+# Invoke-ClaudeLeftoverEdit reads one settings file, applies its rules, and
+# makes the change through Common-Run, so -DryRun previews it and Show-Done
+# counts it. Returns the edit, or $null when the file couldn't be read.
+function Invoke-ClaudeLeftoverEdit {
+    param([string]$Kind, [string]$Path)
+    try {
+        $text = Read-ClaudeSettingsText -Path $Path
+    } catch {
+        Common-Warn "Couldn't read $Path ($($_.Exception.Message.Trim())). If it still has Waired's settings, remove them by hand."
+        return $null
+    }
+    $edit = Edit-ClaudeLeftovers -Kind $Kind -Text $text
+    if ($edit.State -eq 'unreadable') {
+        if ($text -match 'waired|127\.0\.0\.1') {
+            Common-Warn "$Path isn't JSON the uninstaller can read, so it was left unchanged. If it still has Waired's settings, remove them by hand."
+        }
+        return $edit
+    }
+    if ($edit.State -eq 'unchanged') { return $edit }
+    $script:ClaudeLeftovers++
+    # The cache is removed whole, so it is named as a file rather than as a
+    # list of keys.
+    if ($Kind -eq 'cache') { Common-Log "Removing $Path, which Waired left behind" }
+    else { Common-Log "Removing Waired's settings from $Path ($($edit.Removed -join ', '))" }
+    $newText = $edit.Text
+    if ($edit.State -eq 'delete') {
+        Common-Run "Remove-Item $Path" { Remove-Item -LiteralPath $Path -Force }
+    } else {
+        Common-Run "rewrite $Path" { Write-ClaudeSettingsText -Path $Path -Text $newText }
+    }
+    foreach ($k in $edit.Kept) {
+        Common-Warn "Left $k in $Path. It couldn't be confirmed as Waired's, so remove it by hand if you didn't set it."
+    }
+    return $edit
+}
+
+# Remove-ClaudeLeftoverPath deletes a file or directory Waired alone wrote,
+# counted like the settings edits.
+function Remove-ClaudeLeftoverPath {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $script:ClaudeLeftovers++
+    Common-Log "Removing $Path, which Waired left behind"
+    Common-Run "Remove-Item $Path" { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# Remove-EmptyDir removes a directory only when nothing is left in it, so a
+# user's own skill or cache file under a name Waired also used keeps its home.
+function Remove-EmptyDir {
+    param([string]$Path)
+    if ($DryRun) { return }
+    if ((Test-Path -LiteralPath $Path -PathType Container) -and
+        @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Get-ClaudeManagedSettingsPath is claudemanaged's managedSettingsPath for
+# Windows: %ProgramFiles%\ClaudeCode\managed-settings.json.
+function Get-ClaudeManagedSettingsPath {
+    $pf = $env:ProgramFiles
+    if (-not $pf) { $pf = 'C:\Program Files' }
+    return (Join-Path (Join-Path $pf 'ClaudeCode') 'managed-settings.json')
+}
+
+# MACHINE phase half of waired-agent#1398: the managed settings file.
+function Repair-ManagedClaudeSettings {
+    $path = Get-ClaudeManagedSettingsPath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    # With waired.exe present, a dry run has already printed the step that
+    # does this; previewing the same removals again would list them twice.
+    if ($DryRun -and (Test-Path -LiteralPath (Join-Path $InstallDir 'waired.exe'))) { return }
+    [void](Invoke-ClaudeLeftoverEdit -Kind managed -Path $path)
+}
+
+# PER-USER phase half of waired-agent#1398: this user's ~\.claude settings,
+# the skills, the retired picker cache, and the retired Stop hook's markers.
+function Repair-UserClaudeSettings {
+    $userHome = $env:USERPROFILE
+    if (-not $userHome) { return }
+    if ($DryRun -and (Test-Path -LiteralPath (Join-Path $InstallDir 'waired.exe'))) { return }
+    $claudeDir = Join-Path $userHome '.claude'
+
+    $settings = Join-Path $claudeDir 'settings.json'
+    if (Test-Path -LiteralPath $settings -PathType Leaf) {
+        $edit = Invoke-ClaudeLeftoverEdit -Kind user -Path $settings
+        if ($edit -and $edit.Wrapper) {
+            foreach ($name in @('waired-statusline.ps1', 'waired-statusline.sh', 'waired-statusline.orig')) {
+                Remove-ClaudeLeftoverPath -Path (Join-Path $claudeDir $name)
+            }
+        }
+    }
+
+    $skills = Join-Path $claudeDir 'skills'
+    foreach ($name in @('waired-status', 'waired-doctor', 'waired-route')) {
+        $dir = Join-Path $skills $name
+        Remove-ClaudeLeftoverPath -Path (Join-Path $dir 'SKILL.md')
+        Remove-EmptyDir -Path $dir
+    }
+
+    $configDir = $env:CLAUDE_CONFIG_DIR
+    if (-not $configDir) { $configDir = $claudeDir }
+    $cache = Join-Path (Join-Path $configDir 'cache') 'gateway-models.json'
+    if (Test-Path -LiteralPath $cache -PathType Leaf) {
+        [void](Invoke-ClaudeLeftoverEdit -Kind cache -Path $cache)
+    }
+
+    if ($env:LOCALAPPDATA) {
+        $cacheRoot = Join-Path $env:LOCALAPPDATA 'waired'
+        Remove-ClaudeLeftoverPath -Path (Join-Path $cacheRoot 'claude-fallback')
+        Remove-EmptyDir -Path $cacheRoot
     }
 }
 
@@ -782,12 +1394,16 @@ function Remove-UserIntegration {
     if (Test-Path -LiteralPath $exe) {
         Common-Log "Removing per-user Claude / coding-agent integration (as the current user)"
         Common-Run "$exe claude disable" {
-            try { & $exe claude disable 2>$null | Out-Null } catch { }
+            $run = Invoke-WairedExe -Exe $exe -ArgList @('claude', 'disable')
+            Write-WairedExeProblem -Run $run -Command 'waired.exe claude disable'
         }
         Common-Run "$exe unlink" {
-            try { & $exe unlink 2>$null | Out-Null } catch { }
+            [void](Invoke-WairedExe -Exe $exe -ArgList @('unlink'))
         }
     }
+    # Whatever the binary did or could not do, look at this user's files
+    # themselves (waired-agent#1398).
+    Repair-UserClaudeSettings
     Remove-TrayAutostart
     if ($Clean) { Remove-UserStateDir }
 }
@@ -1116,6 +1732,17 @@ function Show-Done {
         return
     }
 
+    # Everything this run did was Claude Code settings Waired left behind:
+    # Waired itself was already gone (waired-agent#1398).
+    if ($script:DidCount -eq $script:ClaudeLeftovers) {
+        if ($DryRun) {
+            Common-Log "${tag}Waired isn't installed, but Claude Code still has Waired's settings. They would be removed."
+        } else {
+            Common-Log "Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect."
+        }
+        return
+    }
+
     if ($DryRun) {
         if ($Clean) {
             Common-Log "${tag}Waired would be removed, with its state."
@@ -1187,6 +1814,9 @@ if (-not $DryRun -and -not (Test-IsAdmin)) {
     # printed the itemised summary in its own window and in the log.
     Section 'Done'
     Common-Log "Uninstall finished in the Administrator window (full log: $LogPath)."
+    if ($script:ClaudeLeftovers -gt 0) {
+        Common-Log "Waired's settings were removed from Claude Code. Restart Claude Code for the change to take effect."
+    }
     if ($Clean) {
         Common-Log "Open a new shell to refresh PATH."
     } else {

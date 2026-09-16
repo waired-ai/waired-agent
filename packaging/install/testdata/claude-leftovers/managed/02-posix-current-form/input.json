@@ -1,0 +1,19 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9472",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "command -v waired >/dev/null 2>&1 && waired claude _picker write --from-managed --peer-entries 3 || true",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

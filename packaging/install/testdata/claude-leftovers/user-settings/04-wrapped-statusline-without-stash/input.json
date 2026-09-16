@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:/Users/user/.claude/waired-statusline.ps1\""
+  },
+  "theme": "dark"
+}

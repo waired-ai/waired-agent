@@ -1,0 +1,6 @@
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
+    "MY_VAR": "a"
+  }
+}

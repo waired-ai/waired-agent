@@ -130,6 +130,45 @@ the inference engine with every model you downloaded. It cannot be undone.
   at [app.waired.ai](https://app.waired.ai).
 - **Nothing is billed.** Waired never charged per message.
 
+## Claude Code says Connection refused after Waired is gone
+
+If Waired was removed some other way, for example deleted by hand, removed
+with `apt remove waired`, or removed by an older uninstaller, Claude Code's
+machine-wide settings can still point at Waired. Every request then fails
+with:
+
+```
+API Error: Connection refused — a firewall or proxy may be blocking it (ConnectionRefused)
+```
+
+Run the uninstall command from [Remove the app](#remove-the-app) again. It
+finds and removes the leftover Claude Code settings even though the `waired`
+program is gone, and ends with:
+
+```
+[waired] Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect.
+```
+
+Then restart Claude Code.
+
+On Linux, the uninstaller needs `python3` to edit the settings file. Without
+it, the file is left alone and the uninstaller warns:
+
+```
+[waired] Warning: /etc/claude-code/managed-settings.json may still point Claude Code at Waired, and there's no python3 on this computer to check it. Remove Waired's settings from it by hand.
+```
+
+To fix it by hand, open the file as an administrator and remove two things:
+`ANTHROPIC_BASE_URL` if its value starts with `http://127.0.0.1:`, and any
+hook whose command contains `waired claude`. Leave everything else in the
+file as it is, then restart Claude Code.
+
+| | Managed settings file |
+|---|---|
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Linux | `/etc/claude-code/managed-settings.json` |
+
 ## Start over on the same computer
 
 To wipe and reinstall in one step, run the installer with the clean option.

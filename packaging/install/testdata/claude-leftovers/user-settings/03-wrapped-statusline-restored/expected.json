@@ -1,0 +1,8 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "npx ccusage statusline",
+    "padding": 0
+  },
+  "theme": "light"
+}

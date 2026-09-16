@@ -27,11 +27,13 @@ package claudecode
 // baseUrl against the live ANTHROPIC_BASE_URL by exact string.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // retiredCacheFile is the name Claude Code gives its discovery cache.
@@ -94,6 +96,80 @@ func RemoveRetiredCache(configDir, home, baseURL string) (removed bool, err erro
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
+	}
+	return true, nil
+}
+
+// retiredCacheLoopbackPrefix is the start of every base URL waired has
+// written into managed settings, and so of every baseUrl a cache waired
+// wrote can carry. The same signature claudemanaged recognises its own
+// ANTHROPIC_BASE_URL by.
+const retiredCacheLoopbackPrefix = "http://127.0.0.1:"
+
+// RemoveRetiredCacheOwned is RemoveRetiredCache for `waired claude disable`
+// and the uninstallers, where there is no live base URL to compare against:
+// disable removes the managed ANTHROPIC_BASE_URL before it reaches the
+// per-user cleanup, and a host whose binary is already gone never had one to
+// hand over. Asking for an exact match there meant the cache was never removed
+// at all (waired-agent#1398).
+//
+// So ownership is recognised by the document alone: a loopback baseUrl and a
+// non-empty model list in which every id is a Waired id. A cache naming any
+// other gateway, or listing any other model, is left alone. A leading UTF-8
+// BOM is tolerated, as it is for the settings files.
+//
+// packaging/install/uninstall.ps1 and uninstall.sh carry the same rule for a
+// host with no binary; packaging/install/testdata/claude-leftovers holds the
+// cases all of them are held to.
+func RemoveRetiredCacheOwned(configDir, home string) (removed bool, err error) {
+	path := RetiredCachePath(configDir, home)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, nil
+	}
+	var doc retiredCacheDoc
+	if json.Unmarshal(bytes.TrimPrefix(b, utf8BOM), &doc) != nil {
+		return false, nil
+	}
+	if !strings.HasPrefix(doc.BaseURL, retiredCacheLoopbackPrefix) || len(doc.Models) == 0 {
+		return false, nil
+	}
+	for _, m := range doc.Models {
+		if !IsWairedModelID(m.ID) {
+			return false, nil
+		}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
+}
+
+// fallbackMarkerDir is where the retired Stop hook kept one small file per
+// Claude Code session, under the user's cache directory
+// (os.UserCacheDir()/waired/claude-fallback). The hook and its writer went in
+// #1184 and nothing removed the directory after them (waired-agent#1398).
+const fallbackMarkerDir = "claude-fallback"
+
+// RemoveRetiredFallbackMarkers deletes <cacheDir>/waired/claude-fallback, and
+// <cacheDir>/waired with it when that leaves it empty. cacheDir is the
+// invoking user's os.UserCacheDir(). Nothing under that directory was ever
+// anyone's but waired's, so there is no ownership question to ask of its
+// contents. An empty cacheDir or a missing directory reports false.
+func RemoveRetiredFallbackMarkers(cacheDir string) (removed bool, err error) {
+	if cacheDir == "" {
+		return false, nil
+	}
+	parent := filepath.Join(cacheDir, "waired")
+	dir := filepath.Join(parent, fallbackMarkerDir)
+	if _, err := os.Lstat(dir); err != nil {
+		return false, nil
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	if entries, err := os.ReadDir(parent); err == nil && len(entries) == 0 {
+		_ = os.Remove(parent)
 	}
 	return true, nil
 }

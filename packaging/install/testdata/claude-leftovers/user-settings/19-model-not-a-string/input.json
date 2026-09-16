@@ -1,0 +1,7 @@
+{
+  "model": 7,
+  "statusLine": {
+    "type": "command",
+    "command": "waired claude statusline"
+  }
+}

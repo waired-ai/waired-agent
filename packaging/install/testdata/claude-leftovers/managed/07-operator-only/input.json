@@ -1,0 +1,10 @@
+{
+  "env": {
+    "DISABLE_TELEMETRY": "1"
+  },
+  "permissions": {
+    "deny": [
+      "Bash(curl:*)"
+    ]
+  }
+}

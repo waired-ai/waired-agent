@@ -1,0 +1,6 @@
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "waired/subagent",
+    "HTTPS_PROXY": "http://proxy.example:3128"
+  }
+}

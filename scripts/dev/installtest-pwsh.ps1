@@ -677,6 +677,71 @@ Invoke-Case -Label '#314 install log is per-run, not a fixed name' -Params $fres
 if ($LASTEXITCODE -ne 0) { Write-Bad 'installtest-swap.ps1 reported failures' }
 else { Write-Ok 'installtest-swap.ps1 (Extract-Zip stages, then replaces per file)' }
 
+# 14. #1398 -- Claude Code settings Waired left behind. uninstall.ps1 used to
+#     hand all of them to waired.exe and skip them when it was missing, and
+#     Claude Code then kept sending every request to a dead 127.0.0.1 port.
+$UninstallPs1 = Join-Path (Split-Path -Parent $InstallPs1) 'uninstall.ps1'
+
+# 14a. The rules, lifted out of uninstall.ps1 and run over the shared corpus
+#      under this pwsh; installtest-windows.ps1 runs the same under 5.1.
+& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'claude-leftovers-corpus.ps1') -Script $UninstallPs1 |
+    Where-Object { $_ -notmatch '^ok ' } | ForEach-Object { Write-Host "        $_" }
+if ($LASTEXITCODE -ne 0) { Write-Bad '#1398 uninstall.ps1''s copy of the rules disagrees with the corpus' }
+else { Write-Ok '#1398 uninstall.ps1''s copy of the rules matches the corpus' }
+
+# 14b. End to end, -DryRun, on a host whose waired.exe is gone.
+$claudeCorpus = Join-Path (Split-Path -Parent $InstallPs1) 'testdata/claude-leftovers'
+$claudeDir = Join-Path $Host_USER '.claude'
+$claudeManaged = Join-Path (Join-Path $Host_PF 'ClaudeCode') 'managed-settings.json'
+$claudeFallback = Join-Path $Host_USER 'AppData/Local/waired/claude-fallback'
+function Set-ClaudeLeftovers {
+    param([switch]$Remove)
+    foreach ($p in @((Split-Path -Parent $claudeManaged), $claudeDir, (Split-Path -Parent $claudeFallback))) {
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
+    }
+    if ($Remove) { return }
+    foreach ($d in @((Split-Path -Parent $claudeManaged), (Join-Path $claudeDir 'skills/waired-doctor'),
+                     (Join-Path $claudeDir 'cache'), $claudeFallback)) {
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+    }
+    Copy-Item -LiteralPath (Join-Path $claudeCorpus 'managed/01-windows-host-waired-gone/input.json') -Destination $claudeManaged
+    Copy-Item -LiteralPath (Join-Path $claudeCorpus 'user-settings/01-windows-host-waired-gone/input.json') -Destination (Join-Path $claudeDir 'settings.json')
+    Copy-Item -LiteralPath (Join-Path $claudeCorpus 'retired-cache/01-windows-host-waired-gone/input.json') -Destination (Join-Path $claudeDir 'cache/gateway-models.json')
+    Set-Content -LiteralPath (Join-Path $claudeDir 'skills/waired-doctor/SKILL.md') -Value 'skill'
+    Set-Content -LiteralPath (Join-Path $claudeFallback 'session') -Value '1'
+}
+Set-InstalledVersion ''
+Set-ClaudeLeftovers
+Invoke-Case -Label '#1398 dry run without waired.exe names every Claude Code leftover' `
+    -Params @{ DryRun = $true; Yes = $true } -Env @{ IT_INSTALL_PS1 = $UninstallPs1 } `
+    -Assert @('settings from .*managed-settings\.json \(ANTHROPIC_BASE_URL, CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, CLAUDE_CODE_SUBAGENT_MODEL, hooks\.Stop, hooks\.SessionStart\)',
+              '\[dry-run\] Remove-Item .*managed-settings\.json',
+              'settings\.json \(statusLine\)',
+              'waired-doctor.SKILL\.md, which Waired left behind',
+              'gateway-models\.json, which Waired left behind',
+              'claude-fallback, which Waired left behind',
+              'Claude Code still has Waired''s settings',
+              '!Nothing would be removed')
+if ((Test-Path -LiteralPath $claudeManaged) -and (Test-Path -LiteralPath (Join-Path $claudeDir 'settings.json'))) {
+    Write-Ok '#1398 the dry run left the files as they were'
+} else {
+    Write-Bad '#1398 the dry run changed a file'
+}
+
+# 14c. With waired.exe present the dry run shows `claude disable` once rather
+#      than previewing the same removals a second time.
+Set-InstalledVersion '9.9.9'
+Invoke-Case -Label '#1398 dry run with waired.exe previews claude disable, not the removals too' `
+    -Params @{ DryRun = $true; Yes = $true } -Env @{ IT_INSTALL_PS1 = $UninstallPs1 } `
+    -Assert @('\[dry-run\] .*waired\.exe claude disable', '!Removing Waired''s settings')
+Set-InstalledVersion ''
+
+# 14d. A host with no leftovers still says so (#793 is not undone by #1398).
+Set-ClaudeLeftovers -Remove
+Invoke-Case -Label '#1398 a clean host still says nothing would be removed' `
+    -Params @{ DryRun = $true; Yes = $true } -Env @{ IT_INSTALL_PS1 = $UninstallPs1 } `
+    -Assert @('Nothing would be removed', '!left behind', '!still has Waired')
+
 } finally {
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 }

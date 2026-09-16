@@ -591,6 +591,51 @@ MANAGEDEOF
     ok "uninstall.sh --clean removed the managed-settings file"
   fi
 
+  # waired-agent#1398: the package is gone now, which is the host that issue
+  # came from -- Claude Code still pointed at Waired, no binary left to run
+  # `claude disable`. The uninstall used to skip the whole Claude teardown
+  # here; it has to find the files itself (python3 on Linux).
+  local cl_corpus="$ROOT/packaging/install/testdata/claude-leftovers"
+  gx "$guest" mkdir -p /etc/claude-code
+  gx "$guest" cp "$cl_corpus/managed/02-posix-current-form/input.json" "$it_managed_json"
+  local cl_home=''
+  if [ "$IT_LOCAL" = 1 ]; then
+    # Per-user files only where the uninstall runs under sudo for a real user:
+    # an LXD guest runs it as root, whose home is not what this is about.
+    cl_home="$HOME"
+    mkdir -p "$cl_home/.claude/skills/waired-status" "$cl_home/.claude/cache" "$cl_home/.cache/waired/claude-fallback"
+    cp "$cl_corpus/user-settings/03-wrapped-statusline-restored/input.json" "$cl_home/.claude/settings.json"
+    printf 'wrapper\n' >"$cl_home/.claude/waired-statusline.sh"
+    printf 'skill\n' >"$cl_home/.claude/skills/waired-status/SKILL.md"
+    cp "$cl_corpus/retired-cache/01-windows-host-waired-gone/input.json" "$cl_home/.claude/cache/gateway-models.json"
+    printf '1' >"$cl_home/.cache/waired/claude-fallback/session"
+  fi
+  if ! gx "$guest" sh "$ROOT/packaging/install/uninstall.sh" --yes >/tmp/it-uninstall-1398.log 2>&1; then
+    bad "uninstall.sh with the package already removed failed (waired-agent#1398)"; sed 's/^/    /' /tmp/it-uninstall-1398.log >&2 || true
+  fi
+  if gx "$guest" test -e "$it_managed_json"; then
+    bad "uninstall.sh without the waired binary left the managed settings behind (waired-agent#1398)"
+    gx "$guest" cat "$it_managed_json" | sed 's/^/    /' >&2 || true
+    sed 's/^/    /' /tmp/it-uninstall-1398.log >&2 || true
+    gx "$guest" rm -f "$it_managed_json" || true
+  else
+    ok "uninstall.sh without the waired binary removed the managed settings (waired-agent#1398)"
+  fi
+  if [ -n "$cl_home" ]; then
+    local cl_left=''
+    for f in .claude/waired-statusline.sh .claude/skills/waired-status/SKILL.md .claude/cache/gateway-models.json .cache/waired/claude-fallback; do
+      if [ -e "$cl_home/$f" ]; then cl_left="$cl_left $f"; fi
+    done
+    if [ -z "$cl_left" ] && grep -q '"npx ccusage statusline"' "$cl_home/.claude/settings.json" 2>/dev/null \
+       && [ "$(stat -c %U "$cl_home/.claude/settings.json")" = "$(id -un)" ]; then
+      ok "the per-user leftovers went and the user's own status line came back, still theirs (waired-agent#1398)"
+    else
+      bad "per-user Claude Code leftovers after the uninstall:${cl_left:- none}; settings.json owner $(stat -c %U "$cl_home/.claude/settings.json" 2>/dev/null || echo none)"
+      sed 's/^/    /' /tmp/it-uninstall-1398.log >&2 || true
+    fi
+    rm -f "$cl_home/.claude/settings.json"
+  fi
+
   # THE REGRESSION BAR for waired-agent#1031: the process, not the plan.
   if [ -n "$tray_pid" ]; then
     if kill -0 "$tray_pid" 2>/dev/null; then

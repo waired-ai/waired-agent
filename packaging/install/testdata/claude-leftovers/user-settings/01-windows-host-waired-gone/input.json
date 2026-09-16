@@ -1,0 +1,14 @@
+{
+  "effortLevel": "high",
+  "model": "opus[1m]",
+  "permissions": {
+    "allow": [
+      "mcp__example"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "waired claude statusline"
+  },
+  "theme": "dark"
+}

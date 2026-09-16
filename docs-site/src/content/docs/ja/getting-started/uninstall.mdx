@@ -110,6 +110,36 @@ Wairedアプリが開いている場合は、アンインストーラが先に�
 - **デバイスはアカウントから消えます。** 削除したときにパソコンがオフラインだった場合は、一覧に残ることがあります。[app.waired.ai](https://app.waired.ai)のデバイス一覧から削除してください。
 - **料金は発生しません。** Wairedはメッセージごとの課金をしていません。
 
+## <a id="claude-code-says-connection-refused-after-waired-is-gone"></a>Wairedを消したあとにClaude CodeがConnection refusedと言う
+
+Wairedを別の方法で消した場合、たとえば手で削除した、`apt remove waired`で削除した、古いアンインストーラで削除した場合は、Claude Codeのコンピュータ全体の設定がWairedを指したまま残ることがあります。すると、すべてのリクエストが次のエラーで失敗します。
+
+```
+API Error: Connection refused — a firewall or proxy may be blocking it (ConnectionRefused)
+```
+
+[アプリだけ削除する](#remove-the-app)のアンインストールコマンドをもう一度実行します。`waired`プログラムが無くても、残っているClaude Codeの設定を見つけて削除し、最後に次のように表示します。
+
+```
+[waired] Waired wasn't installed, but Claude Code still had Waired's settings. They were removed. Restart Claude Code for the change to take effect.
+```
+
+そのあと、Claude Codeを再起動します。
+
+Linuxでは、アンインストーラが設定ファイルを編集するのに`python3`が必要です。無い場合はファイルに触れず、次の警告を表示します。
+
+```
+[waired] Warning: /etc/claude-code/managed-settings.json may still point Claude Code at Waired, and there's no python3 on this computer to check it. Remove Waired's settings from it by hand.
+```
+
+手で直すには、管理者としてファイルを開き、2つを削除します。値が`http://127.0.0.1:`で始まる`ANTHROPIC_BASE_URL`と、コマンドに`waired claude`を含むフックです。ファイルのほかの内容はそのまま残し、Claude Codeを再起動します。
+
+| | managed settingsのファイル |
+|---|---|
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Linux | `/etc/claude-code/managed-settings.json` |
+
 ## <a id="start-over-on-the-same-computer"></a>同じパソコンで最初からやり直す
 
 初期化と再インストールを一度に行うには、cleanオプションを付けてインストーラを実行します。上の「すべて削除する」を行ったうえで、新規にインストールします。

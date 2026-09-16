@@ -1,0 +1,18 @@
+{
+  "env": {
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "200704"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "command -v waired >/dev/null 2>&1 && waired claude _models-cache write --from-managed --peer-entries 5 || true",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+# The Claude Code leftovers corpus is compared byte for byte ("expected.unchanged")
+# by harnesses on all three OSes, and one case starts with a UTF-8 BOM on
+# purpose. A Windows checkout with core.autocrlf would rewrite the line endings
+# under them, so the files are kept exactly as committed (waired-agent#1398).
+packaging/install/testdata/** -text
