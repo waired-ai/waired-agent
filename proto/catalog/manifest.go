@@ -612,13 +612,13 @@ func (m *Manifest) Validate() error {
 		default:
 			return fmt.Errorf("manifest %s variant %s: unknown format %q", m.ModelID, v.VariantID, v.Format)
 		}
-		if isAWQ(v.Quantization) {
-			if v.Source.Type != SourceHuggingFace {
-				return fmt.Errorf("manifest %s variant %s: AWQ quantization requires source.type=huggingface", m.ModelID, v.VariantID)
-			}
-			if !strings.HasPrefix(v.Source.RepoID, "Qwen/") {
-				return fmt.Errorf("manifest %s variant %s: AWQ source.repo_id %q must come from the official Qwen/ org", m.ModelID, v.VariantID, v.Source.RepoID)
-			}
+		// An AWQ build is a Hugging Face repository. Which org publishes it
+		// is not checked here: the owner allowed quantizations published
+		// outside the model's own org (2026-09-16, waired-ai/waired#1427),
+		// which retired the rule that AWQ comes from Qwen/ only. The agent's
+		// bundled-catalog tests hold such a variant to a pinned revision.
+		if isAWQ(v.Quantization) && v.Source.Type != SourceHuggingFace {
+			return fmt.Errorf("manifest %s variant %s: AWQ quantization requires source.type=huggingface", m.ModelID, v.VariantID)
 		}
 		if v.ActiveParams < 0 {
 			return fmt.Errorf("manifest %s variant %s: active_params must be ≥ 0, got %d", m.ModelID, v.VariantID, v.ActiveParams)
