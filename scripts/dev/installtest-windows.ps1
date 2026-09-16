@@ -1754,9 +1754,15 @@ function Invoke-AsStandardUser {
 }
 
 # Filtered/basic token of the CURRENT user via `runas /trustlevel:0x20000` — a
-# SAFER-restricted token, the same class as a UAC-filtered admin (#751's exact
-# context). runas detaches immediately (its exit code only reflects launch),
-# hence the wrapper + marker poll.
+# SAFER-restricted token. For file access it is the same class as a UAC-filtered
+# admin (#751's exact context: the Administrators SID is deny-only). It is NOT a
+# stand-in for anything that asks whether the process is elevated: started from
+# this elevated job, waired's elevation probe (TokenElevation) still answered
+# "elevated" under it, so `waired claude enable` withheld its elevation hint
+# over the same ERROR_ACCESS_DENIED a filtered administrator gets
+# (waired-agent#1419, run 35119626572). Use Invoke-AsInteractiveUser for those.
+# runas detaches immediately (its exit code only reflects launch), hence the
+# wrapper + marker poll.
 function Invoke-AsBasicToken {
     param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env, [int]$TimeoutSec = 45)
     $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
@@ -4437,32 +4443,54 @@ if ($Contract) {
                 ((Get-Content -LiteralPath $ms -Raw -ErrorAction SilentlyContinue) -match 'ANTHROPIC_BASE_URL')
         ItSoft '749' $msOk "waired claude enable (exit $claudeEnableExit) writes $ms with ANTHROPIC_BASE_URL"
 
-        # (waired-agent#1419) The same command without elevation -- an
-        # Administrator's ordinary, UAC-filtered shell -- must fail, name the
-        # command to re-run from an elevated prompt exactly once, and leave the
-        # file the elevated run just wrote as it was. The hint that names the
+        # (waired-agent#1419) The same command without elevation must fail, name
+        # the command to re-run from an elevated prompt exactly once, and leave
+        # the file the elevated run just wrote as it was. The hint that names the
         # command was dead code: it was guarded by os.IsPermission, which does not
         # look through the wrapping on every write error, so a refusal got only
-        # main's generic "(permission denied: ...)" line. The file exists by
-        # now, so the refusal comes from inside secrets.WriteFile, the most
-        # deeply wrapped shape there is. ASCII matches only: cmd redirects
-        # waired.exe's UTF-8 to a file PS 5.1 reads back as ANSI, so the em dash
-        # in the hint does not survive the trip.
+        # main's generic "(permission denied: ...)" line. The file exists by now,
+        # so the refusal comes from inside secrets.WriteFile, the most deeply
+        # wrapped shape there is.
+        #
+        # Two real un-elevated contexts: an administrator's UAC-filtered token
+        # (interactive logon, the ordinary shell of most people who install this)
+        # and a standard user. NOT runas /trustlevel: under that token, run from
+        # this elevated job, the hint went missing while the error was the same
+        # ERROR_ACCESS_DENIED -- waired's elevation probe answered "elevated"
+        # there (run 35119626572; see Invoke-AsBasicToken).
+        #
+        # ASCII matches only: cmd redirects waired.exe's UTF-8 to a file that is
+        # read back as ANSI, so the em dash in the hint does not survive the trip.
         if ($isSystem) {
-            ItSkip "un-elevated claude enable (waired-agent#1419): running as SYSTEM, where runas /trustlevel is unavailable"
+            ItSkip "un-elevated claude enable (waired-agent#1419): running as SYSTEM, where neither context can be started"
         } else {
-            $msHashBefore = if (Test-Path -LiteralPath $ms) { (Get-FileHash -LiteralPath $ms -Algorithm SHA256).Hash } else { 'absent' }
-            $r = Invoke-AsBasicToken -Exe $waired -ArgLine 'claude enable' -Tag 'claude-enable-basictoken'
-            $msHashAfter = if (Test-Path -LiteralPath $ms) { (Get-FileHash -LiteralPath $ms -Algorithm SHA256).Hash } else { 'absent' }
-            $enableOut = [string]$r.Out
-            ItLog "basic-token claude enable (exit $($r.Exit)): $($enableOut.Trim())"
-            ItSoft '1419' ($r.Exit -ne 0 -and $r.Exit -ne -1) "un-elevated waired claude enable fails (exit $($r.Exit))"
-            $hintCount = ([regex]::Matches($enableOut, 'needs elevation')).Count
-            $namesCmd = ($hintCount -eq 1) -and
-                        ($enableOut -match [regex]::Escape('re-run `waired claude enable` from an elevated (Administrator) prompt')) -and
-                        ($enableOut -notmatch [regex]::Escape('(permission denied:'))
-            ItSoft '1419' $namesCmd "un-elevated waired claude enable names the command to re-run elevated, once (needs elevation x$hintCount)"
-            ItSoft '1419' ($msHashBefore -eq $msHashAfter) "un-elevated waired claude enable leaves $ms as it was ($msHashBefore -> $msHashAfter)"
+            $enableAdminUser = 'waired-it-enable'
+            New-ItInteractiveUser -Name $enableAdminUser -Group Administrators
+            try {
+                $enableContexts = @(
+                    @{ Label = 'a UAC-filtered administrator'; Run = {
+                        Invoke-AsInteractiveUser -Name $enableAdminUser -Exe $waired -ArgLine 'claude enable' -Tag 'claude-enable-filtered' `
+                            -Env (New-ItInteractiveEnv -Name $enableAdminUser -Base @{}) -TimeoutSec 90 } }
+                    @{ Label = 'a standard user'; Run = {
+                        Invoke-AsStandardUser -Exe $waired -ArgLine 'claude enable' -Tag 'claude-enable-stduser' -TimeoutSec 90 } }
+                )
+                foreach ($ctx in $enableContexts) {
+                    $msHashBefore = if (Test-Path -LiteralPath $ms) { (Get-FileHash -LiteralPath $ms -Algorithm SHA256).Hash } else { 'absent' }
+                    $r = & $ctx.Run
+                    $msHashAfter = if (Test-Path -LiteralPath $ms) { (Get-FileHash -LiteralPath $ms -Algorithm SHA256).Hash } else { 'absent' }
+                    $enableOut = [string]$r.Out
+                    ItLog "claude enable as $($ctx.Label) (exit $($r.Exit)): $($enableOut.Trim())"
+                    ItSoft '1419' ($r.Exit -ne 0 -and $r.Exit -ne -1) "waired claude enable as $($ctx.Label) fails (exit $($r.Exit))"
+                    $hintCount = ([regex]::Matches($enableOut, 'needs elevation')).Count
+                    $namesCmd = ($hintCount -eq 1) -and
+                                ($enableOut -match [regex]::Escape('re-run `waired claude enable` from an elevated (Administrator) prompt')) -and
+                                ($enableOut -notmatch [regex]::Escape('(permission denied:'))
+                    ItSoft '1419' $namesCmd "waired claude enable as $($ctx.Label) names the command to re-run elevated, once (needs elevation x$hintCount)"
+                    ItSoft '1419' ($msHashBefore -eq $msHashAfter) "waired claude enable as $($ctx.Label) leaves $ms as it was ($msHashBefore -> $msHashAfter)"
+                }
+            } finally {
+                Remove-ItInteractiveUser -Name $enableAdminUser
+            }
         }
 
         # (waired-agent#787) Every entry waired writes must be written for a
@@ -5918,12 +5946,13 @@ if ($Tier -ge 2) {
     # there. Five from the GUI uninstaller's unlink case (waired-agent#1406):
     # Invoke-InnoUninstall's three, the Waired plugin gone, the user's own kept.
     #
-    # 193 -> 196 for -Contract alone: the un-elevated `claude enable` run
-    # (waired-agent#1419) -- it fails, it names the command once, the file is
-    # unchanged. It skips under SYSTEM like the '751' contexts beside it, and
-    # neither -Contract leg (installtest.yml, installtest-inference.yml) runs
-    # as SYSTEM, so on both it is three every time.
-    $floor = if ($Contract) { 196 } elseif ($EngineOnly) { 81 } else { 78 }
+    # 193 -> 199 for -Contract alone: the un-elevated `claude enable` runs
+    # (waired-agent#1419), a UAC-filtered administrator and a standard user,
+    # three each -- it fails, it names the command once, the file is unchanged.
+    # They skip under SYSTEM like the '751' contexts beside them, and neither
+    # -Contract leg (installtest.yml, installtest-inference.yml) runs as
+    # SYSTEM, so on both it is six every time.
+    $floor = if ($Contract) { 199 } elseif ($EngineOnly) { 81 } else { 78 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
