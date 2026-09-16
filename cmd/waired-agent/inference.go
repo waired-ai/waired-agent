@@ -2764,7 +2764,7 @@ func (p *agentInferenceProvider) ollamaDraftToWrite(ctx context.Context, m catal
 	}
 	hw := p.profiler.Profile(ctx)
 	t := computeOllamaTuning(m, v, hw, ollamaKVRequestFor(p.cfg, m, v, hw), ollamaObservedServe{})
-	return hostfit.OllamaDraftTokens(v, hw.HostFit(), t.KVCacheType, t.ContextLength, max(t.NumParallel, 1))
+	return hostfit.OllamaDraftTokens(v, hw.HostFit(), t.KVCacheType, t.ContextLength)
 }
 
 // draftRestampTimeout bounds the repair pull. A pull of a tag that is

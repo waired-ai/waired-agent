@@ -703,7 +703,7 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 				// draft_num_predict, and the runner's arguments are the
 				// only place it shows (waired-ai/waired#1433).
 				mt.SpeculativeMethod, mt.SpeculativeTokens = f.SpecType, f.SpecDraftTokens
-				want := hostfit.OllamaDraftTokens(v, hw.HostFit(), tn.KVCacheType, tn.ContextLength, max(f.NumParallel, 1))
+				want := hostfit.OllamaDraftTokens(v, hw.HostFit(), tn.KVCacheType, tn.ContextLength)
 				if draft, rewrite := draftToRewrite(v, want, f); rewrite && deps.RestampDraft != nil {
 					deps.RestampDraft(tag, v, draft)
 				}

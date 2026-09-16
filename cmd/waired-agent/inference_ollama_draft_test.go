@@ -13,6 +13,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	"github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // The draft the runner runs is recorded off its command line, and a tag
@@ -175,5 +176,42 @@ func TestOllamaDraftToWrite_FollowsTheHost(t *testing.T) {
 	none.MTPDraftTokens = 0
 	if got := host(48000).ollamaDraftToWrite(ctx, m, none); got != 0 {
 		t.Errorf("no catalog draft: wrote %d", got)
+	}
+}
+
+// Where one slot with the draft fits and two do not, the serve tuning gives
+// up the second slot and keeps the draft (owner decision 2026-09-17,
+// waired-ai/waired#1433): ollamaSlotsFit prices two slots with the draft
+// the host would run.
+func TestComputeOllamaTuning_TheDraftComesBeforeASecondSlot(t *testing.T) {
+	ms, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m catalog.Manifest
+	var v catalog.Variant
+	for _, mm := range ms {
+		for _, vv := range mm.Variants {
+			if mm.ModelID == "qwen3.6-35b-a3b" && vv.VariantID == "mtp-q2-gguf" {
+				m, v = mm, vv
+			}
+		}
+	}
+	if v.GGUF == nil || v.GGUF.DraftMaxTokens != 0 {
+		t.Skipf("fixture changed: %+v", v.GGUF)
+	}
+	mac24 := hardware.Profile{OS: "darwin", Arch: "arm64", RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 18432,
+		GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}}}
+	without := computeOllamaTuning(m, v, mac24, "q4_0", ollamaObservedServe{})
+	if without.NumParallel != 2 {
+		t.Skipf("fixture no longer grants two slots without a draft here: %d", without.NumParallel)
+	}
+	v.MTPDraftTokens = 2
+	with := computeOllamaTuning(m, v, mac24, "q4_0", ollamaObservedServe{})
+	if d := hostfit.OllamaDraftTokens(v, mac24.HostFit(), with.KVCacheType, with.ContextLength); d != 2 || with.NumParallel != 1 {
+		t.Errorf("draft %d with %d slots, want the draft (2) with one slot", d, with.NumParallel)
+	}
+	if with.ContextLength != without.ContextLength {
+		t.Errorf("window %d with the draft, %d without: the window comes before the draft", with.ContextLength, without.ContextLength)
 	}
 }
