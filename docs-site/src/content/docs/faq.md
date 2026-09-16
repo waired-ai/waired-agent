@@ -56,8 +56,8 @@ computer can run. You can switch at any time. See
 
 It looks at your processor, memory, and GPU, and picks the highest quality
 model that fits with room to spare. On a computer with a separate GPU, that
-means fitting in the GPU's own memory. It then measures the real speed and
-offers a lighter model if this computer cannot keep up. For details, see
+means fitting in the GPU's own memory. It then measures the real speed and, if this computer cannot keep up,
+offers a faster model that fits it. For details, see
 [How Waired chooses a model](/guides/how-a-model-is-chosen/).
 
 ### Can I run a model that is bigger than recommended?

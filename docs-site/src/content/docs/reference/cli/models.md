@@ -114,7 +114,7 @@ waired runtimes benchmark           # measure this computer's real speed
 
 **`benchmark`** times one request with the model this computer runs, and
 replaces the figure Waired kept for it. If the request takes longer than the
-target, it offers a lighter model and names both. See
+target, it offers a faster model that fits this computer and names both. See
 [Change the model](/guides/choose-a-model/#switch-models).
 
 **`upgrade`** is what `waired update` runs for you. It changes an engine this

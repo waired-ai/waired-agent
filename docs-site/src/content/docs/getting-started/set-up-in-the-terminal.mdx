@@ -139,16 +139,16 @@ pressing Enter.
    ```
 
    No question, unless the request takes longer than the target. Then the
-   terminal names a lighter model and asks whether to switch to it. If the
-   request passes the target before it has finished, the terminal says so at
-   that moment and asks then:
+   terminal names a faster model that fits this computer and asks whether to
+   switch to it. If the request passes the target before it has finished, the
+   terminal says so at that moment and asks then:
 
    ```
    🐢 Qwen3.8 27B takes 190 s or more per request (target: 190 s or less).
      Switch to Qwen3.5 9B? The measurement keeps running if you stay. [Y/n] (default: Yes)
    ```
 
-   Answering no, or having no lighter model to offer, prints *“Waiting for the
+   Answering no, or having no faster model to offer, prints *“Waiting for the
    measurement to finish.”* and the terminal waits for the result.
 
 9. **Route Claude Code inference through Waired now? `[Y/n]`**
@@ -285,15 +285,15 @@ shows which models fit this hardware and why.
    Model     qwen3.5-9b — 228 s per request
    Claude    routed through Waired
    Local inference is running here at 228 s per request (target: 190 s or less).
-   Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers.
+   Find a faster model with `waired runtimes benchmark`, or keep using your other computers.
 ```
 
 The benchmark found one request with the model on this computer takes longer
 than the target, and the computer kept the model. That is what `--non-interactive` does, because it
 keeps the model chosen from the hardware rather than starting a second
-download, and it is what answering no to the lighter model does. Everything
+download, and it is what answering no to the faster model does. Everything
 is set up and running. `waired runtimes benchmark` measures again and offers
-the lighter model, and your other computers' models are unaffected.
+the faster model, and your other computers' models are unaffected.
 </Expected>
 
 <Expected tone="bad">
@@ -370,7 +370,7 @@ the flag that answers each:
 
 The other questions do not stop the run, because no answer lands where
 `--non-interactive` lands: the model list keeps the model Waired picked, the
-offer of a lighter model after the benchmark keeps the model that is running,
+offer of a faster model after the benchmark keeps the model that is running,
 and *Keep local inference on anyway?* keeps a setting you turned on yourself.
 
 The installers never reach this. `install.sh` skips sign-in on a computer
