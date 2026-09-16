@@ -17,7 +17,7 @@ import (
 )
 
 // SetLastBench records the most recent boot/explicit benchmark result so
-// Status() and the catalog endpoint can derive the #133 lighter-model
+// Status() and the catalog endpoint can derive the #133 faster-model
 // recommendation. Called from the probe goroutine in main.go after
 // RunBootBenchmark and from RunBenchmark.
 func (p *agentInferenceProvider) SetLastBench(b BenchResult) {
@@ -101,9 +101,9 @@ func (p *agentInferenceProvider) AdvertisedCapacity() int {
 	return p.lastBench.Capacity
 }
 
-// currentRecommendation derives the live lighter-model recommendation
+// currentRecommendation derives the live faster-model recommendation
 // from the last benchmark result: non-nil when it measured over the line
-// and a lighter model is available. Safe to call with no benchmark
+// and a faster model is available. Safe to call with no benchmark
 // recorded yet (nil). There is no upgrade recommendation any more
 // (waired-ai/waired-agent#1342; decision 6 of
 // docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md).
@@ -279,8 +279,8 @@ func benchMeasurement(bench BenchResult, manifests []catalog.Manifest, deps Benc
 // anything is decided about it (decision 3 of docs/decisions/20260913/2245).
 //
 // Extracted so the "is this request over the line" fact can be reported
-// even when there is no lighter model to propose: a host already serving
-// the smallest model Waired offers produces no recommendation, and the CLI
+// even when there is no faster model to propose: a host already serving
+// the fastest model Waired offers produces no recommendation, and the CLI
 // must still be able to tell that apart from a comfortable one
 // (waired-agent#784).
 type speedVerdict struct {
@@ -431,7 +431,7 @@ const benchJobTimeout = 2*modelSpeedStallCap + 10*time.Minute
 
 // RunBenchmark measures the active model — or, with
 // management.BenchmarkModeEnsure, answers from the stored measurement — and
-// returns the result plus the lighter-model recommendation when the request
+// returns the result plus the faster-model recommendation when the request
 // is over the line. ok is false (with a nil error) when the engine/model is
 // not ready yet — the handler maps that to 425 so an installer flow can poll.
 //
@@ -589,9 +589,9 @@ func (p *agentInferenceProvider) runBenchmarkJob(mode string, done chan struct{}
 		Failed: bench.Failed,
 		Error:  bench.Err,
 	}
-	// The verdict travels whether or not there is a lighter model to
-	// propose. On a host already serving the smallest model Waired offers
-	// there is nothing lighter, so Lighter is nil — and without this the
+	// The verdict travels whether or not there is a faster model to
+	// propose. On a host already serving the fastest model Waired offers
+	// there is nothing faster, so Lighter is nil — and without this the
 	// caller read that absence as "fast enough" (waired-agent#784).
 	if !bench.Failed && bench.Capacity > 0 && v.judged() {
 		outcome.Speed = speedMeasurementOf(bench, v)
@@ -961,7 +961,7 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 			}
 			// Past the line the switch is offered now, while the
 			// measurement goes on (decision 4 of
-			// docs/decisions/20260913/2245): the lighter model for a
+			// docs/decisions/20260913/2245): the faster model for a
 			// request already known to take at least this long.
 			if live.OverBudget {
 				resp.Recommendation = p.recommendationForRunningBound(live.TurnFloorSeconds)
@@ -971,7 +971,7 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 	return resp
 }
 
-// recommendationForRunningBound is the lighter-model recommendation for the
+// recommendationForRunningBound is the faster-model recommendation for the
 // model being measured, judged on the lower bound a running measurement has
 // already passed.
 func (p *agentInferenceProvider) recommendationForRunningBound(floor float64) *management.BenchmarkRecommendation {
@@ -1034,7 +1034,7 @@ func (p *agentInferenceProvider) modelSpeedStatus() *management.ModelSpeedStatus
 // suggestion (either direction) so a re-benchmark of the same pairing
 // stays quiet. Keyed by the active variant's content digest + the
 // target variant ID. Empty toVariantID resolves the current live
-// recommendation's target (lighter first, then upgrade — at most one
+// recommendation's target (faster first, then upgrade — at most one
 // is ever live); when there is no current recommendation (or no active
 // model) this is a no-op. The fromVariantID argument is advisory (the
 // active variant is authoritative).

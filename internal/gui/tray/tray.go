@@ -2473,7 +2473,7 @@ const (
 	noticeClickUpdate
 )
 
-// onShowRecommendationPopup presents the lighter-model suggestion in a
+// onShowRecommendationPopup presents the faster-model suggestion in a
 // native yes/no dialog. Yes posts the preferred-model switch; No records
 // a dismissal so the same pairing does not nag again. When no desktop
 // dialog backend is available it falls back to copying the CLI command

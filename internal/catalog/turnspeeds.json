@@ -2,5 +2,223 @@
   "schema": 1,
   "notes": "Seconds per 32,768-token request of each catalog variant on one host class, the figure the step-down compares (docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md). Imported with catalog-tool turnspeeds --import from the product's own measured_variants records; turn_seconds is the median of the samples.",
   "host_class": "amd-unified-128gb",
-  "models": {}
+  "models": {
+    "qwen3.5-0.8b": {
+      "variants": {
+        "q8-gguf": {
+          "variant_sha": "d8293f3008e8deee3516b5b086859ddfff2385524cbe9e3f58fc3ed1c8aef185",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 23.17,
+          "prefill_tokps": 2747.15,
+          "decode_tokps": 138.3,
+          "spread_pct": 0.98,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 1,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        }
+      }
+    },
+    "qwen3.5-2b": {
+      "variants": {
+        "q4-gguf": {
+          "variant_sha": "3c223d5d9c01cff31375dd797993b961be2ebd8e7c220d64543840f9a32a9d07",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 30.5,
+          "prefill_tokps": 2165.4,
+          "decode_tokps": 101.59,
+          "spread_pct": 0.79,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        }
+      }
+    },
+    "qwen3.5-4b": {
+      "variants": {
+        "q4-gguf": {
+          "variant_sha": "5fc857aa7fe4f4dc04f991cb74b2e24a4bd2cd3e54313dc3420e21809d596b5f",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 67.17,
+          "prefill_tokps": 945.14,
+          "decode_tokps": 48,
+          "spread_pct": 0.98,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        }
+      }
+    },
+    "qwen3.5-9b": {
+      "variants": {
+        "q4-gguf": {
+          "variant_sha": "8f3b968862ef641672b1cfd8d0fd0b5baf77a2d1fd90c12539eb48db86c69047",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 103.92,
+          "prefill_tokps": 594.75,
+          "decode_tokps": 31.95,
+          "spread_pct": 0.53,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        }
+      }
+    },
+    "qwen3.6-35b-a3b": {
+      "variants": {
+        "mtp-q2-gguf": {
+          "variant_sha": "5d6f8ce9deafb9ac5c93cd6aa62286a8613c2fc6eaf5fa392f1d8516a3eaf767",
+          "source_digest": "sha256:16c1a50b12582a7bc5b689c7053224351537f4c7cadf294fcc720f474fcd0a83",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 65.86,
+          "prefill_tokps": 805.41,
+          "decode_tokps": 62,
+          "spread_pct": 1.58,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        },
+        "mtp-q3-gguf": {
+          "variant_sha": "d28e094a0c9f4eea45f62a310af93630a7688cf4ae242484bf1c42dd2a152607",
+          "source_digest": "sha256:a40a7c335eab9f3b02d45f49759bfab063e6000bd9e8d13b1df3ef3adf2a0c1d",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 69.13,
+          "prefill_tokps": 831.89,
+          "decode_tokps": 52.57,
+          "spread_pct": 0.43,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        },
+        "mtp-q4-gguf": {
+          "variant_sha": "0a9a82aa812b682a740833d17b7f147deed0e8382aff6be387805a2d0182a682",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 76.93,
+          "prefill_tokps": 589.52,
+          "decode_tokps": 73.14,
+          "spread_pct": 3.13,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 1,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        },
+        "q4-gguf": {
+          "variant_sha": "1c3952e4f07f4602f0d7040c1e8ab2f8962a848ea5de22e5d250d493e22b0e73",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 82.4,
+          "prefill_tokps": 598.57,
+          "decode_tokps": 56.52,
+          "spread_pct": 1.33,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        }
+      }
+    },
+    "qwen3.8-27b": {
+      "variants": {
+        "mtp-q4-gguf": {
+          "variant_sha": "692dafd66a0980fda5b2fc74af7ad39bee913b4f6b933e3f8c70a0f95507b1b9",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 413.05,
+          "prefill_tokps": 93.75,
+          "decode_tokps": 24.21,
+          "spread_pct": 0.75,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        },
+        "q3-gguf": {
+          "variant_sha": "b0235d6f7fc41c41414a8a5d217d2bcf78ce251285bbbf0e31c32799fb9466e5",
+          "source_digest": "sha256:da1cab12ae5c31691fdb8e3fbd349c132c23e147c15a3faef32d160fb42e02e8",
+          "method": "measured",
+          "engine": "ollama",
+          "engine_version": "0.34.0",
+          "backend": "vulkan",
+          "turn_seconds": 301.26,
+          "prefill_tokps": 177.93,
+          "decode_tokps": 13.32,
+          "spread_pct": 0.22,
+          "samples": 4,
+          "depth_tokens": 33313,
+          "applied_window": 200704,
+          "kv_cache_type": "q4_0",
+          "num_parallel": 2,
+          "agent_revision": "28448187",
+          "retrieved": "2026-09-17",
+          "notes": "ollama 0.34.0 as pinned; the automatic measurement after the switch plus three waired runtimes benchmark reruns; Public/Team Share off, no other inference process"
+        }
+      }
+    }
+  }
 }
