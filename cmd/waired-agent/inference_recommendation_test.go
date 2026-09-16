@@ -16,20 +16,20 @@ import (
 func recTestManifests() []catalog.Manifest {
 	return []catalog.Manifest{
 		{
-			ModelID: "heavy", ContextLength: 32768, Capabilities: []string{"chat"},
+			ModelID: "heavy", ContextLength: 262144, Capabilities: []string{"chat"},
 			Variants: []catalog.Variant{{
 				VariantID: "q4", Format: "ollama-tag", Quantization: "Q4_K_M",
 				RuntimeSupport: []string{"ollama"}, EstimatedWeightGB: 5.0,
-				MinRAMGB: 12, QualityTier: 50, ParamCount: 8_000_000_000,
+				MinRAMGB: 12, QualityTier: 50, ParamCount: 8_000_000_000, KVBytesPerTokenFP16: 4096,
 				Source: catalog.VariantSource{Type: "ollama", Tag: "heavy:8b"},
 			}},
 		},
 		{
-			ModelID: "light", ContextLength: 32768, Capabilities: []string{"chat"},
+			ModelID: "light", ContextLength: 262144, Capabilities: []string{"chat"},
 			Variants: []catalog.Variant{{
 				VariantID: "q4", Format: "ollama-tag", Quantization: "Q4_K_M",
 				RuntimeSupport: []string{"ollama"}, EstimatedWeightGB: 1.5,
-				MinRAMGB: 4, QualityTier: 20, ParamCount: 2_000_000_000,
+				MinRAMGB: 4, QualityTier: 20, ParamCount: 2_000_000_000, KVBytesPerTokenFP16: 4096,
 				Source: catalog.VariantSource{Type: "ollama", Tag: "light:2b"},
 			}},
 		},
@@ -168,11 +168,11 @@ func TestRecommendationFromBench_DismissedMarker(t *testing.T) {
 // step-down has somewhere to go after the first one is used up.
 func recTestLadder() []catalog.Manifest {
 	return append(recTestManifests(), catalog.Manifest{
-		ModelID: "tiny", ContextLength: 32768, Capabilities: []string{"chat"},
+		ModelID: "tiny", ContextLength: 262144, Capabilities: []string{"chat"},
 		Variants: []catalog.Variant{{
 			VariantID: "q4", Format: "ollama-tag", Quantization: "Q4_K_M",
 			RuntimeSupport: []string{"ollama"}, EstimatedWeightGB: 0.6,
-			MinRAMGB: 2, QualityTier: 10, ParamCount: 600_000_000,
+			MinRAMGB: 2, QualityTier: 10, ParamCount: 600_000_000, KVBytesPerTokenFP16: 4096,
 			Source: catalog.VariantSource{Type: "ollama", Tag: "tiny:0.6b"},
 		}},
 	})

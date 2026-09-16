@@ -105,7 +105,7 @@ func TestPrintNotices_RendersTheBlock(t *testing.T) {
 
 	for _, want := range []string{
 		"Notices:",
-		"Lighter model recommended — switch to qwen3-8b-instruct",
+		"Faster model recommended — switch to qwen3-8b-instruct",
 		"This computer takes 228 s per request with qwen3-30b-a3b (target: 190 s or less).",
 	} {
 		if !strings.Contains(out, want) {
@@ -155,7 +155,7 @@ func TestNoticeFindings_BecomeWarnRows(t *testing.T) {
 	}
 	rendered := formatFinding(got[0])
 	for _, want := range []string{
-		"⚠ model suggestion — Lighter model recommended",
+		"⚠ model suggestion — Faster model recommended",
 		"switch to qwen3-8b-instruct.",
 		"(target: 190 s or less).",
 	} {

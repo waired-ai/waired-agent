@@ -2495,7 +2495,7 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	title := "Local inference is slow"
 	body := fmt.Sprintf(
 		"This computer takes %s per request with %s %s.\n\n"+
-			"Switch to the lighter model %s? It applies live. Waired keeps answering.",
+			"Switch to %s, which answers faster? It applies live. Waired keeps answering.",
 		notice.RequestSeconds(rec.TurnSeconds, rec.TurnFloorSeconds), rec.FromModelID,
 		notice.TargetClause(rec.BudgetSeconds), rec.ToModelID)
 

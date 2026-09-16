@@ -313,16 +313,22 @@ func speedVerdictOf(bench BenchResult) speedVerdict {
 // held against at all.
 func (v speedVerdict) judged() bool { return v.TurnSeconds > 0 || v.TurnFloorSeconds > 0 }
 
+// stepDownTurnSpeedFor is the seconds-per-request lookup the step-down
+// compares (router.PickInput.TurnSpeedFor). nil reads the shipped store,
+// catalog.TurnSpeeds, whose lookup order is tested there; the package's
+// tests seal it in TestMain so their fixture models have seconds.
+var stepDownTurnSpeedFor func(catalog.Manifest, catalog.Variant) (float64, bool)
+
 // recommendationFromBench holds a measurement against the line and, when
-// over it, computes a single-step-down lighter model recommendation (issue
-// #133; in seconds per request since waired-ai/waired-agent#1341). Returns
+// over it, computes a single-step recommendation of a faster model (issue
+// #133; router.FasterCandidate since waired-ai/waired-agent#1400; in seconds per request since waired-ai/waired-agent#1341). Returns
 // nil when there is nothing to suggest:
 //
 //   - the benchmark failed (never nag on an unreliable run)
 //   - the benchmark was skipped (no engine / external / port 0)
 //   - the request is inside the line, or there is no figure to judge
 //   - no active model is committed yet
-//   - the engine pick or lighter-candidate search yields nothing
+//   - the engine pick or the faster-candidate search yields nothing
 //
 // When the user has already declined this exact (active variant → target)
 // pairing, the recommendation is still returned but with Dismissed=true so
@@ -386,6 +392,7 @@ func recommendationFromBench(
 		// (waired-agent#784).
 		Measured:          measuredRatesFrom(st),
 		TurnBudgetSeconds: v.Budget,
+		TurnSpeedFor:      stepDownTurnSpeedFor,
 	}, st.Active.ModelID, st.Active.VariantID)
 	if !ok {
 		return nil

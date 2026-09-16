@@ -744,7 +744,7 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 		"Local inference is slow: Qwen3.6 35B-A3B takes 228 s per request (target: 190 s or less).",
 		"Waired recommends switching from Qwen3.6 35B-A3B to Qwen3.6 27B",
 		// The direction, which the numbers used to carry.
-		"The lighter model should run more smoothly",
+		"which answers faster and fits in this computer's memory",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q; got:\n%s", want, got)

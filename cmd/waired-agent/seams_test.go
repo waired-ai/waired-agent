@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
 )
 
 // TestMain seals the package-global seams that would otherwise reach off
@@ -27,6 +29,22 @@ func TestMain(m *testing.M) {
 	// The digest read is the same kind of request, for a pinned tag.
 	tagDigestFn = func(context.Context, string) (string, error) {
 		return "", errors.New("tagDigestFn: sealed in TestMain; swap it in the test that wants a digest")
+	}
+	// The step-down compares seconds recorded on the reference host class
+	// (router.FasterCandidate). The fixture models of this package's
+	// recommendation tests have none in the shipped store, so they get
+	// seconds here, ordered like their weights: heavier is slower. A model
+	// not named here reads the shipped store.
+	stepDownTurnSpeedFor = func(m catalog.Manifest, v catalog.Variant) (float64, bool) {
+		if s, ok := map[string]float64{"heavy": 400, "light": 150, "tiny": 50}[m.ModelID]; ok {
+			return s, true
+		}
+		set, err := catalog.TurnSpeeds()
+		if err != nil {
+			return 0, false
+		}
+		s, _, ok := set.For(m, v)
+		return s, ok
 	}
 	os.Exit(m.Run())
 }

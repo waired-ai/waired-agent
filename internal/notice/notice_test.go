@@ -133,7 +133,7 @@ func TestConstructorsCarryNoStatusMark(t *testing.T) {
 // docs-site/TRANSLATION.md forms, minus the marker each surface adds.
 func TestConstructorsComposeTheShippedWording(t *testing.T) {
 	l := LighterModel("qwen3.8-27b", "qwen3.6-35b-a3b", 228.4, 0, 190)
-	if want := "Lighter model recommended — switch to qwen3.6-35b-a3b"; l.Title != want {
+	if want := "Faster model recommended — switch to qwen3.6-35b-a3b"; l.Title != want {
 		t.Errorf("lighter title = %q, want %q", l.Title, want)
 	}
 	if want := "This computer takes 228 s per request with qwen3.8-27b (target: 190 s or less)."; l.Text != want {

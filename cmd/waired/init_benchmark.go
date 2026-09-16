@@ -254,7 +254,7 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 			}
 			return resp, false, nil
 		}
-		writePromptf(out, "Waired recommends switching from %s to %s. The lighter model should run more smoothly on this hardware.\n",
+		writePromptf(out, "Waired recommends switching from %s to %s, which answers faster and fits in this computer's memory.\n",
 			from, to)
 
 		if nonInteractive {
@@ -525,7 +525,7 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 			writePromptf(out, "%s %s here %s.\n",
 				emo("🐢", "!"), speedPhrase(sm), speedTarget(sm))
 		}
-		writePrompt(out, "   Run `waired runtimes benchmark` to step down again.")
+		writePrompt(out, "   Run `waired runtimes benchmark` to look for a faster model again.")
 		return resp
 	}
 	if label != "" {

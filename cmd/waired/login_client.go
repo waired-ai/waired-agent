@@ -868,7 +868,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 func printInferenceRoleGuidance(out io.Writer) {
 	writePrompt(out)
 	writePrompt(out, dim("Inference role was set from this computer's hardware. To inspect or change it:"))
-	writePrompt(out, dim("  waired runtimes benchmark            run the benchmark again or switch to a lighter model"))
+	writePrompt(out, dim("  waired runtimes benchmark            run the benchmark again or switch to a faster model"))
 	writePrompt(out, dim("  waired models ls                     list installed and available models"))
 	writePrompt(out, dim("  waired share on|off                  share this computer, or stop sharing it"))
 	writePrompt(out, dim("  waired inference engine stop|start   stop or start the local engine"))
@@ -1342,7 +1342,7 @@ func printDaemonBelowFloorBox(out io.Writer, s daemonSummary) {
 	lines = append(lines, dim(fmt.Sprintf(
 		"Local inference is running here at %s %s.",
 		speedPhrase(s.bench.Speed), speedTarget(s.bench.Speed))))
-	lines = append(lines, dim("Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers."))
+	lines = append(lines, dim("Find a faster model with `waired runtimes benchmark`, or keep using your other computers."))
 	boxWarn(out, emo("⚠", "!"), "Waired is signed in — this computer is slower than a coding agent needs", lines)
 }
 
