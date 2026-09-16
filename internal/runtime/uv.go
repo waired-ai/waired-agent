@@ -1,30 +1,50 @@
 //go:build linux
 
-// Package runtime additions: uv binary auto-resolution. Linux-only —
-// uv is only consumed by the vLLM installer (vllm_install.go) which
-// itself is Linux-only.
+// Package runtime additions: the uv binary the vLLM installer runs.
+// Linux-only — uv is only consumed by the vLLM installer
+// (vllm_install.go), which itself is Linux-only; Windows and macOS have
+// no vLLM and no uv (vllm_stub_windows.go / vllm_stub_darwin.go).
 //
-// uv (https://github.com/astral-sh/uv) is the lightweight Python
-// package + interpreter manager Step 2 uses to bootstrap the vLLM
-// venv without touching the host's Python install. The agent must
-// have an executable uv on disk before it can build the venv.
+// uv (https://github.com/astral-sh/uv) is the Python package and
+// interpreter manager the installer uses to build the vLLM venv without
+// touching the host's Python.
 //
-// Resolution order:
-//   1. If override is non-empty, use it verbatim (= caller-supplied
-//      bundled binary).
-//   2. exec.LookPath("uv") — honour an existing system install.
-//   3. ~/.local/share/waired/bin/uv if it exists and is executable.
-//   4. Download the pinned release tarball from astral.sh, verify
-//      against UVPinnedSHA256, extract uv into ~/.local/share/waired/bin,
-//      chmod +x, and use that path.
+// The installer uses exactly one uv: the pinned release, kept under the
+// state dir at <state-dir>/runtimes/uv/<UVPinnedVersion>/uv. There is no
+// other place it looks — not a uv on PATH, not a copy under the invoking
+// user's home (waired-ai/waired#1435). Resolution:
 //
-// The pinned version + SHA256 live as compile-time constants (per the
-// plan's "uv version pinned in code, bump together" decision) so that
+//  1. <Root>/<UVPinnedVersion>/uv, if it is an executable regular file.
+//  2. Otherwise download the pinned release tarball for this GOARCH,
+//     verify its SHA256 against the compile-time pin, extract the uv
+//     member into <Root>/.tmp-*, and rename that directory into place.
+//  3. Remove every other version directory (and stale .tmp-* left by an
+//     interrupted download) under Root. The cache directory stays.
+//
+// Why only this one:
+//
+//   - A uv pin move reaches every host. The previous chain reused a uv
+//     on PATH or ~/.local/share/waired/bin/uv without looking at its
+//     version, so a new pin only reached hosts that had no uv yet, and a
+//     user's older or newer uv ran untested.
+//   - A root-run install (`sudo waired runtimes install vllm`, install.sh)
+//     and the daemon's converge as the service user resolve the SAME
+//     binary. HOME differs between them (/root vs /var/lib/waired), so a
+//     home-relative copy split into two; under the state dir it is one,
+//     and the ownership hand-off that covers the venv
+//     (service.FixStateOwnership) covers it too.
+//   - Uninstall removes it. `uninstall.sh --clean` and the deb purge both
+//     delete the state dir; nothing removed /root/.local/share/waired/bin.
+//
+// The pinned version + SHA256s live as compile-time constants so that
 // reproducible builds always materialise the same uv.
 
 package runtime
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -33,19 +53,17 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 )
 
-// UVPinnedVersion is the uv release we ship/recommend. Bump together
-// with UVPinnedSHA256; both must change in lockstep so the integrity
-// check stays meaningful. Refresh this whenever astral.sh ships a
-// stable that fixes a security issue or a correctness bug we depend on.
-// NOTE: UVPinnedSHA256Linux64 below must be recomputed in lockstep when
-// this is bumped — Renovate flags this on the uv PR (see renovate.json).
+// UVPinnedVersion is the uv release the vLLM installer uses. Bump
+// together with UVPinnedSHA256Linux64 and UVPinnedSHA256LinuxARM64;
+// all three must change in lockstep so the integrity check stays
+// meaningful. scripts/dev/update-uv-sha.sh recomputes both digests, and
+// Renovate runs it on the uv PR (see renovate.json).
 // renovate: datasource=github-releases depName=astral-sh/uv
 const UVPinnedVersion = "0.12.15"
 
@@ -54,178 +72,317 @@ const UVPinnedVersion = "0.12.15"
 //
 // Bump in lockstep with UVPinnedVersion: download the release asset,
 // verify against the official `.sha256` sidecar, and paste the digest
-// here. A leftover all-zero placeholder makes ResolveUV() (no override,
-// no system uv) fail closed with ErrUVUnverifiedPin rather than download
-// something unverified — which is exactly what blocked
-// `waired runtimes install vllm` end-to-end (#557). Verified against
+// here. A leftover all-zero placeholder makes Resolve fail closed with
+// ErrUVUnverifiedPin rather than download something unverified — which
+// is exactly what blocked `waired runtimes install vllm` end-to-end
+// (#557). Verified against
 // https://github.com/astral-sh/uv/releases/download/0.12.15/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
 const UVPinnedSHA256Linux64 = "f97935763c04be3e692460a7aaeaaab8fc3b78fcf8b389da820b38ae7423a638"
 
+// UVPinnedSHA256LinuxARM64 is the sha256 of the linux aarch64 tarball at
+// https://github.com/astral-sh/uv/releases/download/<UVPinnedVersion>/uv-aarch64-unknown-linux-gnu.tar.gz
+//
+// Same lockstep rule as UVPinnedSHA256Linux64. An arm64 host used to get
+// a uv only if one was on PATH; with PATH no longer consulted
+// (waired-ai/waired#1435) this pin is its only source. Verified against
+// https://github.com/astral-sh/uv/releases/download/0.12.15/uv-aarch64-unknown-linux-gnu.tar.gz.sha256
+const UVPinnedSHA256LinuxARM64 = "0e9a3499b0587d449c9ff684c0160da607826e4af1cee220bc87f378702d3e08"
+
 // UVDownloadURLBase is the GitHub release download prefix the
-// auto-download path uses. Centralised so tests can swap it.
+// download path uses. Centralised so tests can swap it.
 var UVDownloadURLBase = "https://github.com/astral-sh/uv/releases/download"
 
-// uvPinnedSHA256OverrideForTest, when non-empty, takes precedence
-// over UVPinnedSHA256Linux64. Tests use it to exercise the download
-// path without mutating the const itself.
-var uvPinnedSHA256OverrideForTest = ""
+// uvPinnedSHA256OverrideForTest, when it has an entry for a GOARCH,
+// takes precedence over that arch's compile-time pin. Tests use it to
+// exercise the download path without mutating the consts.
+var uvPinnedSHA256OverrideForTest = map[string]string{}
 
-// effectivePinnedSHA returns the SHA the download path should
-// compare against. The test override beats the compile-time const.
-func effectivePinnedSHA() string {
-	if uvPinnedSHA256OverrideForTest != "" {
-		return uvPinnedSHA256OverrideForTest
-	}
-	return UVPinnedSHA256Linux64
+// uvCacheDirName is the directory under Root that holds uv's download
+// cache (UV_CACHE_DIR). Pruning never removes it.
+const uvCacheDirName = "cache"
+
+// uvTmpPrefix names the per-download staging directories under Root.
+const uvTmpPrefix = ".tmp-"
+
+// uvStaleTmpAge is how old a staging directory must be before pruning
+// treats it as abandoned. A younger one may belong to a resolver that is
+// still downloading in another process.
+const uvStaleTmpAge = 30 * time.Minute
+
+// uvMaxBinaryBytes bounds the extracted member. The real binary is
+// ~50 MB; anything far past that is not a uv release.
+const uvMaxBinaryBytes = 512 << 20
+
+// uvAsset describes one pinned release asset.
+type uvAsset struct {
+	// triple is both the tarball's name stem and its top-level
+	// directory: <triple>.tar.gz contains <triple>/uv.
+	triple string
+	sha256 string
 }
 
-// ErrUVUnverifiedPin is returned when the auto-download path triggers
-// but UVPinnedSHA256Linux64 is still the placeholder. Refuses to
+// uvAssetFor returns the pinned asset for goarch, or ok=false when uv
+// has no pin for that architecture.
+func uvAssetFor(goarch string) (uvAsset, bool) {
+	var a uvAsset
+	switch goarch {
+	case "amd64":
+		a = uvAsset{triple: "uv-x86_64-unknown-linux-gnu", sha256: UVPinnedSHA256Linux64}
+	case "arm64":
+		a = uvAsset{triple: "uv-aarch64-unknown-linux-gnu", sha256: UVPinnedSHA256LinuxARM64}
+	default:
+		return uvAsset{}, false
+	}
+	if s, ok := uvPinnedSHA256OverrideForTest[goarch]; ok && s != "" {
+		a.sha256 = s
+	}
+	return a, true
+}
+
+// ErrUVUnverifiedPin is returned when the download path triggers but the
+// arch's SHA256 pin is still the all-zero placeholder. Refuses to
 // download anything until the pin has been verified by an operator.
-var ErrUVUnverifiedPin = errors.New("runtime: uv SHA256 pin not yet verified (operator must update UVPinnedSHA256Linux64)")
+var ErrUVUnverifiedPin = errors.New("runtime: uv SHA256 pin not yet verified (operator must update the UVPinnedSHA256 constants)")
 
 // ErrUVChecksumMismatch is returned when the downloaded tarball's
 // sha256 doesn't match the pin.
 var ErrUVChecksumMismatch = errors.New("runtime: uv tarball sha256 mismatch (refusing to install)")
 
-// ErrUVUnsupportedPlatform is returned when running on something
-// other than linux/amd64. Step 2 only ships pins for that target;
-// other platforms can fall back to a system uv via override.
-var ErrUVUnsupportedPlatform = errors.New("runtime: pinned uv tarball only available for linux/amd64")
+// ErrUVUnsupportedPlatform is returned when uv has no pinned asset for
+// the running architecture (only linux/amd64 and linux/arm64 do).
+var ErrUVUnsupportedPlatform = errors.New("runtime: pinned uv tarball only available for linux/amd64 and linux/arm64")
 
-// UVResolver discovers (and, if needed, materialises) a uv binary.
+// UVResolver materialises the pinned uv under Root.
 type UVResolver struct {
-	// BinDir is the directory used to store the auto-downloaded uv.
-	// Defaults to $XDG_DATA_HOME/waired/bin (or $HOME/.local/share/waired/bin).
-	BinDir string
+	// Root is <state-dir>/runtimes/uv. Version directories and the
+	// cache live directly under it.
+	Root string
 
-	// HTTPClient is the seam tests use to inject a fake download.
-	// Defaults to a 60s-timeout client.
+	// HTTPClient performs the download. Defaults to a 60s-timeout client.
 	HTTPClient *http.Client
 
-	// Now / clock seam for tests asserting on installed_at metadata.
-	Now func() time.Time
+	// GOARCH selects the asset. Empty means runtime.GOARCH; tests set it
+	// to exercise the other architecture's asset.
+	GOARCH string
 }
 
-// NewUVResolver returns a resolver with sensible defaults.
-func NewUVResolver() *UVResolver {
+// NewUVResolverAt returns a resolver rooted at root (normally
+// <state-dir>/runtimes/uv).
+func NewUVResolverAt(root string) *UVResolver {
 	return &UVResolver{
-		BinDir:     defaultUVBinDir(),
+		Root:       root,
 		HTTPClient: &http.Client{Timeout: 60 * time.Second},
-		Now:        time.Now,
 	}
 }
 
-// Resolve returns an absolute path to an executable uv binary. See
-// the package doc for the resolution order. override is the highest-
-// precedence layer (caller-supplied bundled path).
-func (r *UVResolver) Resolve(ctx context.Context, override string) (string, error) {
-	if override != "" {
-		if err := assertExecutable(override); err != nil {
-			return "", fmt.Errorf("runtime: uv override %q: %w", override, err)
+// CacheDir is the directory the installer points UV_CACHE_DIR at. It
+// sits beside the version directories so uv can hardlink from it into
+// venvs on the same filesystem, and uninstall removes it with the state
+// dir.
+func (r *UVResolver) CacheDir() string {
+	return filepath.Join(r.Root, uvCacheDirName)
+}
+
+// Path is where the pinned uv lives once resolved.
+func (r *UVResolver) Path() string {
+	return filepath.Join(r.Root, UVPinnedVersion, "uv")
+}
+
+// Resolve returns the absolute path to the pinned uv, downloading and
+// verifying it first when it is not already in place. See the package
+// doc for why nothing else is consulted.
+func (r *UVResolver) Resolve(ctx context.Context) (string, error) {
+	if r.Root == "" {
+		return "", errors.New("runtime: uv resolver has no root directory")
+	}
+	final := r.Path()
+	if err := assertExecutable(final); err != nil {
+		if err := r.download(ctx); err != nil {
+			return "", err
 		}
-		return override, nil
 	}
-	if p, err := exec.LookPath("uv"); err == nil {
-		return p, nil
-	}
-	cached := filepath.Join(r.BinDir, "uv")
-	if err := assertExecutable(cached); err == nil {
-		return cached, nil
-	}
-	// Materialise the pin.
-	return r.downloadPinnedUV(ctx)
+	r.pruneOthers()
+	return final, nil
 }
 
-// downloadPinnedUV fetches UVPinnedVersion from astral.sh, verifies
-// the sha256 against the pin, extracts the binary into r.BinDir, and
-// returns the absolute path. Refuses to proceed if the pin is the
-// placeholder or the platform is unsupported.
-func (r *UVResolver) downloadPinnedUV(ctx context.Context) (string, error) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return "", fmt.Errorf("%w: GOOS/GOARCH=%s/%s", ErrUVUnsupportedPlatform, runtime.GOOS, runtime.GOARCH)
+func (r *UVResolver) goarch() string {
+	if r.GOARCH != "" {
+		return r.GOARCH
 	}
-	pin := effectivePinnedSHA()
-	if isPlaceholderSHA(pin) {
-		return "", ErrUVUnverifiedPin
+	return runtime.GOARCH
+}
+
+// download fetches the pinned tarball for this arch, verifies it,
+// extracts the uv member into a staging directory under Root and renames
+// the staging directory to <Root>/<UVPinnedVersion>. A concurrent
+// resolver that got there first wins; this call then uses its result.
+func (r *UVResolver) download(ctx context.Context) error {
+	goarch := r.goarch()
+	asset, ok := uvAssetFor(goarch)
+	if !ok {
+		return fmt.Errorf("%w: GOOS/GOARCH=%s/%s", ErrUVUnsupportedPlatform, runtime.GOOS, goarch)
+	}
+	if isPlaceholderSHA(asset.sha256) {
+		return ErrUVUnverifiedPin
 	}
 
-	url := fmt.Sprintf("%s/%s/uv-x86_64-unknown-linux-gnu.tar.gz", UVDownloadURLBase, UVPinnedVersion)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := r.fetch(ctx, fmt.Sprintf("%s/%s/%s.tar.gz", UVDownloadURLBase, UVPinnedVersion, asset.triple))
 	if err != nil {
-		return "", fmt.Errorf("runtime: uv download request: %w", err)
+		return err
 	}
-	resp, err := r.HTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("runtime: uv download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("runtime: uv download HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("runtime: uv read body: %w", err)
-	}
-
 	gotSum := sha256.Sum256(body)
 	gotHex := hex.EncodeToString(gotSum[:])
-	if !strings.EqualFold(gotHex, pin) {
-		return "", fmt.Errorf("%w: want %s, got %s", ErrUVChecksumMismatch, pin, gotHex)
+	if !strings.EqualFold(gotHex, asset.sha256) {
+		return fmt.Errorf("%w: want %s, got %s", ErrUVChecksumMismatch, asset.sha256, gotHex)
 	}
 
-	if err := os.MkdirAll(r.BinDir, 0o755); err != nil {
-		return "", fmt.Errorf("runtime: mkdir uv bin: %w", err)
+	if err := os.MkdirAll(r.Root, 0o755); err != nil {
+		return fmt.Errorf("runtime: mkdir uv root: %w", err)
 	}
-	target := filepath.Join(r.BinDir, "uv")
-	if err := extractUVTarball(body, target); err != nil {
-		return "", fmt.Errorf("runtime: extract uv: %w", err)
-	}
-	if err := os.Chmod(target, 0o755); err != nil {
-		return "", fmt.Errorf("runtime: chmod uv: %w", err)
-	}
-	return target, nil
-}
-
-// extractUVTarball unpacks the uv binary out of a .tar.gz body into
-// dest. The astral release layout is `uv-x86_64-unknown-linux-gnu/uv`
-// inside a gzipped tar.
-func extractUVTarball(body []byte, dest string) error {
-	tmp, err := os.CreateTemp(filepath.Dir(dest), "uv-extract-*.tar.gz")
+	stage, err := os.MkdirTemp(r.Root, uvTmpPrefix+"*")
 	if err != nil {
-		return err
+		return fmt.Errorf("runtime: uv staging dir: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(body); err != nil {
-		tmp.Close()
-		return err
+	defer func() { _ = os.RemoveAll(stage) }()
+	// MkdirTemp creates 0700; the version directory has to be readable by
+	// the service user after the ownership hand-off, and by other users
+	// who only run the venv it built.
+	if err := os.Chmod(stage, 0o755); err != nil {
+		return fmt.Errorf("runtime: chmod uv staging dir: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	if err := extractUVMember(body, asset.triple+"/uv", filepath.Join(stage, "uv")); err != nil {
+		if assertExecutable(r.Path()) == nil {
+			return nil
+		}
+		return fmt.Errorf("runtime: extract uv: %w", err)
 	}
 
-	// Use the system tar to avoid pulling in archive/tar parsing here;
-	// the file is small (~30 MB tarball, ~50 MB extracted) and tar is
-	// guaranteed available on every Linux host the agent supports.
-	cmd := exec.Command("tar",
-		"-xzf", tmpName,
-		"-C", filepath.Dir(dest),
-		"--strip-components=1",
-		"uv-x86_64-unknown-linux-gnu/uv",
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar: %w: %s", err, strings.TrimSpace(string(out)))
+	final := filepath.Dir(r.Path())
+	if err := os.Rename(stage, final); err != nil {
+		// Another resolver may have put the same version in place while
+		// this one downloaded. Its result is equivalent — same pin, same
+		// verified bytes — so use it.
+		if assertExecutable(r.Path()) == nil {
+			return nil
+		}
+		return fmt.Errorf("runtime: move uv into place: %w", err)
 	}
 	return nil
 }
 
-// defaultUVBinDir returns $XDG_DATA_HOME/waired/bin (or $HOME/.local/share/waired/bin).
-func defaultUVBinDir() string {
-	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "waired", "bin")
+func (r *UVResolver) fetch(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("runtime: uv download request: %w", err)
 	}
-	return filepath.Join(os.Getenv("HOME"), ".local", "share", "waired", "bin")
+	client := r.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("runtime: uv download: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("runtime: uv download HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("runtime: uv read body: %w", err)
+	}
+	return body, nil
+}
+
+// extractUVMember writes the tarball member named member (the astral
+// release layout is <triple>/uv inside a gzipped tar) to dest with mode
+// 0755. In-process, so the download path does not depend on a tar binary
+// on the host.
+func extractUVMember(body []byte, member, dest string) error {
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("member %s not found in tarball", member)
+		}
+		if err != nil {
+			return err
+		}
+		if strings.TrimPrefix(hdr.Name, "./") != member {
+			continue
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			return fmt.Errorf("member %s is not a regular file", member)
+		}
+		f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return err
+		}
+		n, copyErr := io.Copy(f, io.LimitReader(tr, uvMaxBinaryBytes+1))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if n > uvMaxBinaryBytes {
+			return fmt.Errorf("member %s exceeds %d bytes", member, uvMaxBinaryBytes)
+		}
+		// OpenFile's mode is masked by the umask; the binary must be
+		// executable regardless.
+		return os.Chmod(dest, 0o755)
+	}
+}
+
+// pruneOthers removes version directories other than the pinned one and
+// staging directories an interrupted download left behind (older than
+// uvStaleTmpAge, so a download still running elsewhere is not pulled out
+// from under it). Best effort: a failure leaves disk behind but never
+// fails the install. Entries that look like neither, and the cache, are
+// left alone.
+func (r *UVResolver) pruneOthers() {
+	entries, err := os.ReadDir(r.Root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || name == UVPinnedVersion || name == uvCacheDirName {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(name, uvTmpPrefix):
+			info, err := e.Info()
+			if err != nil || time.Since(info.ModTime()) < uvStaleTmpAge {
+				continue
+			}
+		case looksLikeUVVersion(name):
+		default:
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(r.Root, name))
+	}
+}
+
+// looksLikeUVVersion reports whether name is shaped like a uv release
+// directory ("0.11.26"): digits and dots, starting with a digit.
+func looksLikeUVVersion(name string) bool {
+	if name == "" || name[0] < '0' || name[0] > '9' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < '0' || c > '9') && c != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // isPlaceholderSHA returns true iff s is the all-zero placeholder

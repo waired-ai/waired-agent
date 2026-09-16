@@ -20,12 +20,12 @@ import (
 func newRecordingInstaller(t *testing.T, baseDir string) *VLLMInstaller {
 	t.Helper()
 	uvDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(uvDir, "uv"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+	if err := os.WriteFile(uvStubPath(t, uvDir), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return &VLLMInstaller{
 		BaseDir: baseDir,
-		UV:      &UVResolver{BinDir: uvDir},
+		UV:      &UVResolver{Root: uvDir},
 		Runner:  &scriptedRunner{respond: func(scriptedCall) ([]string, error) { return nil, nil }},
 		Now:     fakeNow,
 	}
@@ -146,7 +146,7 @@ func TestVLLMPrune_RefusesWhenNothingIsActive(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "0.11.0", ".venv", "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	inst := &VLLMInstaller{BaseDir: dir, UV: NewUVResolver(), Runner: &scriptedRunner{}, Now: fakeNow}
+	inst := &VLLMInstaller{BaseDir: dir, UV: NewUVResolverAt(t.TempDir()), Runner: &scriptedRunner{}, Now: fakeNow}
 	if _, err := inst.PruneOtherVersions(); err == nil {
 		t.Fatal("PruneOtherVersions succeeded with no active install")
 	}
