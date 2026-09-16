@@ -3,6 +3,22 @@ set -e
 
 case "$1" in
   remove|upgrade|deconfigure)
+    # On `remove` (plain `apt remove`, and the remove phase of `apt purge`),
+    # take Waired out of Claude Code's settings while the binary and the
+    # service are both still here -- `claude disable` asks the running service
+    # for this host's context window to tell its own settings from an
+    # operator's (waired-agent#1174). Without this, a plain `apt remove
+    # waired` left the managed ANTHROPIC_BASE_URL behind, and Claude Code then
+    # failed every request against a port nothing listened on
+    # (waired-agent#1398). uninstall.sh runs the same before it calls apt, so
+    # this is a no-op on that route. Not on `upgrade`: the settings stay while
+    # Waired does. SUDO_USER survives `sudo apt remove`, which is how the
+    # per-user half reaches the right home. Bounded and best-effort, like the
+    # logout below: a removal is never refused over it.
+    if [ "$1" = remove ] && [ -x /usr/bin/waired ]; then
+      timeout 60 /usr/bin/waired claude disable || true
+    fi
+
     if [ -d /run/systemd/system ]; then
       # `upgrade` deliberately does NOT stop the agent: dpkg overwrites the
       # live binary in place (safe on Linux — the running process keeps the

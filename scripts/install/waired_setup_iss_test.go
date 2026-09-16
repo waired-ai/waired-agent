@@ -71,15 +71,16 @@ func section(t *testing.T, iss, name string) []string {
 
 // entryField pulls one "Name: value" field out of an Inno section entry.
 // Values are quoted in this script; both forms are accepted so a future
-// unquoted value is read rather than silently dropped.
+// unquoted value is read rather than silently dropped. Inside a quoted value
+// Inno writes a literal quote as two, so `""` is read back as one.
 func entryField(entry, field string) string {
-	re := regexp.MustCompile(`(?i)\b` + field + `:\s*("([^"]*)"|[^;]*)`)
+	re := regexp.MustCompile(`(?i)\b` + field + `:\s*("((?:[^"]|"")*)"|[^;]*)`)
 	m := re.FindStringSubmatch(entry)
 	if m == nil {
 		return ""
 	}
 	if m[2] != "" || strings.HasPrefix(strings.TrimSpace(m[1]), `"`) {
-		return m[2]
+		return strings.ReplaceAll(m[2], `""`, `"`)
 	}
 	return strings.TrimSpace(m[1])
 }
@@ -105,6 +106,9 @@ func TestSetupRunsOnlyTheseProgramsFromRunSections(t *testing.T) {
 		},
 		"UninstallRun": {
 			`{app}\waired.exe claude disable`,
+			// waired-agent#1398: Claude Code's settings, checked without
+			// waired.exe, for when Windows refuses to start it.
+			`{sys}\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{app}\uninstall.ps1" -ClaudeLeftoversOnly`,
 			`{app}\waired-agent.exe uninstall`,
 		},
 	}

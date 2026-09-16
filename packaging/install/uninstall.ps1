@@ -74,7 +74,14 @@ param(
     # Internal: path the elevated child writes its Start-Transcript log to.
     # The un-elevated parent picks a path under its own %TEMP% (readable
     # without elevation) and forwards it. Mirrors install.ps1 (waired#748).
-    [string]$LogPath
+    [string]$LogPath,
+    # Internal: only check Claude Code's settings for what Waired left behind
+    # and remove it, then exit 0. No confirmation, no elevation, nothing else
+    # touched. The GUI uninstaller (WairedSetup, waired-setup.iss
+    # [UninstallRun]) runs this after `waired.exe claude disable`, so the
+    # settings go even when Windows refuses to start waired.exe
+    # (waired-agent#1398).
+    [switch]$ClaudeLeftoversOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1772,6 +1779,15 @@ function Show-Done {
 # -------------------------------------------------------------------
 
 if ($Help) { Show-Help; exit 0 }
+
+# The GUI uninstaller's settings-only pass (see the parameter). It already
+# runs elevated, as the user who started the uninstall, so both halves run
+# here; the machine-wide file first, the way the script's own order has it.
+if ($ClaudeLeftoversOnly) {
+    Repair-ManagedClaudeSettings
+    Repair-UserClaudeSettings
+    exit 0
+}
 
 # Prune old per-run transcripts. Un-elevated parent only: the elevated child
 # must never sweep the invoking user's %TEMP%, and this sits after -Help so a
