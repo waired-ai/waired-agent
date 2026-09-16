@@ -502,7 +502,9 @@ func TestFailuresOnTheShippedCatalog(t *testing.T) {
 	}
 	issueRef := regexp.MustCompile(`#\d+`)
 	for _, r := range Retirements() {
-		if _, ok := LookupByAlias(r.SuccessorModelID, all); !ok {
+		// A retirement may name no successor (docs/decisions/20260916/0340,
+		// decision 4); one that does must name something we ship.
+		if _, ok := LookupByAlias(r.SuccessorModelID, all); HasSuccessor(r) && !ok {
 			t.Errorf("retired %v points at successor %q, which the catalog does not ship",
 				r.Names, r.SuccessorModelID)
 		}

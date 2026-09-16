@@ -178,8 +178,8 @@ func PickModel(in PickInput) (Pick, error) {
 			winner.ExpectedSpillFraction*100))
 	case !winner.ContextFloorSatisfied && in.PreferredModelID != "":
 		reasons = append(reasons, fmt.Sprintf(
-			"preferred model overrides the ~200k coding-agent context floor (native window %d tokens)",
-			winner.Manifest.ContextLength))
+			"preferred model overrides the ~200k coding-agent context floor on this host (%s)",
+			winner.Manifest.ModelID))
 	case !winner.ContextFloorSatisfied:
 		reasons = append(reasons,
 			"no model on this host can serve the ~200k coding-agent context; best-effort selection")

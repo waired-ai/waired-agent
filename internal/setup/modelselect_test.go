@@ -7,7 +7,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
-	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 func cpuProfile(ramGB int) hardware.Profile {
@@ -301,7 +301,7 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 		if !found {
 			t.Fatalf("selected %q is not in the catalog", sel.ModelID)
 		}
-		if !router.MeetsNativeContextFloor(m) {
+		if m.ContextLength < hostfit.ServingWindow200k {
 			t.Errorf("selected %s (%d-token window); installing a model that cannot "+
 				"declare a window puts the host back where the rescue left it",
 				sel.ModelID, m.ContextLength)
@@ -309,17 +309,13 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 	})
 
 	// A pin naming a model whose native window is below the #624 coding
-	// floor is honoured and SAID so — the floor is not enforced for pins.
-	//
-	// The subject needs a live 32k-native model, and after #522 retired the
-	// qwen2.5-coder line there is exactly one: granite4-350m, which is
-	// internal_only. That is not a weakening — an internal_only entry is
-	// shipped and pinnable, and the routing sentinel pins this very model
-	// in production. It does mean the case now depends on the withheld
-	// entry existing; if that ever goes, this needs a manifest fixture
-	// rather than a substitute from the offered set, because the offered
-	// set no longer contains a sub-floor window at all.
-	t.Run("pinned-subfloor-notes-escape-hatch", func(t *testing.T) {
+	// floor used to be honoured with a note saying the floor was not
+	// enforced for pins. The note left with waired-ai/waired-agent#1400:
+	// the catalog admits only builds whose own window reaches the floor
+	// (decisions 3 and 4 of docs/decisions/20260916/0340), and the only
+	// sub-floor model left is the CI fixture granite4-350m, which is
+	// pinned by id and never offered.
+	t.Run("pinned-subfloor-model-is-honoured-without-a-floor-note", func(t *testing.T) {
 		in := baseInputs(cpuProfile(8), completeManifests(t))
 		in.Pinned = true
 		in.Inference.BundledModelID = "granite4-350m"
@@ -327,10 +323,47 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if !containsNote(sel.Notes, "not enforced for pins") {
-			t.Errorf("notes lack the pin floor note: %v", sel.Notes)
+		if sel.ModelID != "granite4-350m" {
+			t.Errorf("ModelID = %q, want the pin honoured", sel.ModelID)
+		}
+		if containsNote(sel.Notes, "not enforced for pins") {
+			t.Errorf("notes still carry the removed floor note: %v", sel.Notes)
 		}
 	})
+}
+
+// A pin naming a model retired with no successor (gpt-oss,
+// docs/decisions/20260916/0340 decision 4) is a pin to nothing. It falls
+// through to the auto-selection an unpinned host gets, and says so.
+func TestSelectBundledModel_RetiredPinWithNoSuccessorAutoSelects(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	in := baseInputs(cpuProfile(32), manifests)
+	in.FreeDiskBytes = fixedDisk(500)
+	in.Pinned = true
+	in.Inference.BundledModelID = "gpt-oss-20b"
+	sel, err := SelectBundledModel(in)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	unpinned := baseInputs(cpuProfile(32), manifests)
+	unpinned.FreeDiskBytes = fixedDisk(500)
+	want, err := SelectBundledModel(unpinned)
+	if err != nil {
+		t.Fatalf("unpinned: %v", err)
+	}
+	if sel.ModelID == "gpt-oss-20b" || sel.ModelID != want.ModelID {
+		t.Errorf("ModelID = %q, want the unpinned pick %q", sel.ModelID, want.ModelID)
+	}
+	if !containsNote(sel.Notes, "was retired with no replacement") {
+		t.Errorf("notes do not say the pin was retired: %v", sel.Notes)
+	}
+	if containsNote(sel.Notes, "using pinned bundled model") {
+		t.Errorf("notes still claim the pin was used: %v", sel.Notes)
+	}
 }
 
 // completeManifests is the SHIPPED set including internal_only entries.

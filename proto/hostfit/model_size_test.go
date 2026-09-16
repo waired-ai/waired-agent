@@ -123,14 +123,15 @@ func TestModelSize_TakesTheLightestVariant(t *testing.T) {
 // and qwen3-coder-next-80b-a3b-instruct (large); qwen2.5-coder-14b-instruct
 // and qwen3-coder-30b-a3b-instruct (medium); qwen2.5-coder-3b-instruct
 // and qwen2.5-coder-7b-instruct (small).
+//
+// #1400 dropped two more, again without re-describing anybody: gpt-oss-120b
+// (large) and gpt-oss-20b (medium), retired with no successor.
 var shippedSizes = map[string]string{
 	"deepseek-v4-flash":  hostfit.ModelSizeLarge,
 	"glm-5.2":            hostfit.ModelSizeLarge,
-	"gpt-oss-120b":       hostfit.ModelSizeLarge,
 	"qwen3.5-122b-a10b":  hostfit.ModelSizeLarge,
 	"qwen3.8-flash-next": hostfit.ModelSizeLarge,
 
-	"gpt-oss-20b":     hostfit.ModelSizeMedium,
 	"qwen3.5-27b":     hostfit.ModelSizeMedium,
 	"qwen3.5-35b-a3b": hostfit.ModelSizeMedium,
 	"qwen3.6-27b":     hostfit.ModelSizeMedium,

@@ -647,9 +647,8 @@ func TestBundledManifests_HFAliasesResolve(t *testing.T) {
 		// than here, which is a different promise: an operator who pasted
 		// one is redirected to the successor and told so, instead of
 		// getting a hit on a model we still ship.
-		// TestLookupRetirement pins that half.
-		{"openai/gpt-oss-20b", "gpt-oss-20b"},
-		{"openai/gpt-oss-120b", "gpt-oss-120b"},
+		// TestLookupRetirement pins that half. The gpt-oss rows left the
+		// same way with #1400, with no successor.
 		{"Qwen/Qwen3.6-35B-A3B", "qwen3.6-35b-a3b"},
 		{"Qwen/Qwen3.5-9B", "qwen3.5-9b"},
 		// Short-form aliases operators commonly paste.
@@ -657,8 +656,6 @@ func TestBundledManifests_HFAliasesResolve(t *testing.T) {
 		{"qwen3.6-35b-a3b", "qwen3.6-35b-a3b"},
 		{"qwen3.5-9b", "qwen3.5-9b"},
 		{"qwen3.5-35b-a3b", "qwen3.5-35b-a3b"},
-		{"gpt-oss-20b", "gpt-oss-20b"},
-		{"gpt-oss-120b", "gpt-oss-120b"},
 		{"glm-5.2", "glm-5.2"},
 	}
 	for _, c := range cases {

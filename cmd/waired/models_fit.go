@@ -368,12 +368,6 @@ func notRecommendedBecause(reason string) string {
 		return ": it doesn't fit entirely in VRAM, and every reply pays for that"
 	case hostfit.ReasonTooSlow:
 		return ": replies would be slow"
-	case hostfit.ReasonWindowTooSmall:
-		// The only one that is not about this computer. No machine makes
-		// this model hold a coding session, so naming hardware would send
-		// someone shopping for something that cannot help.
-		return ": it can't hold a long coding session, so a coding agent has to compact " +
-			"much earlier with it and loses the start of the work if it doesn't"
 	case hostfit.ReasonWindowExceedsMemory:
 		return ": this computer can't hold a long coding session with it, though it answers well otherwise"
 	}

@@ -1481,6 +1481,9 @@ type agentInferenceProvider struct {
 	// activation and status read, so an unguarded log there is one line
 	// per request for the lifetime of a host that never edits its config.
 	bundledRetirementLogged sync.Once
+	// retiredFallbackLogged is the same one-line guard for a written name
+	// retired with no successor, keyed by the name (resolveWrittenModel).
+	retiredFallbackLogged sync.Map
 
 	// benchMu guards lastBench. The boot benchmark runs on the probe
 	// goroutine (main.go) and calls SetLastBench; Status() and
@@ -2026,6 +2029,24 @@ func (p *agentInferenceProvider) effectiveCfg() agentconfig.InferenceConfig {
 	c.PreferredModelID = p.effectivePreferredModelID()
 	b := p.effectiveBuildChoice()
 	c.PreferredVariantID, c.PreferredKVCacheType = b.VariantID, b.KVCacheType
+	return c
+}
+
+// resolvedModelCfg is effectiveCfg with the two written model names
+// replaced by what they resolve to on this host: a retired preference or
+// bundled pin names its successor, or the model recommended here when it
+// has none. defaultCodingModelID hands its answer to the router, which
+// looks it up by alias only, so a retired name left raw there made
+// waired/default a model-not-found on exactly the hosts whose own choice
+// had been retired.
+func (p *agentInferenceProvider) resolvedModelCfg() agentconfig.InferenceConfig {
+	c := p.effectiveCfg()
+	if m, ok := p.preferredManifest(); ok {
+		c.PreferredModelID = m.ModelID
+	}
+	if b := p.bundledModelID(); b != "" {
+		c.BundledModelID = b
+	}
 	return c
 }
 
@@ -3843,6 +3864,12 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 	// and "unknown model" would be a wrong answer: we shipped it.
 	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
 	if !ok {
+		// Retired with no successor: a pull is an instruction given now,
+		// so it is refused with what to do next rather than "unknown"
+		// (docs/decisions/20260916/0340, decision 4).
+		if len(retired.Names) > 0 {
+			return management.PullJob{}, fmt.Errorf("%s", catalog.RetirementRefusal(modelOrAlias, retired))
+		}
 		return management.PullJob{}, fmt.Errorf("unknown model %q", modelOrAlias)
 	}
 	if retired.SuccessorModelID != "" {
@@ -4985,7 +5012,9 @@ func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) boo
 // a config file written before the entry went away, and the alternative
 // is a host that pre-pulls nothing and reports a model this build no
 // longer ships. Logged once, because this is the pin the operator chose
-// and they should be able to find out it moved.
+// and they should be able to find out it moved. A name retired with no
+// successor resolves to the model recommended for this host
+// (resolveWrittenModel), which logs its own line.
 //
 // An unresolvable value is returned unchanged, which degrades to exactly
 // the comparison the caller would have made anyway; "" means no bundled
@@ -4995,7 +5024,7 @@ func (p *agentInferenceProvider) bundledModelID() string {
 	if p.cfg.BundledModelID == "" {
 		return ""
 	}
-	m, retired, ok := catalog.ResolveModel(p.cfg.BundledModelID, p.manifests)
+	m, retired, ok := p.resolveWrittenModel(p.cfg.BundledModelID)
 	if !ok || m.ModelID == "" {
 		return p.cfg.BundledModelID
 	}
@@ -5277,13 +5306,15 @@ func (p *agentInferenceProvider) operatorChosenModelID() string {
 // A retired name resolves to its successor (#200). preferred-model.json
 // is written once and read on every boot thereafter, so the file long
 // outlives the catalog it was written against; leaving the miss here
-// would strand the operator's own choice with no path back.
+// would strand the operator's own choice with no path back. A name
+// retired with no successor resolves to the model recommended for this
+// host (resolveWrittenModel).
 func (p *agentInferenceProvider) preferredManifest() (catalog.Manifest, bool) {
 	pref := p.effectivePreferredModelID()
 	if pref == "" {
 		return catalog.Manifest{}, false
 	}
-	m, _, ok := catalog.ResolveModel(pref, p.manifests)
+	m, _, ok := p.resolveWrittenModel(pref)
 	return m, ok
 }
 
@@ -5453,6 +5484,9 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOrAlias, variantID, kvType string) (downloading bool, err error) {
 	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
 	if !ok {
+		if len(retired.Names) > 0 {
+			return false, fmt.Errorf("swap preferred model: %s", catalog.RetirementRefusal(modelOrAlias, retired))
+		}
 		return false, fmt.Errorf("swap preferred model: unknown model %q", modelOrAlias)
 	}
 	if retired.SuccessorModelID != "" {
@@ -5739,7 +5773,7 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 		LocalState:     st,
 		Hardware:       hw,
 		Runtimes:       p.registry,
-		DefaultModelID: defaultCodingModelID(p.effectiveCfg(), st),
+		DefaultModelID: defaultCodingModelID(p.resolvedModelCfg(), st),
 		// Both postures carry it: with local inference off this device
 		// executes nothing itself, which is as true of a peer-arriving
 		// request on the overlay Selector as it is of the owner's own

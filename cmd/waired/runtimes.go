@@ -577,7 +577,7 @@ func installVLLM(stateDir string) error {
 	fmt.Fprintln(stdout, "vLLM is opt-in. To switch this computer to vLLM:")
 	fmt.Fprintln(stdout, "  1. Set  inference.preferred_engine = \"vllm\"  in agent.json")
 	fmt.Fprintln(stdout, "     (or pass --inference-preferred-engine vllm), then restart the background service.")
-	fmt.Fprintln(stdout, "  2. Select a model that ships a vLLM (safetensors) variant, such as gpt-oss-20b.")
+	fmt.Fprintln(stdout, "  2. Select a model that ships a vLLM (safetensors) variant, such as qwen3.5-4b.")
 	fmt.Fprintln(stdout, "     The default bundled model may be Ollama-only.")
 	fmt.Fprintln(stdout, "Requires an NVIDIA CUDA GPU (compute capability >= 8.0).")
 	return nil

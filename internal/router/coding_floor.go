@@ -5,13 +5,16 @@
 // (system prompt + tool schemas + project instructions) before any
 // conversation. A model that cannot hold ~200k either truncates or
 // compacts constantly, so auto-selection prefers models that can
-// actually serve that window. Two independent gates:
+// actually serve that window.
 //
-//   - Native floor (engine-independent): the manifest's own
-//     context_length must reach codingAgentNativeContextMin. Applied
-//     to auto-selection only; an explicit PreferredModelID bypasses it
-//     with a visible warning. This is the half RankModels still narrows
-//     on, and the half a caller may not stand down.
+// There used to be a native floor as well: the manifest's own
+// context_length had to reach ~200k before auto-selection would consider
+// it. It left with waired-ai/waired-agent#1400. The catalog admits only
+// builds whose own window reaches the floor (decisions 3 and 4 of
+// docs/decisions/20260916/0340, held by internal/hardware
+// TestBundledCatalog_EveryBuildFitsTheReferenceHost), so what remains is
+// the host gate:
+//
 //   - Host gate (ollama path): whether this host would actually SERVE
 //     the floor window here. Since the 2026-08-03 owner decision that
 //     question has one answer and one implementation,
@@ -90,12 +93,6 @@ const (
 	// derivation whenever the floor or the #664 numbers change.
 	OllamaIntentionalSpillCapExpected = hostfit.OllamaMaxExpectedSpillFraction
 )
-
-// MeetsNativeContextFloor reports whether the manifest's native window
-// qualifies it for the coding-agent auto-selection pool.
-func MeetsNativeContextFloor(m catalog.Manifest) bool {
-	return modelrank.MeetsNativeContextFloor(m)
-}
 
 // EffectiveContextFloor is the window the host gate (and the serve
 // tuning's intentional spill) aims for: the ~200k floor, capped at the

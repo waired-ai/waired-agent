@@ -251,11 +251,17 @@ func RankModels(in PickInput) ([]Pick, error) {
 	// through when a pass would empty the set, which would resurrect a
 	// manual-only model on exactly the host where it is the only
 	// candidate — the case this exists for.
+	//
+	// internal_only is skipped the same way (waired-ai/waired-agent#1400).
+	// Callers hand in the complete set — the agent resolves against it —
+	// and the only thing that used to keep the CI fixture granite4-350m out
+	// of an automatic choice was its 32k native window failing the native
+	// floor, which is gone. An explicit pin still reaches it.
 	withheldAll := false
 	if in.PreferredModelID == "" {
 		chooseable := make([]catalog.Manifest, 0, len(manifests))
 		for _, m := range manifests {
-			if m.ManualOnly != "" {
+			if m.ManualOnly != "" || m.InternalOnly != "" {
 				continue
 			}
 			chooseable = append(chooseable, m)
@@ -278,7 +284,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 		manifestIdx int
 		manifest    catalog.Manifest
 		variant     catalog.Variant
-		floorOK     bool // reported: native window AND this host serves it
+		floorOK     bool // reported: this host serves the ~200k window
 		gateOK      bool // narrowed on by pass 1
 		spill       float64
 		est         hostfit.Estimate
@@ -312,22 +318,25 @@ func RankModels(in PickInput) ([]Pick, error) {
 			c := candidate{manifestIdx: i, manifest: m, variant: v,
 				est: hostfit.Estimate{MeetsSpeedFloor: true},
 				rec: hostfit.Verdict{Fits: true}}
-			// The coding-agent context floor, REPORTED here: the native
-			// window plus the per-engine host gate — the serve tuning's
-			// own sizing on ollama, the utilization-budget window check
-			// on vllm (vLLM clamps instead of spilling, so no spill
-			// fraction there). Which half each narrowing pass acts on is
-			// a separate question — see the passes.
-			c.floorOK = MeetsNativeContextFloor(m)
+			// The coding-agent context floor, REPORTED here: the
+			// per-engine host gate — the serve tuning's own sizing on
+			// ollama, the utilization-budget window check on vllm (vLLM
+			// clamps instead of spilling, so no spill fraction there).
+			// The model's own window used to be half of it; the catalog
+			// admits only builds whose window reaches the floor since
+			// waired-ai/waired-agent#1400 (decisions 3 and 4 of
+			// docs/decisions/20260916/0340), so that half is gone. Which
+			// pass acts on it is a separate question — see the passes.
+			c.floorOK = true
 			if in.Engine == catalog.RuntimeOllama {
 				hostOK, spill := OllamaServesContextFloor(m, v, in.Host)
 				c.spill = spill
-				c.floorOK = c.floorOK && hostOK
+				c.floorOK = hostOK
 				c.est = hostfit.EstimateOllamaDecode(v, in.Host)
 				c.rec = hostfit.OllamaRecommendModel(m, v, in.Host)
 			}
 			if in.Engine == catalog.RuntimeVLLM {
-				c.floorOK = c.floorOK && VLLMServesContextFloor(m, v, in.GPUs)
+				c.floorOK = VLLMServesContextFloor(m, v, in.GPUs)
 				// Reported, not narrowed on: both of this verdict's
 				// clauses are already inside floorOK above, so pass 2
 				// removes nothing pass 1 has not. What it adds is a
@@ -338,12 +347,14 @@ func RankModels(in PickInput) ([]Pick, error) {
 				c.rec = hostfit.VLLMRecommendModelOnHost(m, v, in.Host, in.GPUs)
 			}
 			// What pass 1 narrows on. On ollama the host half moved to
-			// the recommendation, which a caller may stand down; on vLLM
-			// it stays here, because that engine has no residency or
-			// spill story for the recommendation to be about.
+			// the recommendation, which a caller may stand down, and the
+			// native half left with #1400, so pass 1 removes nothing
+			// there; on vLLM the host half stays here, because that
+			// engine has no residency or spill story for the
+			// recommendation to be about.
 			c.gateOK = c.floorOK
 			if in.Engine == catalog.RuntimeOllama {
-				c.gateOK = MeetsNativeContextFloor(m)
+				c.gateOK = true
 			}
 			// What pass 3 narrows on. Looked up per variant rather than
 			// per model: the figure belongs to the weights that were
@@ -375,9 +386,12 @@ func RankModels(in PickInput) ([]Pick, error) {
 	// it would leave nothing. An explicit PreferredModelID bypasses all
 	// of it, with the status still reported on the Pick.
 	//
-	//  1. NATIVE coding-agent context floor: the model's own advertised
-	//     window reaches ~200k. A manifest comparison, so it says
-	//     nothing about this machine and no hardware changes it.
+	//  1. The coding-agent context floor. It was the model's own
+	//     advertised window until waired-ai/waired-agent#1400, when the
+	//     catalog began admitting only builds whose window reaches ~200k
+	//     (decisions 3 and 4 of docs/decisions/20260916/0340). What is left
+	//     is the vLLM host gate — would the engine clamp the window below
+	//     the floor here — and on ollama this pass removes nothing.
 	//  2. hostfit.OllamaRecommendModel: would this host actually declare
 	//     the ~200k coding window with this model? That is what
 	//     "recommended" means since the 2026-08-03 owner decision
@@ -478,9 +492,8 @@ func RankModels(in PickInput) ([]Pick, error) {
 				"serves the ~200k coding window with ~%.0f%% of the model expected in system RAM",
 				c.spill*100))
 		case !c.floorOK:
-			p.Reasons = append(p.Reasons, fmt.Sprintf(
-				"below the ~200k coding-agent context floor (native window %d tokens); best-effort candidate",
-				c.manifest.ContextLength))
+			p.Reasons = append(p.Reasons,
+				"this host would serve it below the ~200k coding-agent context floor; best-effort candidate")
 		}
 		if !c.rec.Fits {
 			p.Reasons = append(p.Reasons, notRecommendedReason(c.rec))
@@ -515,9 +528,6 @@ func notRecommendedReason(v hostfit.Verdict) string {
 		return fmt.Sprintf(
 			"not preselected here: needs ~%d MB in the shared memory pool, which offers %d MB",
 			v.NeedMB, v.HaveMB)
-	case hostfit.ReasonWindowTooSmall:
-		return "not preselected here: its own context window is below the ~200k coding-agent " +
-			"target, which no engine and no hardware changes"
 	case hostfit.ReasonWindowExceedsMemory:
 		return "not preselected here: this host would serve it below the ~200k coding-agent " +
 			"target (runs, but long sessions truncate or compact)"

@@ -122,6 +122,15 @@ const InstallQualityFloorTier = 30
 // manifest is all it takes, and the control plane holds the same
 // manifests. That asymmetry is how a 131072-window model becomes the
 // wizard's default on a host whose own agent would never serve it.
+//
+// Deprecated: nothing reads it since waired-ai/waired-agent#1400. The
+// catalog admits only builds whose own window reaches the ~200k serving
+// window (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md,
+// held by internal/hardware.TestBundledCatalog_EveryBuildFitsTheReferenceHost),
+// so this gate no longer separates any offered model, and the owner had
+// the machinery built around sub-200k models removed (decision 4). Kept
+// only because the proto module is additive-only.
 const NativeContextFloorTokens = 200000
 
 // Inputs of the ollama VRAM-residency check.
@@ -1049,6 +1058,15 @@ func OllamaWeightsResidentMB(v catalog.Variant, unifiedMemory bool) int {
 //
 // Auto-selection only. An explicit user choice bypasses it — with a
 // visible warning, which is the caller's to word.
+//
+// Deprecated: nothing reads it since waired-ai/waired-agent#1400. The
+// catalog admits only builds whose own window reaches the ~200k serving
+// window (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md,
+// held by internal/hardware.TestBundledCatalog_EveryBuildFitsTheReferenceHost),
+// so this gate no longer separates any offered model, and the owner had
+// the machinery built around sub-200k models removed (decision 4). Kept
+// only because the proto module is additive-only.
 func MeetsNativeContextFloor(m catalog.Manifest) bool {
 	return m.ContextLength >= NativeContextFloorTokens
 }
@@ -1089,6 +1107,15 @@ const (
 // hardware makes it servable. Distinct from ReasonInsufficientVRAM,
 // which says the same model would fit a bigger machine — an operator
 // can act on that one and cannot act on this one.
+//
+// Deprecated: nothing produces it since waired-ai/waired-agent#1400. The
+// catalog admits only builds whose own window reaches ServingWindow200k
+// (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md),
+// so the recommendation no longer asks, and the owner had the machinery
+// built around sub-200k models removed (decision 4). A consumer may still
+// meet it from an older agent or control plane. Kept only because the
+// proto module is additive-only.
 const ReasonWindowTooSmall = "window_too_small"
 
 // ReasonWindowExceedsMemory is a RECOMMENDATION reason: the model runs
@@ -1096,8 +1123,7 @@ const ReasonWindowTooSmall = "window_too_small"
 // is not what the host should be pointed at by default. NeedMB is the
 // window-inclusive requirement and HaveMB the host's total memory.
 //
-// Distinct from ReasonWindowTooSmall, which says no hardware would help,
-// and from ReasonInsufficientMemory, which is a refusal. A consumer that
+// Distinct from ReasonInsufficientMemory, which is a refusal. A consumer that
 // hides a model on this one has misread it — see OllamaRecommendModel.
 const ReasonWindowExceedsMemory = "window_exceeds_memory"
 

@@ -203,6 +203,33 @@ func TestRankModels_ManualOnlyIsWithheldEvenWhenAlone(t *testing.T) {
 	}
 }
 
+// internal_only is withheld from automatic choice the same way
+// (waired-ai/waired-agent#1400). The CI fixture granite4-350m has a 32k
+// native window, and the native floor that used to keep it out of an
+// automatic pick is gone; a pin still reaches it.
+func TestRankModels_InternalOnlyIsWithheldEvenWhenItIsTheOnlyFit(t *testing.T) {
+	in := input(nil, 0)
+	in.Catalog = []catalog.Manifest{
+		{
+			ModelID: "fixture", ContextLength: 32768, InternalOnly: "CI fixture",
+			Variants: ladder()[2].Variants,
+		},
+		ladder()[1],
+	}
+	got := top(t, in)
+	if got == "fixture" {
+		t.Fatalf("an internal_only model was chosen automatically")
+	}
+	in.Catalog = in.Catalog[:1]
+	if _, err := RankModels(in); !errors.Is(err, ErrHardwareInsufficient) {
+		t.Fatalf("alone: err = %v, want ErrHardwareInsufficient", err)
+	}
+	in.PreferredModelID = "fixture"
+	if got := top(t, in); got != "fixture" {
+		t.Errorf("a pinned internal_only model was withheld: top = %q", got)
+	}
+}
+
 // PRODUCT CONTRACT (waired-ai/waired#1225): the engine-floor RULE is one
 // rule; what an unknown version means is the caller's, because the empty
 // string means different things to a caller that serves and one that

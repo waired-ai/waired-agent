@@ -272,12 +272,16 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// TestManualOnly_ShippedCatalogNeverOffersGptOss drives the REAL bundled
-// catalog, because the property under test is not "RankModels honours
-// the field" — the fixture above proves that — but "the manifests we
-// ship carry it". A synthetic catalog would pass while gpt-oss went out
-// unmarked, which is the whole failure mode (#518, #521).
-func TestManualOnly_ShippedCatalogNeverOffersGptOss(t *testing.T) {
+// TestManualOnly_ShippedCatalogNeverOffersAManualModel drives the REAL
+// bundled catalog, because the property under test is not "RankModels
+// honours the field" — the fixture above proves that — but "the manifests
+// we ship carry it". A synthetic catalog would pass while a withheld model
+// went out unmarked, which is the whole failure mode (#518, #521).
+//
+// gpt-oss was the first pair this pinned and left the catalog with #1400;
+// the two withheld today are the previous generation's large band and the
+// 27B the qwen3.8 build replaced (#823).
+func TestManualOnly_ShippedCatalogNeverOffersAManualModel(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
@@ -290,11 +294,11 @@ func TestManualOnly_ShippedCatalogNeverOffersGptOss(t *testing.T) {
 		}
 	}
 	if len(withheld) == 0 {
-		t.Fatal("no bundled manifest is marked manual_only; #521 marks both gpt-oss entries")
+		t.Fatal("no bundled manifest is marked manual_only; qwen3.5-122b-a10b and qwen3.6-27b are")
 	}
-	for _, want := range []string{"gpt-oss-20b", "gpt-oss-120b"} {
+	for _, want := range []string{"qwen3.5-122b-a10b", "qwen3.6-27b"} {
 		if !contains(withheld, want) {
-			t.Errorf("%s is not marked manual_only; #518 withholds gpt-oss from recommendation", want)
+			t.Errorf("%s is not marked manual_only; it is withheld from recommendation", want)
 		}
 	}
 
@@ -395,7 +399,7 @@ func TestManualOnly_NoHostLosesItsPick(t *testing.T) {
 						t.Fatalf("PickEngine: %v", err)
 					}
 					if ep.Engine == h.engine || !selects(manifests, h.hw, ep.Engine, ev.version) {
-						t.Errorf("this host had a pick before gpt-oss was withheld and has none now, "+
+						t.Errorf("this host had a pick before the manual_only models were withheld and has none now, "+
 							"on %q and on the engine it would run (%q: %v) — withholding a model must "+
 							"never disable local inference", h.engine, ep.Engine, ep.Reasons)
 					}
@@ -415,7 +419,7 @@ func TestManualOnly_StaysListedAndResolvable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	for _, want := range []string{"gpt-oss-20b", "gpt-oss-120b"} {
+	for _, want := range []string{"qwen3.5-122b-a10b", "qwen3.6-27b"} {
 		m, ok := catalog.LookupByAlias(want, manifests)
 		if !ok {
 			t.Errorf("%s is not in the offered catalog; manual_only withholds it from "+

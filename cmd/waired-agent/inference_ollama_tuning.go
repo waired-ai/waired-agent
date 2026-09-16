@@ -507,28 +507,24 @@ func resolveTuningTarget(cfg agentconfig.InferenceConfig, manifests []catalog.Ma
 }
 
 // modelDecisionReasons renders the #624 context-floor status of the
-// resolved tuning target in the engine-decision log idiom, and returns
-// an extra warning to append for sub-floor targets (preferred override
-// or a stale/best-effort config) so `waired status` / doctor carry it
-// via TuningWarning too. Informational tone throughout — every case is
-// a working configuration.
+// resolved tuning target in the engine-decision log idiom, and returns an
+// extra warning for a rung this host's memory was not shown to hold, so
+// `waired status` / doctor carry it via TuningWarning too. Informational
+// tone throughout — every case is a working configuration.
+//
+// It also used to warn about a target whose OWN window was below the ~200k
+// floor ("preferred model overrides …" / "configured model is below …").
+// That left with waired-ai/waired-agent#1400: the catalog admits only
+// builds whose window reaches the floor, and the owner had the machinery
+// built around sub-200k models removed (decisions 3 and 4 of
+// docs/decisions/20260916/0340). cfg stays in the signature for the
+// callers and is no longer read.
 func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t ollamaTuning) (reasons []string, extraWarning string) {
 	switch {
 	case t.ExpectedSpillFraction > 0:
 		reasons = append(reasons, fmt.Sprintf(
 			"%s serves a ~%dk coding window with %s expected in system RAM",
 			m.ModelID, t.ContextLength/1024, plannedSpillAmount(t)))
-	case !router.MeetsNativeContextFloor(m):
-		if cfg.PreferredModelID != "" {
-			extraWarning = fmt.Sprintf(
-				"preferred model overrides the ~200k coding-agent context floor (native window %d tokens)",
-				m.ContextLength)
-		} else {
-			extraWarning = fmt.Sprintf(
-				"configured model is below the ~200k coding-agent context floor (native window %d tokens); best-effort serving",
-				m.ContextLength)
-		}
-		reasons = append(reasons, extraWarning)
 	case t.ContextLength >= router.CodingAgentContextFloorTokens && t.WindowFits:
 		// A prediction, and worded as one: whether the layers really landed
 		// in GPU memory is the engine's to report, and the verify pass logs

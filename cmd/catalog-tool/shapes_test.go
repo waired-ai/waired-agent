@@ -16,7 +16,7 @@ import (
 
 // shapeTestTag is a tag the bundled catalog actually ships, so
 // resolveTag has somewhere to put the record.
-const shapeTestTag = "gpt-oss:20b"
+const shapeTestTag = "qwen3.5:9b-q4_K_M"
 
 func fullShapeReport(t *testing.T) agentgrade.ShapeReport {
 	t.Helper()
@@ -105,7 +105,7 @@ func TestShapesImportRoundTripsEveryField(t *testing.T) {
 	}
 
 	set := readStore(t, store)
-	rec, ok := set.Lookup("gpt-oss-20b", "mxfp4-gguf")
+	rec, ok := set.Lookup("qwen3.5-9b", "q4-gguf")
 	if !ok {
 		t.Fatalf("no record was written: %+v", set.Models)
 	}
@@ -257,7 +257,7 @@ func TestShapesImportRequiresRetrieved(t *testing.T) {
 // it now has.
 func TestShapesImportClearsTheBaselineEntry(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "requestshapes.json")
-	seed := `{"schema":1,"models":{},"baseline":{"gpt-oss-20b/mxfp4-gguf":"whatever"}}`
+	seed := `{"schema":1,"models":{},"baseline":{"qwen3.5-9b/q4-gguf":"whatever"}}`
 	if err := os.WriteFile(store, []byte(seed), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestShapesImportClearsTheBaselineEntry(t *testing.T) {
 		t.Fatalf("import: %v", err)
 	}
 	set := readStore(t, store)
-	if _, still := set.Baseline["gpt-oss-20b/mxfp4-gguf"]; still {
+	if _, still := set.Baseline["qwen3.5-9b/q4-gguf"]; still {
 		t.Error("the baseline exemption outlived the measurement that retired it")
 	}
 }

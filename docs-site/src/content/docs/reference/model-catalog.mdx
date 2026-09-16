@@ -104,9 +104,9 @@ servers.
 ## Retired models
 
 The catalog changes between releases. When a model is dropped, Waired keeps
-its name working and points it at a replacement, so a name you saved in a
-config file, a script, or a coding-tool setting keeps answering. You see a
-line like this when it happens:
+its name working and, when there is a replacement, points the name at it, so
+a name you saved in a config file, a script, or a coding-tool setting keeps
+answering. You see a line like this when it happens:
 
 ```
 "qwen2.5-coder-0.5b" was retired; using "qwen3.5-0.8b" instead
@@ -118,6 +118,20 @@ is and keeps running until you switch away from it. Choosing a retired model
 as a new setting is the one case that does not follow the replacement.
 Waired declines and names the replacement, so you pick deliberately.
 
+A model can also be retired with no replacement. Asking for it by name is
+refused:
+
+```
+"gpt-oss-20b" was retired with no replacement; choose another model
+```
+
+A computer whose saved choice names it moves to the model Waired recommends
+for that computer, and logs the move:
+
+```
+"gpt-oss-20b" was retired with no replacement; using "qwen3.8-27b", the model recommended for this computer, instead
+```
+
 | Retired | Use instead | Why |
 |---|---|---|
 | `qwen2.5-coder-0.5b-instruct` | `qwen3.5-0.8b` | It could not reliably use tools, which coding agents depend on. |
@@ -128,6 +142,9 @@ Waired declines and names the replacement, so you pick deliberately.
 | `qwen3-coder-next-80b-a3b-instruct` | `qwen3.6-35b-a3b` | An older generation. The replacement is smaller and scores better. |
 | `qwen3-coder-480b-a35b-instruct` | `glm-5.2` | An older generation. |
 | `glm-4.5-air-106b-a12b` | `glm-5.2` | An older generation, and it could hold only a 131,000-token conversation. |
+| `gpt-oss-20b` | — | It could hold only a 131,072-token conversation, below the roughly 200,000 tokens the catalog now asks of every model. |
+| `gpt-oss-120b` | — | The same 131,072-token limit as the 20B. |
 
-Waired carries one generation of models at a time, and these were the
-generation before the current one.
+Waired carries one generation of models at a time, and most of these were the
+generation before the current one. The two `gpt-oss` rows were dropped for
+their context window, not their age.

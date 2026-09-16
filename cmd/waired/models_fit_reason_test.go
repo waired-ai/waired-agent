@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -18,9 +17,12 @@ import (
 // exact moment the user is deciding to spend a multi-gigabyte download
 // on it.
 //
-// Product contract: waired-ai/waired#1056 decision 5 requires the
-// 131k-native class to be opt-in "警告つき" — with the warning. This is
-// where the warning is.
+// Product contract: waired-ai/waired#1056 decision 5 required the
+// 131k-native class to be opt-in "警告つき" — with the warning. The class
+// and its warning left with waired-ai/waired-agent#1400 (owner decision
+// 2026-09-16, decisions 3 and 4 of docs/decisions/20260916/0340): nothing
+// ships below the ~200k window, and window_too_small has no producer. The
+// other reasons still need their clause.
 func TestNotRecommendedBecause_CoversEveryReasonTheFitRulesProduce(t *testing.T) {
 	// Every reason hostfit can put on Presentation.NotRecommendedReason.
 	// A new one added without copy here would print nothing, which is how
@@ -28,7 +30,6 @@ func TestNotRecommendedBecause_CoversEveryReasonTheFitRulesProduce(t *testing.T)
 	for _, reason := range []string{
 		hostfit.ReasonWeightsSpill,
 		hostfit.ReasonTooSlow,
-		hostfit.ReasonWindowTooSmall,
 		hostfit.ReasonWindowExceedsMemory,
 	} {
 		if got := notRecommendedBecause(reason); got == "" {
@@ -42,25 +43,5 @@ func TestNotRecommendedBecause_CoversEveryReasonTheFitRulesProduce(t *testing.T)
 	// allowed to grow ahead of this CLI.
 	if got := notRecommendedBecause("something_new"); got != "" {
 		t.Errorf("unknown reason = %q, want no clause", got)
-	}
-}
-
-// The 131k class is the one whose cost is not about this computer at
-// all — no hardware makes it hold a coding session — so its clause has
-// to name the session limit rather than the machine, and point at the
-// one thing that helps.
-func TestNotRecommendedBecause_WindowTooSmallNamesTheSessionLimit(t *testing.T) {
-	got := notRecommendedBecause(hostfit.ReasonWindowTooSmall)
-	for _, want := range []string{"long coding session", "compact"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("clause %q does not mention %q", got, want)
-		}
-	}
-	// Not a hardware complaint: a bigger machine changes nothing here,
-	// and saying otherwise sends someone shopping.
-	for _, unwanted := range []string{"graphics card", "GPU", "VRAM", "memory"} {
-		if strings.Contains(got, unwanted) {
-			t.Errorf("clause %q blames the hardware; no hardware helps this one", got)
-		}
 	}
 }

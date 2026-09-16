@@ -2,6 +2,8 @@
 status: accepted
 supersedes:
   - docs/decisions/20260803/1909-withhold-a-model-that-cannot-call-a-tool.md
+superseded_by:
+  - docs/decisions/20260916/2146-retire-with-no-successor-and-drop-sub-200k-machinery.md
 ---
 
 # 退役は後継マップで行い、qwen2.5-coder-0.5b を最初の利用者にする (20260804 19:43)
@@ -13,6 +15,10 @@ Accepted。`docs/decisions/20260803/1909-withhold-a-model-that-cannot-call-a-too
 有効化し、0.5b を withhold する）は正しく、その exit condition
 （「#200 の機構が入ったら 0.5b を消す」）を今回果たした。`--require-pass` に関する
 部分は引き続き有効。
+
+§1 の「退役は必ず後継を名指す」は
+`docs/decisions/20260916/2146-retire-with-no-successor-and-drop-sub-200k-machinery.md`
+が置き換えた（2026-09-16 以降、後継は任意）。ほかの部分はそのまま有効。
 
 ## Context
 

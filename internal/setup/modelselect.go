@@ -110,6 +110,22 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 		EnableInference: true,
 	}
 
+	// A pin naming a model retired with no successor is a pin to nothing
+	// (docs/decisions/20260916/0340, decision 4). It falls through to the
+	// hardware auto-selection a host with no pin gets, said out loud in
+	// Notes — the same fallback the daemon applies to a written name.
+	var retiredPinNote string
+	if in.Pinned {
+		if r, retired := catalog.LookupRetirement(sel.ModelID); retired && !catalog.HasSuccessor(r) {
+			if _, live := catalog.LookupByAlias(sel.ModelID, in.Manifests); !live {
+				retiredPinNote = fmt.Sprintf(
+					"pinned bundled model %q was retired with no replacement; choosing a model for this hardware instead",
+					sel.ModelID)
+				in.Pinned = false
+			}
+		}
+	}
+
 	// Operator pinned a specific model: honour it verbatim, skip
 	// auto-selection and the below-recommended-spec default. The deploy-time defensive
 	// disk check still guards a mid-download "disk full".
@@ -126,12 +142,10 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 		}
 		sel.Notes = append(sel.Notes, fmt.Sprintf(
 			"using pinned bundled model %q (hardware auto-selection skipped)", sel.ModelID))
-		if m, found := catalog.LookupByAlias(sel.ModelID, in.Manifests); found && !router.MeetsNativeContextFloor(m) {
-			sel.Notes = append(sel.Notes, fmt.Sprintf(
-				"pinned model's native window is %d tokens — the ~200k coding-agent context floor is not enforced for pins",
-				m.ContextLength))
-		}
 		return sel, nil
+	}
+	if retiredPinNote != "" {
+		sel.Notes = append(sel.Notes, retiredPinNote)
 	}
 
 	enginePick, err := router.PickEngine(router.EnginePickInput{
@@ -290,9 +304,6 @@ func selectionNote(p router.Pick, hw hardware.Profile, engine string) string {
 	case p.ContextFloorSatisfied && p.ExpectedSpillFraction > 0:
 		note += fmt.Sprintf("; serves a ~200k coding context with ~%.0f%% of the model expected in system RAM (larger window traded for some decode speed)",
 			p.ExpectedSpillFraction*100)
-	case !p.ContextFloorSatisfied && !router.MeetsNativeContextFloor(p.Manifest):
-		note += fmt.Sprintf("; this model's own window is below the ~200k coding-agent context floor (native window %d tokens) — best-effort pick for this hardware",
-			p.Manifest.ContextLength)
 	case !p.ContextFloorSatisfied:
 		note += fmt.Sprintf("; this host cannot serve the ~200k coding-agent context (the model's native window is %d tokens) — best-effort pick for this hardware",
 			p.Manifest.ContextLength)

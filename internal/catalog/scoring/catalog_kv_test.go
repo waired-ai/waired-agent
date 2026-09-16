@@ -137,15 +137,19 @@ var hybridArchConfigs = map[string]ArchConfig{
 // family: layer_types alternates window and full layers, and only the full
 // ones are priced (ArchConfig.FullAttnLayers counts them). Values from the
 // models' config.json, the same rows archCases pins in scoring_test.go.
-var slidingWindowArchConfigs = map[string]ArchConfig{
-	// L=24, full=12, n_kv=8, head_dim=64 → 2×12×8×64×2 = 24576
-	"gpt-oss-20b": {NumHiddenLayers: 24, HiddenSize: 2880, NumAttentionHeads: 64, NumKeyValueHeads: 8, HeadDim: 64, SlidingWindow: 128, NumLocalExperts: 32, NumExpertsPerTok: 4, LayerTypes: alternating(24)},
-	// L=36, full=18, n_kv=8, head_dim=64 → 36864
-	"gpt-oss-120b": {NumHiddenLayers: 36, HiddenSize: 2880, NumAttentionHeads: 64, NumKeyValueHeads: 8, HeadDim: 64, SlidingWindow: 128, NumLocalExperts: 128, NumExpertsPerTok: 4, LayerTypes: alternating(36)},
-}
+//
+// Empty since #1400 retired gpt-oss, the only sliding-window family the
+// catalog carried. The derivation and this guard stay: the next
+// sliding-window variant gets a row here or fails the test below. The
+// gpt-oss rows it held were, from their config.json:
+//
+//	gpt-oss-20b:  L=24, full=12, n_kv=8, head_dim=64 → 2×12×8×64×2 = 24576
+//	gpt-oss-120b: L=36, full=18, n_kv=8, head_dim=64 → 36864
+var slidingWindowArchConfigs = map[string]ArchConfig{}
 
-// TestBundledSlidingWindowManifestsMatchTheDerivation holds the gpt-oss
-// annotations to their architecture (waired-agent#1337), and fails on a
+// TestBundledSlidingWindowManifestsMatchTheDerivation holds sliding-window
+// annotations to their architecture (waired-agent#1337; gpt-oss until
+// #1400), and fails on a
 // sliding_window variant with a KV figure but no row here.
 func TestBundledSlidingWindowManifestsMatchTheDerivation(t *testing.T) {
 	manifests, err := catalog.BundledManifestsIncludingInternal()

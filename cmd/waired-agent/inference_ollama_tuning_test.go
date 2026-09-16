@@ -735,27 +735,10 @@ func TestModelDecisionReasons(t *testing.T) {
 		}
 	})
 
-	t.Run("preferred-subfloor-override", func(t *testing.T) {
-		sub := m
-		sub.ContextLength = 131072
-		tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
-		tn.ExpectedSpillFraction = 0 // isolate the native-floor case
-		_, extra := modelDecisionReasons(agentconfig.InferenceConfig{PreferredModelID: sub.ModelID}, sub, tn)
-		if !strings.Contains(extra, "overrides the ~200k coding-agent context floor") {
-			t.Errorf("extra = %q", extra)
-		}
-	})
-
-	t.Run("stale-config-subfloor", func(t *testing.T) {
-		sub := m
-		sub.ContextLength = 32768
-		tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
-		tn.ExpectedSpillFraction = 0
-		_, extra := modelDecisionReasons(agentconfig.InferenceConfig{}, sub, tn)
-		if !strings.Contains(extra, "best-effort serving") {
-			t.Errorf("extra = %q", extra)
-		}
-	})
+	// The two sub-floor arms ("preferred-subfloor-override",
+	// "stale-config-subfloor") left with waired-ai/waired-agent#1400, with
+	// the warnings they pinned (decisions 3 and 4 of
+	// docs/decisions/20260916/0340).
 
 	// waired-agent#1330: the decision line used to assert "fully
 	// GPU-resident" from the sizing alone, on a unified-memory host whose
@@ -823,18 +806,19 @@ func TestModelDecisionReasons(t *testing.T) {
 // premise check.
 func TestApplyModelDecisionReasonsJoins(t *testing.T) {
 	m := tuningTestManifest()
-	sub := m
-	sub.ContextLength = 32768 // arm 2: below the coding-agent floor
 
-	tn := computeOllamaTuning(sub, sub.Variants[0], discrete24GB(), "q8_0", ollamaObservedServe{})
+	// The forced-rung arm: the only arm left that produces a warning since
+	// the sub-floor one left with #1400.
+	tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0", ollamaObservedServe{})
 	tn.ExpectedSpillFraction = 0
+	tn.WindowFits = false
 	tn.Warning = "prior warning"
 
-	got := applyModelDecisionReasons(agentconfig.InferenceConfig{}, sub, tn, nil)
+	got := applyModelDecisionReasons(agentconfig.InferenceConfig{}, m, tn, nil)
 	if !strings.Contains(got.Warning, "prior warning") {
 		t.Errorf("the tuning's own warning was dropped: %q", got.Warning)
 	}
-	if !strings.Contains(got.Warning, "best-effort serving") {
+	if !strings.Contains(got.Warning, "the window is declared to the mesh") {
 		t.Errorf("the decision warning did not land: %q", got.Warning)
 	}
 }
