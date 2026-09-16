@@ -87,7 +87,7 @@ func TestBundledManifests_QualityTiersAscending(t *testing.T) {
 // neither runner it accepts compares quantizations of one model.
 //
 // Equal quantization tiers are left alone. qwen3.6-35b-a3b ships
-// mtp-q4-gguf at 90 above q4-gguf at 89, both Q4_K_M, and that ordering
+// mtp-q4-gguf at 82 above q4-gguf at 81, both Q4_K_M, and that ordering
 // is a real judgement about multi-token prediction rather than an
 // artefact of the composite.
 func TestBundledManifests_QualityTierFollowsPrecisionWithinAModel(t *testing.T) {

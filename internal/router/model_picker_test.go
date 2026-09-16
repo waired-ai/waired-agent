@@ -544,10 +544,11 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			// 31 GB system RAM) and the residency check against the 96 GB
 			// pool governs. The coding-first Ollama lineup makes
 			// qwen3.6-35b-a3b (SWE-bench V 73.4%, 3B active) the highest
-			// quality_tier that fits — its faster mtp variant (tier 90) is
+			// quality_tier that fits — its faster mtp variant (tier 82) is
 			// floored to Ollama >= 0.30 and excluded here because the test
-			// supplies no EngineVersion, so the plain q4-gguf (tier 89)
-			// wins. At runtime, with a known engine version >= 0.30, the
+			// supplies no EngineVersion, so the plain q4-gguf (tier 81)
+			// wins. Every qwen3.8 build ranks higher since #1400, and every one
+			// carries a min_engine_version, so none of them is admitted here. At runtime, with a known engine version >= 0.30, the
 			// mtp variant is selected instead.
 			name: "Strix Halo 96 GB UMA carve-out on Linux (Ryzen AI Max+ 395)",
 			hw: hardware.Profile{
@@ -563,8 +564,9 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 		},
 		{
 			// Same carve-out host but with a known recent engine version:
-			// the mtp variant (tier 90, min_engine_version 0.30.0) is no
-			// longer floored out and wins as the fastest top-tier coder.
+			// the mtp variant (tier 82, min_engine_version 0.30.0) is no
+			// longer floored out and wins as the fastest top-tier coder. The
+			// qwen3.8 builds ranked above it need 0.32.13 or later (#1400).
 			name: "Strix Halo carve-out on Linux with Ollama 0.31 → mtp variant",
 			hw: hardware.Profile{
 				RAMTotalGB:    31,
@@ -613,8 +615,9 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			engine: "ollama",
 			// qwen3-coder-480b (tier 92) held this row until #522. The
 			// biggest ollama build the pinned generation ships is
-			// qwen3.6-35b-a3b (tier 90) — a 512 GB Mac steps down two
-			// tier points and loses nothing else.
+			// qwen3.6-35b-a3b (tier 82) among the builds an unknown engine
+			// version admits — every qwen3.8 build above it carries a
+			// min_engine_version floor (#1400).
 			wantModel: "qwen3.6-35b-a3b",
 			// q4-gguf, not mtp: this row sets no engineVersion, and the
 			// mtp build carries a MinEngineVersion floor that an unknown

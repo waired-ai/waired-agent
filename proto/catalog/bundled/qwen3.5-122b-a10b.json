@@ -34,7 +34,7 @@
       ],
       "estimated_weight_gb": 81.0,
       "min_ram_gb": 128,
-      "quality_tier": 83,
+      "quality_tier": 78,
       "param_count": 122000000000,
       "active_params": 10000000000,
       "quantization_tier": 4,

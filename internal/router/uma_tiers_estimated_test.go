@@ -94,17 +94,27 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		// The dense 27Bs are still out for the reason this row always
 		// gave: qwen3.6-27b (q70) is 131072-native, and qwen3.5-27b's
 		// 17 GB of weights leave only ~38k of KV here.
-		{24, "qwen3.6-35b-a3b", "mtp-q2-gguf", 86,
-			"#1265: the Q2 build (12.6 GB) is the first 35B-A3B this budget can declare 200k with"},
+		//
+		// MOVED to the dense 27B by waired-ai/waired-agent#1400: every
+		// qwen3.8 build now ranks above every qwen3.6-35b-a3b build
+		// (docs/decisions/20260916/0340). On this budget the 27B's Q3
+		// build does not hold the ~200k window (window_exceeds_memory);
+		// its Q2 build (10.76 GB) does.
+		{24, "qwen3.8-27b", "q2-gguf", 86,
+			"#1400: the 27B's Q2 build (10.76 GB) is the heaviest qwen3.8 build this budget can declare 200k with"},
 		// MOVED from mtp-q4-gguf (q90) by waired-agent#1337: on a 48 GB Mac
 		// the fit projected 24,877 MiB for the MTP-Q4 build at 200,704 with
 		// q8_0 KV plus a 2,994 MiB target — over the 24,576 MB budget on
 		// its own. The Q3 build holds the window.
-		{32, "qwen3.6-35b-a3b", "mtp-q3-gguf", 87,
-			"#1337: the MTP-Q4 build's ~200k window measures 27.9 GB on Metal (fit log), over the 24576 MB budget; Q3 is the heaviest build that holds it; needs engine >= 0.30.0"},
-		{64, "qwen3.6-35b-a3b", "mtp-q4-gguf", 90, "estimated; mtp needs engine >= 0.30.0"},
+		//
+		// MOVED to the dense 27B by waired-ai/waired-agent#1400, as the
+		// 24 GB row: the 27B's MTP-Q4 build does not hold the ~200k window
+		// on this budget either (window_exceeds_memory); its Q3 build does.
+		{32, "qwen3.8-27b", "q3-gguf", 87,
+			"#1400: the 27B's MTP-Q4 build does not hold the ~200k window on the 24576 MB budget; Q3 is the heaviest qwen3.8 build that does; needs engine >= 0.33.3"},
+		{64, "qwen3.8-27b", "mtp-q4-gguf", 89, "#1400: estimated; mtp needs engine >= 0.32.13"},
 		{128, "qwen3.8-flash-next", "q2-gguf", 91,
-			"MEASURED on a 128 GB AMD unified host, not estimated: 55.1 GB of weights served with size_vram == size, no spill (waired-agent#1192). This is the first budget where the large band beats 35b-a3b mtp — the 80b/120b/122b families all sit BELOW it on the ladder, and the 480b (q92) still needs ~283 GB resident"},
+			"MEASURED on a 128 GB AMD unified host, not estimated: 55.1 GB of weights served with size_vram == size, no spill (waired-agent#1192). This is the first budget where the large band beats the 27B — the 80b/120b/122b families all sit BELOW it on the ladder, and the 480b (q92) still needs ~283 GB resident"},
 		{192, "qwen3.8-flash-next", "q2-gguf", 91, "same pick as 128 GB; 480b (q92) still over budget"},
 	}
 

@@ -75,7 +75,7 @@ type PublicPolicy struct {
 	// floor.
 	//
 	// A size and not a tier because the two orderings cross: glm-4.5-air
-	// is tier 75 and large, qwen3.6-35b-a3b is tier 90 and medium, so no
+	// was tier 75 and large, qwen3.6-35b-a3b is tier 82 and medium, so no
 	// numeric boundary draws the size line (#537). The tier is still the
 	// ranking everything sorts by — it just is not a thing a person
 	// types.

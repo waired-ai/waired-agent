@@ -26,7 +26,7 @@
 //
 // Why it is a host question and not a model question. At a 21k context on
 // the reference CPU-only host, one turn costs 227 s with the model the
-// picker chooses today (tier 89) and 186 s with the smallest coding model
+// picker chose at the time (then tier 89) and 186 s with the smallest coding model
 // in the catalog (tier 30); the same measurement on a 24 GB card is
 // 17.8 s. Picking a smaller model does not rescue that host, so no model
 // ranking can be the answer to it.

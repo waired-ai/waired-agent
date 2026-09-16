@@ -7,7 +7,7 @@ supersedes:
 # qwen3.8 を 35B-A3B の上に置き、段下げの行き先は参照機での実測で選び、カタログは参照機に載るものに限る (20260916 03:40)
 
 ## Status
-Accepted。オーナー判断 2026-09-16（waired-ai/waired#1357 の L107、comment 5686058325）。`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md` の裁定 13（「tier の順序は dense と MoE のどちらを上にするか、L107 が決める」）への答え。実装は waired-ai/waired-agent#1400。
+Accepted。オーナー判断 2026-09-16（waired-ai/waired#1357 の L107、comment 5686058325）。`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md` の裁定 13（「tier の順序は dense と MoE のどちらを上にするか、L107 が決める」）への答え。実装は waired-ai/waired-agent#1400。同日（2026-09-16）、#1400 の実装計画を確認する場でオーナーが 4 点に答え、決定 2・3 を詰め、決定 4・5 を足した。
 
 次の記録を**部分的に狭める（覆さない）**。記録の `## Status` に鏡の一文を置いた。
 
@@ -46,23 +46,44 @@ Apple M5 Pro 48 GB の実測（`docs/decisions/20260913/2245-speed-is-one-reques
 1. **`quality_tier` で、qwen3.8 の全 variant を `qwen3.6-35b-a3b` の全 variant より上に置く。** 同じモデルの中は精度の順（`TestBundledManifests_QualityTierFollowsPrecisionWithinAModel`）のまま。tier の一意性のために 35B-A3B 側を振り直す。理由の記載は `docs/decisions/20260805/1427-quality-tier-is-a-curated-ladder.md` のとおり必須で、上の表を理由とする。
 2. **段下げの行き先は、参照機での実測で選ぶ。**
    - 参照機は Strix Halo（128 GB のユニファイドメモリ機）。variant ごとに、製品の速度計測（`2245` の 1 リクエスト）を、製品がそのホストで使うエンジンと backend で測り、`TurnSeconds` をエンジン版・variant の digest・日付と一緒に残す。
-   - 線を超えたと測られたら、「このホストで推奨の条件を満たし、参照機での `TurnSeconds` が active の variant より小さい」候補のうち、ランク順で最初のものを勧める。
-   - 1 歩ごとに参照機での秒数が厳密に下がるので、鎖は止まる。
+   - 線を超えたと測られたら、「このホストで推奨の条件を満たし、参照機での `TurnSeconds` が active の variant より **5% 以上小さい**（候補 ≤ active × 0.95）」候補のうち、ランク順で最初のものを勧める。5% はオーナー判断 2026-09-16（「5%ぐらいにする。」）。
+   - 1 歩ごとに参照機での秒数が 5% 以上下がるので、鎖は止まる。
+   - 参照機での実測が無い variant の値は、次の順で引く（オーナー判断 2026-09-16: 「いまは基本は ollama の値を流用、なければ推測。vLLM でも同様の仕組みを用意する。」— 誤字と空白だけ整えた）。
+     - (a) その variant 自身の、参照機での実測。
+     - (b) 同じモデルの ollama の既定 variant（manifest の `default_variant`）の実測。
+     - (c) オフラインで計算した推測値。同じデータファイルに、推測と分かる印を付けて置く。
+     - データファイルは vLLM の記録も持つので、vLLM の値は参照機であとから埋められる。
    - **最初の選択には使わない。** 速度の予測で除外しない規則（`docs/decisions/20260804/1937-capacity-computation-and-window-recommendation.md` 決定 4）はそのまま。
-3. **カタログに入れる条件は、参照機で 200k のコンテキストウィンドウ込みで完全常駐できること。**「完全常駐」の意味は `2355` 決定 10 のとおり。参照機で速度を測れる variant だけがカタログに入るので、決定 2 の値に欠けが出ない。
+3. **カタログに入れる条件は、参照機で 200k のコンテキストウィンドウ込みで完全常駐できること。**「完全常駐」の意味は `2355` 決定 10 のとおり。
+   - ollama の variant は、参照機で推奨の判定（`hostfit.OllamaRecommendModel`）を得ること。
+   - vLLM の variant は、製品の経路では参照機で動かせない（NVIDIA + Linux だけ）ので、200,704 トークンのコンテキストウィンドウで見積もった `min_vram_mb` が、参照機のアクセラレータメモリの予算（`OllamaVRAMBudgetMB`、98,304 MB）を超えないこと。
+   - ネイティブのコンテキストウィンドウが 200,704 トークンに満たないモデルは、この条件を満たさない。
+   - vLLM の variant は参照機で速度を測れないので、決定 2 の値は (b) か (c) で埋める。ollama の variant は参照機で測れる。
+4. **gpt-oss-20b と gpt-oss-120b は、後継なしで退役する。** ネイティブのコンテキストウィンドウが 131,072 トークンで、決定 3 を満たさない。オーナー判断 2026-09-16: 「gpt-ossを退役させ後継なしでいい。またこれで不要になる、200kにコンテクストサイズが満たないモデルをclaude codeなどで使ったときの注意を促す機構など関連する機構も撤廃したい」。
+   - 撤廃するのは、ネイティブのコンテキストウィンドウが 200k に満たないモデルを（Claude Code などから）使ったときに、注意を出す・扱いを変える機構。
+   - 残すのは、別の理由で 200k 未満のコンテキストウィンドウで**配信している**コンピュータの扱い: vLLM の `--max-model-len` による切り詰め、まだコンテキストウィンドウを宣言していないエンジン、CI 専用の内部モデル granite4-350m（ネイティブ 32k）。
+   - 実装はカタログの別の変更で行う。退役の表はいま後継（`SuccessorModelID`）を必須にしているので、その変更で後継を省略できるようにし、記録もその変更と一緒に残す。
+5. **vLLM の variant の `min_vram_mb` と参照速度は、いまは推測で置き、あとで参照機で計測する。** オーナー判断 2026-09-16。原文は非公開のホスト名を含むので引用せず、趣旨は「参照機であとで計測するので、まずは推測で」。
 
 ## Consequences
 
-- **既定の選択が変わる**（main `156b28b9`、KV `q4_0`）:
+- **決定 1 で適用した tier**:
+  - `qwen3.8-27b`: fp8 90、mtp-q4-gguf 89、q3-gguf 87、q2-gguf 86（旧 72 / 71 / 66 / 65）。
+  - `qwen3.6-35b-a3b`: mtp-q4-gguf 82、q4-gguf 81、mtp-q3-gguf 80、mtp-q2-gguf 79（旧 90 / 89 / 87 / 86）。
+  - `qwen3.8-flash-next` は 91 のまま。
+  - `qwen3.5-122b-a10b`（manual）は 83 → 78。これまでどおり `qwen3.6-35b-a3b` の全 variant の下に置くため。オーナーが決めたのは qwen3.8 対 35B-A3B の順序だけで、ほかの相対順序は保った。
+  - gpt-oss-120b（88 / 85）は、退役するまで 27B の variant の間に挟まる。
+- **既定の選択が変わる**（main `156b28b9`、KV `q4_0`。新しい tier で main `b3262756` でも確認した）:
   - NVIDIA 16〜18 GB → `qwen3.8-27b` UD-Q2_K_XL、19〜24 GB → UD-Q3_K_XL、25〜78 GB → Q4_K_M。
   - unified 22〜25 GB → UD-Q2_K_XL、26〜33 GB → UD-Q3_K_XL、34〜100 GB → Q4_K_M。
   - flash-next の帯（NVIDIA ≥79 GB / unified ≥101 GB）とそれ以下の帯は変わらない。
   - 旧世代の `qwen3.5-27b` Q4 が `qwen3.8-27b` Q3 より上に来る並び（tier 67 対 66）も消える。
+  - エンジン版 0.32.13 未満は `qwen3.6-35b-a3b` のまま。qwen3.8 の全 variant が `min_engine_version` を持つため。
 - **低ビットの帯では品質の差を確かめていない。** 同じメモリで比べた 27B UD-Q3 と 35B-A3B UD-Q2 は引き分けだった（コードは dense が +4.7 pt、推論は MoE が +5.0 pt）。`qwen3.8-27b` の UD-Q3_K_XL は attention に 2bit のテンソルを持つ（`docs/knowledges/20260914/0200-gguf-quant-tags-are-size-targets.md`）。
 - **27B が線を超えるホストは、最初に 27B を 1 回ダウンロードして測ってから移る。** 予測で除外しない以上、この 1 回は払う。
 - **文言を変える。** 段下げの提案は重いモデルを勧めることがあるので、「lighter model」（`cmd/waired/init_benchmark.go` と docs-site）を変える。文言は案を示してオーナーが確認する。
-- **vLLM の参照機は別に要る。** 製品の vLLM の経路は NVIDIA + Linux だけで、参照機では測れない。値が揃うまでの vLLM の扱いは waired-ai/waired-agent#1400 で決める。
-- **決定 3 を満たさない出荷中の variant は `glm-5.2`（FP8 / NVFP4）と `deepseek-v4-flash`（FP8）の 3 つ。** 扱いは別に決める。それまではガードのテストで除外し、除外の理由はその行に書く。
+- **vLLM の参照機は別に要る。** 製品の vLLM の経路は NVIDIA + Linux だけで、参照機では測れない。値が揃うまでの vLLM の扱いは決定 2 と決定 5 で決めた: ollama の値を流用するか推測で置き、あとで参照機で計測する。
+- **決定 3 を満たさない出荷中の variant は 7 つ**: `glm-5.2`（FP8 / NVFP4）、`deepseek-v4-flash`（FP8）、`gpt-oss-20b` と `gpt-oss-120b`（それぞれ ollama の `mxfp4-gguf` と vLLM の `mxfp4-safetensors`）。gpt-oss は決定 4 で退役する。`glm-5.2` と `deepseek-v4-flash` の扱いは waired-ai/waired#1427。それまではガードのテスト（`internal/hardware/catalog_admission_test.go` の `TestBundledCatalog_EveryBuildFitsTheReferenceHost`）で 7 つとも除外し、除外の理由はその行に書く。
 - `qwen3.8-flash-next` の 4bit（111.33 GB、`2355` 決定 11 で「足してよい」）は、足す前に決定 3 で判定する。
 
 ## Refs

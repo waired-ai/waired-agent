@@ -829,8 +829,13 @@ func TestBundledCatalog_WaiRed942(t *testing.T) {
 	// and the old rule reaches for it (waired-agent#1192). Asserting both
 	// sides keeps the distinction visible instead of letting the ladder
 	// silently do the gate's job again.
-	if best := bestRecommended(t, manifests, host); best != "qwen3.6-35b-a3b" {
-		t.Errorf("the DEFAULT on the waired#942 host = %s, want qwen3.6-35b-a3b "+
+	//
+	// The model that lives in the card moved with the tier ladder: since
+	// waired-ai/waired-agent#1400 every qwen3.8 build ranks above every
+	// qwen3.6-35b-a3b build, and a 24 GB card holds a 27B build whole.
+	best := bestRecommended(t, manifests, host)
+	if best != "qwen3.8-27b" {
+		t.Errorf("the DEFAULT on the waired#942 host = %s, want qwen3.8-27b "+
 			"(a model that does not live in the card must not be what this machine "+
 			"is pointed at)", best)
 	}
@@ -838,7 +843,7 @@ func TestBundledCatalog_WaiRed942(t *testing.T) {
 	// vacuous pass: under capacity-plus-roofline alone the host really is
 	// pointed at weights it cannot hold. If these two ever agree again,
 	// this host stopped exercising the gate and the test needs a new one.
-	if was := bestByTier(t, manifests, host); was == "qwen3.6-35b-a3b" {
+	if was := bestByTier(t, manifests, host); was == best {
 		t.Error("capacity plus the roofline now reaches the same model as the " +
 			"recommendation gate on this host; nothing here exercises the gate any more")
 	}
@@ -1536,6 +1541,18 @@ func variantOf(t *testing.T, manifests []catalog.Manifest, modelID string) catal
 	return catalog.Variant{}
 }
 
+// findVariant returns the bundled variant variantID of modelID.
+func findVariant(t *testing.T, manifests []catalog.Manifest, modelID, variantID string) catalog.Variant {
+	t.Helper()
+	for _, v := range manifestOf(t, manifests, modelID).Variants {
+		if v.VariantID == variantID {
+			return v
+		}
+	}
+	t.Fatalf("%s has no %s variant in the bundled catalog", modelID, variantID)
+	return catalog.Variant{}
+}
+
 // --- the recommendation gate (waired-ai/waired#988) --------------------
 //
 // Everything below pins a PRODUCT CONTRACT, not today's arithmetic: the
@@ -1853,14 +1870,23 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 	// build to be worse than what the card can hold. The build and not the
 	// model: the same model also ships a build this card holds, and the
 	// incident was the one it was pointed at.
-	was, wasVariant := bestByTierVariant(t, manifests, host)
-	if was == "qwen3.5-9b" || was == "" {
-		t.Fatalf("capacity plus the roofline now picks %q on this host; it no longer "+
-			"reproduces waired-ai/waired#986 and this test proves nothing", was)
+	//
+	// Since waired-ai/waired-agent#1400 the ladder no longer puts the
+	// incident's build on top — every qwen3.8 build ranks above it, and a
+	// 27B build this card holds is what capacity plus the roofline reaches
+	// first. So pin the build itself: under that rule it is still
+	// admissible on this card while its weights spill, which is exactly
+	// the case the recommendation gate exists for. If the ladder ever
+	// lifts it again, only the gate stands between the card and it.
+	incident := findVariant(t, manifests, "qwen3.6-35b-a3b", "mtp-q4-gguf")
+	if got := hostfit.OllamaFit(incident, host); !got.Fits ||
+		(got.Estimate.UpperBound && !got.Estimate.MeetsSpeedFloor) {
+		t.Fatalf("capacity plus the roofline no longer admits qwen3.6-35b-a3b/mtp-q4-gguf on this " +
+			"host; it no longer reproduces waired-ai/waired#986 and this test proves nothing")
 	}
-	if hostfit.OllamaRecommend(wasVariant, host).Fits {
-		t.Fatalf("capacity plus the roofline picks %s/%s, which does NOT spill on this host; "+
-			"the incident was about being pointed at weights the card cannot hold", was, wasVariant.VariantID)
+	if hostfit.OllamaRecommend(incident, host).Fits {
+		t.Fatalf("qwen3.6-35b-a3b/mtp-q4-gguf does NOT spill on this host; the incident was " +
+			"about being pointed at weights the card cannot hold")
 	}
 
 	// THE CONTRACT: whatever this card is pointed at, its weights live in
@@ -1895,9 +1921,10 @@ func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
 	assertFit(t, manifests, host, "qwen3.6-35b-a3b", true)
 
 	// The 24 GB anchor keeps its flagship — the rule costs the class of
-	// host it was calibrated on nothing.
-	if got := bestRecommended(t, manifests, hostFromWire(t, wireRTX4090)); got != "qwen3.6-35b-a3b" {
-		t.Errorf("24 GB card is pointed at %s, want qwen3.6-35b-a3b", got)
+	// host it was calibrated on nothing. The flagship is the dense 27B
+	// since waired-ai/waired-agent#1400.
+	if got := bestRecommended(t, manifests, hostFromWire(t, wireRTX4090)); got != "qwen3.8-27b" {
+		t.Errorf("24 GB card is pointed at %s, want qwen3.8-27b", got)
 	}
 }
 

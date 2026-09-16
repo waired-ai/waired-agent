@@ -479,10 +479,15 @@ func TestLighterCandidate_StaysAboveContextFloor(t *testing.T) {
 // system RAM with the ~200k window (2,315 MiB short with q8_0 KV), and a
 // recommendation now needs the whole window resident (decision 10 of
 // docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md),
-// so the anchor takes the family's Q3 build, which holds the window with
-// 3,487 MiB to spare. The heavier builds are narrowed out of the
-// auto-ranking but reachable by name — capacity admits them and the floor
-// gate's bounded spill passes them — demoted with their placement reported.
+// so the anchor took the family's Q3 build, which holds the window with
+// 3,487 MiB to spare. Since waired-ai/waired-agent#1400 every qwen3.8
+// build ranks above every qwen3.6-35b-a3b build
+// (docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md),
+// and the anchor takes the dense 27B's Q3 build for the same reason: its
+// Q4 build does not hold the window here. The 35B-A3B's heavier builds
+// stay narrowed out of the auto-ranking but reachable by name — capacity
+// admits them and the floor gate's bounded spill passes them — demoted
+// with their placement reported.
 func TestBundledCatalog_AnchorHostKeepsFlagship(t *testing.T) {
 	ms, err := catalog.BundledManifests()
 	if err != nil {
@@ -496,8 +501,8 @@ func TestBundledCatalog_AnchorHostKeepsFlagship(t *testing.T) {
 		t.Fatalf("RankModels: %v", err)
 	}
 	top := ranked[0]
-	if top.Manifest.ModelID != "qwen3.6-35b-a3b" || top.Variant.VariantID != "mtp-q3-gguf" {
-		t.Fatalf("anchor top pick = %s/%s, want qwen3.6-35b-a3b/mtp-q3-gguf",
+	if top.Manifest.ModelID != "qwen3.8-27b" || top.Variant.VariantID != "q3-gguf" {
+		t.Fatalf("anchor top pick = %s/%s, want qwen3.8-27b/q3-gguf",
 			top.Manifest.ModelID, top.Variant.VariantID)
 	}
 	if !top.ContextFloorSatisfied || top.ExpectedSpillFraction != 0 || !top.Recommendation.Fits {

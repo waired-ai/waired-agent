@@ -17,8 +17,8 @@ import (
 // machines answered it in 43 s.
 //
 // The peer that won was not trading quality for speed. It lost on both:
-// by the catalog's own quality_tier the 35B-A3B (90) beats the 122B-A10B
-// (83), while `score` — raw parameter count times the quantization
+// by the catalog's own quality_tier the 35B-A3B (82) beats the 122B-A10B
+// (78), while `score` — raw parameter count times the quantization
 // ladder — put the 122B ahead by 3.5x.
 func rc4Mesh() []meshCandidate {
 	return []meshCandidate{
