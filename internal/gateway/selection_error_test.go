@@ -289,6 +289,13 @@ func TestSelectionRecord_MatchesWhatTheClientReceives(t *testing.T) {
 			want: http.StatusServiceUnavailable, wantAnthropic: http.StatusBadRequest, defensive: true,
 		},
 		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: http.StatusServiceUnavailable},
+		// waired-agent#1369: a pin that answered and is not ready is a wait on
+		// both wires, not the Claude surface's fail-closed 400.
+		{
+			name: "pinned peer not ready",
+			err:  &pinnedPeerNotReadyError{display: "linux-gpu", phrase: "running its benchmark (takes a few minutes)"},
+			want: http.StatusServiceUnavailable, defensive: true,
+		},
 		// waired-agent#1395: a 400 on both wires. The window refusal was a
 		// 500 on both, which Claude Code retries ten times; the declined pin
 		// used to run on another computer instead of failing.

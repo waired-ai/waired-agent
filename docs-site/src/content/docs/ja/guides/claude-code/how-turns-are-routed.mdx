@@ -129,6 +129,12 @@ API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in us
 
 Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。待つのをやめるには、`/model`で別のパソコンを選びます。
 
+固定したパソコンが応答はするものの、まだ準備ができていない場合も、同じく503で答えます。メッセージには、そのパソコンが何をしているかが入ります。ベンチマークの実行中(参加した直後やモデルを替えた直後の数分間)、モデルをメモリに読み込み中、一時停止中、共有オフのどれかです。Claude Codeが再試行するので、準備ができればターンはそのまま通ります。
+
+```
+API Error: 503 router: the computer this turn is pinned to is not ready (tried "studio-desktop": running its benchmark (takes a few minutes)). This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+```
+
 [パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)と[固定したパソコンが使用中](/ja/troubleshooting/other-computers/#the-computer-i-pinned-is-busy)を参照してください。
 
 ## <a id="what-next"></a>次のステップ

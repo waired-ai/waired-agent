@@ -1648,6 +1648,17 @@ func respondAnthropicSelectionError(w http.ResponseWriter, class string, err err
 		// it. Nothing to wait for.
 		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
 		writeFailClosed(w, class, "not_found_error", err.Error())
+	case pinnedNotReady(err) != nil:
+		// The pin answered and is not ready — running its benchmark, loading
+		// its model, paused, not sharing. Retryable, named, and ahead of the
+		// busy and overloaded arms it Unwraps to (waired-agent#1369).
+		e := pinnedNotReady(err)
+		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerNotReady)
+		if e.display != "" {
+			w.Header().Set(HeaderInferencePeer, e.display)
+		}
+		w.Header().Set("Retry-After", pinnedNotReadyRetryAfter)
+		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case pinnedBusy(err) != nil:
 		// The pin's own computer was full for the whole wait. Same status
 		// and same Retry-After as the mesh-wide case it Unwraps to — the

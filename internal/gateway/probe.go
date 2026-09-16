@@ -209,6 +209,13 @@ const (
 	// (waired-agent#1303).
 	LocalErrorPinnedPeerBusy = "pinned_peer_busy"
 
+	// LocalErrorPinnedPeerNotReady is the pin's third refusal: the computer
+	// answered its probe and said it cannot take a turn right now — running
+	// its benchmark, loading the model, paused, sharing off. It used to be
+	// reported as not answering, which sends the reader to a network that is
+	// working (waired-agent#1369).
+	LocalErrorPinnedPeerNotReady = "pinned_peer_not_ready"
+
 	// LocalErrorPinnedPeerDeclined is the pin's third refusal: the computer
 	// is reachable, but something rules it out for this turn — the window
 	// the row demands, its owner's serving switches, the Public Share gate.
@@ -391,6 +398,19 @@ func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
 		r := g.probeResults[i]
 		if r.IsReady() || r.FailureReason() == probeReasonCapacityFull {
 			return nil
+		}
+		// The pin answered and said why it cannot take the turn. That is
+		// not a computer that is gone: it is one running its benchmark,
+		// loading its model, paused or not sharing, and every one of those
+		// ends. Say which, and let the client retry — owner decision
+		// 2026-09-16 on waired-agent#1369, in the words #1393 used for the
+		// same states on an unpinned round.
+		if r.Outcome == router.ProbeOK {
+			return &pinnedPeerNotReadyError{
+				display: candidateDisplayID(c),
+				name:    h.peerFacts(c.PeerID).Name,
+				phrase:  probeNotReady(r, r.FailureReason()),
+			}
 		}
 		// A probe that did not come back is not the same fact as a peer
 		// that is gone, and this device already holds a second opinion:
@@ -575,6 +595,50 @@ func (e *peersNotReadyError) Error() string {
 }
 
 func (e *peersNotReadyError) Unwrap() error { return router.ErrAllPeersOverloaded }
+
+// pinnedPeerNotReadyError is pinnedProbeFailure's answer for a pin that
+// answered its probe and was not ready for a reason other than being full.
+//
+// The sentence has the form peersNotReadyError gives a round of unpinned
+// peers, narrowed to the one computer a pinned turn considers. It Unwraps to
+// ErrAllPeersOverloaded so the status (503), the status record and every
+// errors.Is downstream stay those of a wait; each responder gives it its own
+// code, a Retry-After, and the X-Waired-Local-Error value. Wording approved by
+// the owner (2026-09-16, waired-agent#1369).
+//
+// display is candidateDisplayID — the only identifier that may reach a header
+// for a Public Share peer (spec §8.5) — and name is what a person calls the
+// computer when this device knows it.
+type pinnedPeerNotReadyError struct {
+	display string
+	name    string
+	phrase  string
+}
+
+func (e *pinnedPeerNotReadyError) Error() string {
+	who := e.name
+	if who == "" {
+		who = e.display
+	}
+	return fmt.Sprintf("router: the computer this turn is pinned to is not ready (tried %q: %s)", who, e.phrase)
+}
+
+func (e *pinnedPeerNotReadyError) Unwrap() error { return router.ErrAllPeersOverloaded }
+
+// pinnedNotReady returns the typed error behind err, or nil.
+func pinnedNotReady(err error) *pinnedPeerNotReadyError {
+	var e *pinnedPeerNotReadyError
+	if errors.As(err, &e) {
+		return e
+	}
+	return nil
+}
+
+// pinnedNotReadyRetryAfter is the Retry-After a not-ready pin is answered
+// with. The states it covers last seconds to minutes (a benchmark takes a few
+// minutes), so the client is told to come back in half a minute rather than
+// the capacity floor of five seconds.
+const pinnedNotReadyRetryAfter = "30"
 
 // probeNotReady phrases one probe's answer for a person reading a 503.
 // reason is r.FailureReason(). The words follow the tray's Recent

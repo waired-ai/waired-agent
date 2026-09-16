@@ -804,6 +804,15 @@ func respondSelectionError(w http.ResponseWriter, err error, queuedFor time.Dura
 		// comes true — see the Anthropic twin (waired-agent#788).
 		w.Header().Set(HeaderLocalError, LocalErrorModelNotServed)
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_served", err.Error())
+	case pinnedNotReady(err) != nil:
+		// The Anthropic twin's arm, in this dialect (waired-agent#1369).
+		e := pinnedNotReady(err)
+		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerNotReady)
+		if e.display != "" {
+			w.Header().Set(HeaderInferencePeer, e.display)
+		}
+		w.Header().Set("Retry-After", pinnedNotReadyRetryAfter)
+		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "waired_pinned_peer_not_ready", err.Error())
 	case pinnedBusy(err) != nil:
 		// The one computer this request was pinned to was full for the
 		// whole wait. Its own code, so a reader is not sent looking for a

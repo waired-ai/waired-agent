@@ -212,7 +212,9 @@ func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
 	t.Run("a peer that ANSWERED not-ready is still named", func(t *testing.T) {
 		// The exemption is only about an unanswered probe. A peer that
 		// answered "my engine is not ready" told us something, and a live
-		// mesh entry does not overturn it.
+		// mesh entry does not overturn it. What it told us is also the
+		// sentence now: not "is not answering", but the reason, as a wait
+		// (waired-agent#1369).
 		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
 			return PeerFacts{Name: "sv-macmini", EngineLive: true, Known: true}
 		}})
@@ -224,9 +226,12 @@ func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
 			}},
 		}
 		err := h.pinnedProbeFailure(answered)
-		var pin *router.PinnedPeerUnreachableError
-		if !errors.As(err, &pin) {
-			t.Fatalf("err = %v, want PinnedPeerUnreachableError", err)
+		e := pinnedNotReady(err)
+		if e == nil {
+			t.Fatalf("err = %v, want the not-ready pin error", err)
+		}
+		if !strings.Contains(err.Error(), `(tried "sv-macmini": engine not ready)`) {
+			t.Errorf("err = %v, want it to name the computer and the reason", err)
 		}
 	})
 }

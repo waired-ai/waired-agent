@@ -549,6 +549,10 @@ func selectionErrorReason(err error) string {
 		return LocalErrorPinnedPeerDeclined
 	case errors.Is(err, router.ErrNoEndpointForWindow):
 		return LocalErrorNoComputerForWindow
+	case pinnedNotReady(err) != nil:
+		// Above ErrAllPeersOverloaded for the same reason the busy pin is:
+		// same status, different fact (waired-agent#1369).
+		return LocalErrorPinnedPeerNotReady
 	case pinnedPeerBusyReason(err) != "":
 		// Above ErrAllPeersOverloaded, which it Unwraps to: the two are
 		// the same status and a different fact, and the journal is where
