@@ -171,7 +171,7 @@ func TestOllamaDraftTokensWritesTheDraftOnlyWhereItFits(t *testing.T) {
 		{"published, 16 GB Mac", published, mac16, 2},
 		{"none", q2, mac48, 0},
 	} {
-		got := OllamaDraftTokens(c.v, c.h, catalog.KVCacheQ4_0, window, 1)
+		got := OllamaDraftTokens(c.v, c.h, catalog.KVCacheQ4_0, window)
 		if got != c.want {
 			t.Errorf("%s: draft %d, want %d", c.name, got, c.want)
 		}
@@ -184,5 +184,35 @@ func TestOllamaDraftTokensWritesTheDraftOnlyWhereItFits(t *testing.T) {
 	// without one, number for number.
 	if a, b := OllamaEstimateMemory(stamped, mac16, catalog.KVCacheQ4_0, window, 1), OllamaEstimateMemory(q2, mac16, catalog.KVCacheQ4_0, window, 1); a != b {
 		t.Errorf("16 GB Mac: withheld draft priced %+v, no draft %+v", a, b)
+	}
+}
+
+// The draft comes before a second request slot (owner decision
+// 2026-09-17): where one slot with the draft fits and two do not, the
+// draft is written and the estimate at two slots carries it, so the slot
+// count that fits beside it is one.
+func TestOllamaDraftTokensComesBeforeASecondSlot(t *testing.T) {
+	v := bundledVariantForTest(t, "qwen3.6-35b-a3b", "mtp-q2-gguf")
+	if v.GGUF == nil || v.GGUF.NextNLayers == 0 || v.GGUF.DraftMaxTokens != 0 {
+		t.Skipf("fixture changed: %+v", v.GGUF)
+	}
+	v.MTPDraftTokens = 2
+	mac24 := Host{RAMTotalGB: 24, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 18432, VRAM0MB: 24576, GPUVendor: "apple"}
+	const window = 200704
+	budget := mac24.OllamaVRAMBudgetMB()
+	one, two := OllamaEstimateMemory(v, mac24, catalog.KVCacheQ4_0, window, 1), OllamaEstimateMemory(v, mac24, catalog.KVCacheQ4_0, window, 2)
+	noDraft := v
+	noDraft.MTPDraftTokens = 0
+	if OllamaEstimateMemory(noDraft, mac24, catalog.KVCacheQ4_0, window, 2).DeviceMB() > budget {
+		t.Skip("fixture no longer fits two slots without a draft on this host")
+	}
+	if one.DeviceMB() > budget || two.DeviceMB() <= budget {
+		t.Skipf("fixture no longer sits between one and two slots with the draft: %d / %d of %d MiB", one.DeviceMB(), two.DeviceMB(), budget)
+	}
+	if d := OllamaDraftTokens(v, mac24, catalog.KVCacheQ4_0, window); d != 2 {
+		t.Errorf("draft %d, want 2: one slot with it fits", d)
+	}
+	if two.DraftMB == 0 {
+		t.Error("the estimate at two slots dropped the draft; the second slot would be granted over it")
 	}
 }
