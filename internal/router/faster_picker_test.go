@@ -130,6 +130,18 @@ func TestFasterCandidate_SkipsWhatThisHostCannotHold(t *testing.T) {
 	if got != "fits" {
 		t.Errorf("got %q, want fits: too-big is faster on the reference host but not resident here", got)
 	}
+	// RankModels stands its residency pass down when nothing would be left,
+	// so on a host where no candidate is resident the ranked list still
+	// holds the spills. The check here is what keeps one from being offered.
+	spills := []catalog.Manifest{
+		stepModel("active", 60.0, 90),
+		stepModel("too-big", 50.0, 80),
+	}
+	if got := pickID(FasterCandidate(stepInput(spills, map[string]float64{
+		"active": 400, "too-big": 100,
+	}), "active", "q4-gguf")); got != "" {
+		t.Errorf("got %q, want no offer: nothing faster is resident on this host", got)
+	}
 }
 
 // A variant this host measured over the line is never offered
@@ -147,6 +159,18 @@ func TestFasterCandidate_SkipsWhatThisHostMeasuredSlow(t *testing.T) {
 	}
 	if got := pickID(FasterCandidate(in, "active", "q4-gguf")); got != "next" {
 		t.Errorf("got %q, want next: slow-here measured 260 s on this host", got)
+	}
+	// RankModels stands its measured-slow pass down when every candidate
+	// measured slow, so the ranked list then holds them again. The check
+	// here is what keeps one from being offered.
+	allSlow := stepInput(cat[:2], map[string]float64{"active": 300, "slow-here": 100})
+	allSlow.TurnBudgetSeconds = 190
+	allSlow.Measured = map[string]MeasuredRate{
+		catalog.VariantSHA(cat[0].Variants[0]): {TurnSeconds: 300},
+		catalog.VariantSHA(cat[1].Variants[0]): {TurnSeconds: 260},
+	}
+	if got := pickID(FasterCandidate(allSlow, "active", "q4-gguf")); got != "" {
+		t.Errorf("got %q, want no offer: slow-here measured 260 s on this host", got)
 	}
 }
 
