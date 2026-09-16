@@ -703,6 +703,25 @@ MANAGEDEOF
       fi
     fi
   fi
+
+  # waired-agent#1398: the same route for the waired package itself. No script
+  # runs on `apt remove waired`, so the prerm is what has to take Waired out of
+  # Claude Code's settings; before it did, the managed ANTHROPIC_BASE_URL
+  # outlived the package and Claude Code failed every request. Planted from the
+  # corpus so the assert can't pass by the root-shell install having written
+  # nothing. Last, because it takes the package away.
+  gx "$guest" mkdir -p /etc/claude-code
+  gx "$guest" cp "$ROOT/packaging/install/testdata/claude-leftovers/managed/02-posix-current-form/input.json" "$it_managed_json"
+  if ! gx "$guest" env DEBIAN_FRONTEND=noninteractive apt-get remove -y waired >/tmp/it-apt-remove-waired.log 2>&1; then
+    bad "apt-get remove waired failed (waired-agent#1398)"; sed 's/^/    /' /tmp/it-apt-remove-waired.log >&2 || true
+  elif gx "$guest" test -e "$it_managed_json" \
+       && gx "$guest" grep -q '_picker write\|_models-cache\|127.0.0.1:' "$it_managed_json"; then
+    bad "apt-get remove waired left Waired's managed settings behind (waired-agent#1398)"
+    gx "$guest" cat "$it_managed_json" | sed 's/^/    /' >&2 || true
+    sed 's/^/    /' /tmp/it-apt-remove-waired.log >&2 || true
+  else
+    ok "apt-get remove waired took Waired out of Claude Code's managed settings (waired-agent#1398)"
+  fi
 }
 
 # Re-run install.sh: with waired already installed and the repo candidate

@@ -157,6 +157,9 @@ Source: "{tmp}\waired-tray.exe"; DestDir: "{app}"; Flags: external ignoreversion
 Source: "dist\windows-amd64\VERSION";              DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\windows-amd64\LICENSE";              DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\windows-amd64\THIRD_PARTY_LICENSES"; DestDir: "{app}"; Flags: ignoreversion
+; For [UninstallRun] only: the settings-only pass that removes Waired's Claude
+; Code settings when waired.exe itself can't (waired-agent#1398).
+Source: "packaging\install\uninstall.ps1";        DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Waired";            Filename: "{app}\waired-tray.exe"
@@ -211,6 +214,16 @@ Filename: "{app}\waired-tray.exe"; \
 Filename: "{app}\waired.exe"; Parameters: "claude disable"; \
     Flags: runhidden waituntilterminated; \
     RunOnceId: "WairedClaudeDisable"
+; Then check Claude Code's settings without waired.exe. Inno ignores a failed
+; entry, so when Smart App Control or a damaged install refuses the line above,
+; the managed ANTHROPIC_BASE_URL used to outlive Waired and Claude Code failed
+; every request against a port nothing listened on (waired-agent#1398). A
+; no-op when the line above did its job. -File, not -EncodedCommand, which
+; AMSI reads as a download-and-execute pattern (#552).
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -ClaudeLeftoversOnly"; \
+    Flags: runhidden waituntilterminated; \
+    RunOnceId: "WairedClaudeLeftovers"
 Filename: "{app}\waired-agent.exe"; Parameters: "uninstall"; \
     Flags: runhidden waituntilterminated; \
     RunOnceId: "WairedAgentUninstall"

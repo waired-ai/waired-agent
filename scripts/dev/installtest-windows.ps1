@@ -4979,6 +4979,19 @@ if ($ExeVariant) {
         # (since fixed) unsuppressed wipe-state MsgBox in waired-setup.iss.
         # Completion signal = the service is unregistered.
         $unins = Join-Path $InstallDir 'unins000.exe'
+        # (waired-agent#1398) The GUI uninstaller's own route to the leftover:
+        # [UninstallRun] runs `waired.exe claude disable`, and Inno ignores it
+        # when Windows won't start waired.exe. Make it unstartable (a non-PE
+        # file fails CreateProcess the way a Smart App Control refusal does)
+        # and plant what an enabled host carries, so the settings-only pass
+        # that follows it is the only thing that can remove them.
+        $exeLeftoverCorpus = Join-Path $Root 'packaging\install\testdata\claude-leftovers'
+        $exeManaged = Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'
+        $exeUserSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $exeManaged), (Split-Path -Parent $exeUserSettings) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $exeLeftoverCorpus 'managed\01-windows-host-waired-gone\input.json') -Destination $exeManaged -Force
+        Copy-Item -LiteralPath (Join-Path $exeLeftoverCorpus 'user-settings\01-windows-host-waired-gone\input.json') -Destination $exeUserSettings -Force
+        Set-Content -LiteralPath (Join-Path $InstallDir 'waired.exe') -Encoding ascii -Value 'not a program'
         if (Test-Path -LiteralPath $unins) {
             Start-Process -FilePath $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' | Out-Null
             $deadline = (Get-Date).AddSeconds(120)
@@ -5020,6 +5033,13 @@ if ($ExeVariant) {
             ItBad "$InstallDir survived the uninstall and 30s of sweeping: $($residue -join ', ')"
         }
         if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "service gone after Inno uninstall" } else { ItBad "service survived the Inno uninstall" }
+        # (waired-agent#1398) Checked after the uninstaller is gone, which the
+        # loops above wait for.
+        ItSoft '1398' (-not (Test-Path -LiteralPath $exeManaged)) `
+            "the GUI uninstaller removed Waired's managed settings although waired.exe wouldn't start" 'waired-agent'
+        ItSoft '1398' ((Get-Content -LiteralPath $exeUserSettings -Raw -ErrorAction SilentlyContinue) -notmatch 'waired') `
+            "the GUI uninstaller removed Waired's status line from ~/.claude/settings.json although waired.exe wouldn't start" 'waired-agent'
+        Remove-Item -LiteralPath $exeManaged, $exeUserSettings -Force -ErrorAction SilentlyContinue
 
         # ---- a fresh install that cannot bring the service up (#1181) ----
         #
