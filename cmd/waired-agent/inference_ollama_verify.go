@@ -169,29 +169,39 @@ type ollamaVerifyDeps struct {
 	// records where it placed each load (placementEvidence). nil means no
 	// placement witness.
 	EngineLog func(maxBytes int) string
-	// RestampDraft writes the variant's MTP draft onto tag again when the
-	// runner turned out to run none (draftStampMissing). It returns at
-	// once; the pull runs in the background. nil skips the repair.
-	RestampDraft func(tag string, v catalog.Variant)
+	// RestampDraft pulls tag again so it carries a draft of draft tokens
+	// (0 = none) when the runner's draft is not the one this host should
+	// run (draftToRewrite). It returns at once; the pull runs in the
+	// background. nil skips the repair.
+	RestampDraft func(tag string, v catalog.Variant, draft int)
 }
 
-// draftStampMissing reports whether the runner serving v runs no MTP
-// draft although the product writes one onto v's tag. That happens to a
-// tag pulled before the catalog set MTPDraftTokens: the write happens
-// only inside download.Puller.Pull, so a tag already on disk never got
-// it. Re-pulling the tag writes it. ollama then reloads the runner on the
-// next request, because draft_num_predict is a runner option and a
-// changed runner option reloads (server/sched.go needsReload, v0.34.0)
-// (waired-ai/waired#1433).
+// draftToRewrite reports the draft v's tag should be pulled again with,
+// when the runner serving it runs a different one than this host should
+// (waired-ai/waired#1433). want is hostfit.OllamaDraftTokens for the
+// applied tuning.
 //
-// A tag whose publisher set draft_num_predict is not the product's to
-// repair (GGUF.DraftMaxTokens > 0): its draft is the publisher's, and a
-// runner without one there has some other cause.
-func draftStampMissing(v catalog.Variant, f proclist.RunnerFlags) bool {
+// Two ways a tag's draft goes stale, both fixed by the same re-pull,
+// because Pull writes the draft this host should run and a re-pull first
+// resets the tag to what the publisher shipped:
+//
+//   - A tag pulled before the catalog set MTPDraftTokens never got the
+//     draft: the write happens only inside download.Puller.Pull.
+//   - A tag written with a draft on a host whose load no longer fits with
+//     it (a smaller window rung, another KV cache type, less free memory)
+//     keeps it, and a load that spills gets slower with a draft.
+//
+// ollama reloads the runner on the next request either way, because
+// draft_num_predict is a runner option and a changed runner option
+// reloads (server/sched.go needsReload, v0.34.0).
+//
+// Only a draft the product writes is the product's to change: a tag whose
+// publisher set draft_num_predict (GGUF.DraftMaxTokens > 0) is left as it is.
+func draftToRewrite(v catalog.Variant, want int, f proclist.RunnerFlags) (int, bool) {
 	if v.GGUF == nil || v.GGUF.DraftMaxTokens > 0 || v.GGUF.NextNLayers <= 0 || v.MTPDraftTokens <= 0 {
-		return false
+		return 0, false
 	}
-	return f.SpecDraftTokens <= 0
+	return want, max(f.SpecDraftTokens, 0) != max(want, 0)
 }
 
 // verifyOllamaTuning inspects the loaded model and classifies the
@@ -693,8 +703,9 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 				// draft_num_predict, and the runner's arguments are the
 				// only place it shows (waired-ai/waired#1433).
 				mt.SpeculativeMethod, mt.SpeculativeTokens = f.SpecType, f.SpecDraftTokens
-				if draftStampMissing(v, f) && deps.RestampDraft != nil {
-					deps.RestampDraft(tag, v)
+				want := hostfit.OllamaDraftTokens(v, hw.HostFit(), tn.KVCacheType, tn.ContextLength, max(f.NumParallel, 1))
+				if draft, rewrite := draftToRewrite(v, want, f); rewrite && deps.RestampDraft != nil {
+					deps.RestampDraft(tag, v, draft)
 				}
 				if np < tn.NumParallel {
 					// The count comes from the process table; the CAUSE

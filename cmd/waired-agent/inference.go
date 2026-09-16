@@ -1395,8 +1395,9 @@ type agentInferenceProvider struct {
 	// pullMu guards pullsInFlight. It is a leaf: never held across a
 	// store.Update, an engine call, or requestEngineReconcile.
 	pullMu sync.Mutex
-	// draftRestampMu guards draftRestamped, the tags restampDraft has
-	// already pulled again in this process. A leaf, like pullMu.
+	// draftRestampMu guards draftRestamped, the (tag, draft) pairs
+	// restampDraft has already pulled again in this process. A leaf, like
+	// pullMu.
 	draftRestampMu sync.Mutex
 	draftRestamped map[string]bool
 	// pullsInFlight maps model_id to the single pull running for it, so a
@@ -2705,24 +2706,26 @@ func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVeri
 	}
 }
 
-// restampDraft pulls tag again so download.Puller.Pull writes v's MTP
-// draft onto it (draftStampMissing, waired-ai/waired#1433). At most once
-// per tag per agent process: if the runner still shows no draft after
-// the repair, a second pull would not change that, and the verification
-// that calls this runs on every engine start and model switch.
+// restampDraft pulls tag again so download.Puller.Pull writes a draft of
+// draft tokens onto it, 0 meaning none (draftToRewrite,
+// waired-ai/waired#1433). At most once per tag and draft per agent
+// process: if the runner still shows the other draft after the repair, a
+// second pull would not change that, and the verification that calls
+// this runs on every engine start and model switch.
 //
-// Serving is not interrupted. ollama reloads the runner with the draft
-// on the next request that reaches the model.
-func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant) {
+// Serving is not interrupted. ollama reloads the runner with the new
+// draft on the next request that reaches the model.
+func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant, draft int) {
 	if p.puller == nil || tag == "" {
 		return
 	}
+	key := tag + "\x00" + itoa(draft)
 	p.draftRestampMu.Lock()
 	if p.draftRestamped == nil {
 		p.draftRestamped = map[string]bool{}
 	}
-	done := p.draftRestamped[tag]
-	p.draftRestamped[tag] = true
+	done := p.draftRestamped[key]
+	p.draftRestamped[key] = true
 	p.draftRestampMu.Unlock()
 	if done {
 		return
@@ -2731,9 +2734,9 @@ func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	want := download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: v.MTPDraftTokens}
-	p.logger.Info("the model runner runs no MTP draft; pulling the tag again to write draft_num_predict",
-		"tag", tag, "variant_id", v.VariantID, "draft_num_predict", v.MTPDraftTokens)
+	want := download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: draft}
+	p.logger.Info("the model runner's MTP draft is not the one this computer should run; pulling the tag again",
+		"tag", tag, "variant_id", v.VariantID, "draft_num_predict", draft)
 	p.pullsWG.Add(1)
 	go func() {
 		defer p.pullsWG.Done()
@@ -2744,9 +2747,24 @@ func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant) {
 				"tag", tag, "err", err)
 			return
 		}
-		p.logger.Info("wrote the MTP draft onto the tag; ollama loads it with the next request",
-			"tag", tag, "draft_num_predict", v.MTPDraftTokens)
+		p.logger.Info("pulled the tag again with its MTP draft; ollama loads it with the next request",
+			"tag", tag, "draft_num_predict", draft)
 	}()
+}
+
+// ollamaDraftToWrite is the MTP draft Pull writes onto v's tag on this
+// host: hostfit.OllamaDraftTokens at the tuning this host would serve v
+// with, which is v.MTPDraftTokens where the load with the draft fits the
+// device and 0 elsewhere (waired-ai/waired#1433). The verification after
+// the load rewrites it if the applied tuning turns out to disagree
+// (draftToRewrite).
+func (p *agentInferenceProvider) ollamaDraftToWrite(ctx context.Context, m catalog.Manifest, v catalog.Variant) int {
+	if v.MTPDraftTokens <= 0 || p.profiler == nil {
+		return 0
+	}
+	hw := p.profiler.Profile(ctx)
+	t := computeOllamaTuning(m, v, hw, ollamaKVRequestFor(p.cfg, m, v, hw), ollamaObservedServe{})
+	return hostfit.OllamaDraftTokens(v, hw.HostFit(), t.KVCacheType, t.ContextLength, max(t.NumParallel, 1))
 }
 
 // draftRestampTimeout bounds the repair pull. A pull of a tag that is
@@ -4805,7 +4823,8 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		// 500 on shapes this project recorded as accepted.
 		var want download.Rendering
 		if v, ok := variantByID(manifest, variantID); ok {
-			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: v.MTPDraftTokens}
+			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser,
+				DraftNumPredict: p.ollamaDraftToWrite(dlCtx, manifest, v)}
 		}
 		// Give the bar its whole total before the first byte moves. Once
 		// per tag: a retry of the same tag already has the figure, and the

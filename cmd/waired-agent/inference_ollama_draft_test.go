@@ -3,19 +3,22 @@ package main
 import (
 	"context"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/download"
+	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	"github.com/waired-ai/waired-agent/proto/catalog"
 )
 
 // The draft the runner runs is recorded off its command line, and a tag
-// the product writes a draft onto but whose runner runs none is pulled
-// again once so the write happens (waired-ai/waired#1433).
+// whose runner runs another draft than this host should — none where the
+// product writes one, or one where the load with it does not fit — is
+// pulled again with the right one (waired-ai/waired#1433).
 func TestApplyOllamaTuningVerification_RecordsAndRepairsTheDraft(t *testing.T) {
 	m, base, hw, tn := verifyFixture()
 	weight := int64(10e9)
@@ -25,6 +28,10 @@ func TestApplyOllamaTuningVerification_RecordsAndRepairsTheDraft(t *testing.T) {
 	gg := catalog.GGUFLayout{BlockCount: 41, NextNLayers: 1}
 	stamped.GGUF = &gg
 	stamped.MTPDraftTokens = 2
+	// Too heavy for the 24 GB fixture host with its draft: this host
+	// should run none (hostfit.OllamaDraftTokens).
+	heavy := stamped
+	heavy.EstimatedWeightGB = 30
 	publisher := stamped
 	pg := gg
 	pg.DraftMaxTokens = 2
@@ -41,12 +48,14 @@ func TestApplyOllamaTuningVerification_RecordsAndRepairsTheDraft(t *testing.T) {
 		procs      func() ([]proclist.ProcInfo, error)
 		wantMethod string
 		wantTokens int
-		wantRepair bool
+		wantRepair string // "" = none, else "<tag>/<draft>"
 	}{
-		{"stamped-and-running", stamped, runner("--spec-type", "draft-mtp", "--spec-draft-n-max", "2"), "draft-mtp", 2, false},
-		{"stamped-but-not-running", stamped, runner(), "", 0, true},
-		{"publisher-draft-not-running", publisher, runner(), "", 0, false},
-		{"no-draft-wanted", base, runner(), "", 0, false},
+		{"stamped-and-running", stamped, runner("--spec-type", "draft-mtp", "--spec-draft-n-max", "2"), "draft-mtp", 2, ""},
+		{"stamped-but-not-running", stamped, runner(), "", 0, verifyTag + "/2"},
+		{"stamped-but-does-not-fit", heavy, runner("--spec-type", "draft-mtp", "--spec-draft-n-max", "2"), "draft-mtp", 2, verifyTag + "/0"},
+		{"does-not-fit-and-not-running", heavy, runner(), "", 0, ""},
+		{"publisher-draft-not-running", publisher, runner(), "", 0, ""},
+		{"no-draft-wanted", base, runner(), "", 0, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -54,8 +63,8 @@ func TestApplyOllamaTuningVerification_RecordsAndRepairsTheDraft(t *testing.T) {
 			srv := api.server(t)
 			defer srv.Close()
 			var repaired []string
-			deps := ollamaVerifyDeps{ListProcs: c.procs, RestampDraft: func(tag string, v catalog.Variant) {
-				repaired = append(repaired, tag+"/"+strconv.Itoa(v.MTPDraftTokens))
+			deps := ollamaVerifyDeps{ListProcs: c.procs, RestampDraft: func(tag string, _ catalog.Variant, draft int) {
+				repaired = append(repaired, tag+"/"+strconv.Itoa(draft))
 			}}
 			sw := &fakeModelEnvSwitcher{}
 			applyOllamaTuningVerification(context.Background(), sw, tn, m, c.v, hw,
@@ -64,28 +73,30 @@ func TestApplyOllamaTuningVerification_RecordsAndRepairsTheDraft(t *testing.T) {
 			if got.SpeculativeMethod != c.wantMethod || got.SpeculativeTokens != c.wantTokens {
 				t.Errorf("recorded draft %q/%d, want %q/%d", got.SpeculativeMethod, got.SpeculativeTokens, c.wantMethod, c.wantTokens)
 			}
-			if want := c.wantRepair; (len(repaired) == 1) != want || len(repaired) > 1 {
-				t.Errorf("repairs = %v, want one: %v", repaired, want)
+			want := []string(nil)
+			if c.wantRepair != "" {
+				want = []string{c.wantRepair}
 			}
-			if c.wantRepair && len(repaired) == 1 && repaired[0] != verifyTag+"/2" {
-				t.Errorf("repaired %q, want the serving tag with the variant's draft", repaired[0])
+			if !slices.Equal(repaired, want) {
+				t.Errorf("repairs = %v, want %v", repaired, want)
 			}
 		})
 	}
 }
 
-// The repair pulls a tag at most once per process: the verification runs
-// on every engine start and model switch, and a runner that still shows
-// no draft after one re-pull would not change on a second.
+// The repair pulls a tag at most once per draft per process: the
+// verification runs on every engine start and model switch, and a runner
+// that still shows the other draft after one re-pull would not change on a
+// second.
 func TestRestampDraft_PullsATagOnce(t *testing.T) {
 	r := &draftPullRecorder{}
 	p := &agentInferenceProvider{logger: testLogger()}
 	p.puller = download.NewPuller("ollama-fake", r)
 	v := catalog.Variant{VariantID: "mtp-q2-gguf", Renderer: "qwen3.5", Parser: "qwen3.5", MTPDraftTokens: 2}
 	for range 3 {
-		p.restampDraft("hf.co/ns/m:q2", v)
+		p.restampDraft("hf.co/ns/m:q2", v, 2)
 	}
-	p.restampDraft("hf.co/ns/m:q3", v)
+	p.restampDraft("hf.co/ns/m:q3", v, 2)
 	p.pullsWG.Wait()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -122,4 +133,47 @@ func (r *draftPullRecorder) Run(_ context.Context, _ string, args, _ []string, _
 		r.modelfiles = append(r.modelfiles, string(b))
 	}
 	return nil
+}
+
+// The draft Pull writes is the one this host should run: the catalog's
+// draft where the load with it fits the device, none where it does not
+// (hostfit.OllamaDraftTokens, waired-ai/waired#1433).
+func TestOllamaDraftToWrite_FollowsTheHost(t *testing.T) {
+	ms, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m catalog.Manifest
+	var v catalog.Variant
+	for _, mm := range ms {
+		for _, vv := range mm.Variants {
+			if mm.ModelID == "qwen3.6-35b-a3b" && vv.VariantID == "mtp-q2-gguf" {
+				m, v = mm, vv
+			}
+		}
+	}
+	if v.GGUF == nil || v.GGUF.NextNLayers == 0 || v.GGUF.DraftMaxTokens != 0 {
+		t.Skipf("fixture changed: %+v", v.GGUF)
+	}
+	v.MTPDraftTokens = 2
+	host := func(vramMB int) *agentInferenceProvider {
+		return &agentInferenceProvider{logger: testLogger(), profiler: hardware.NewProfiler(t.TempDir(),
+			hardware.WithOSArch(func() (string, string) { return "linux", "x86_64" }),
+			hardware.WithRAM(func(context.Context) (int, int, error) { return 64, 60, nil }),
+			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+				return []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: vramMB, VRAMFreeMB: vramMB}}, hardware.Accelerators{CUDA: true}, nil
+			}))}
+	}
+	ctx := context.Background()
+	if got := host(48000).ollamaDraftToWrite(ctx, m, v); got != 2 {
+		t.Errorf("48 GB card: draft %d, want 2", got)
+	}
+	if got := host(12000).ollamaDraftToWrite(ctx, m, v); got != 0 {
+		t.Errorf("12 GB card, where the 13.5 GB weights already spill: draft %d, want 0", got)
+	}
+	none := v
+	none.MTPDraftTokens = 0
+	if got := host(48000).ollamaDraftToWrite(ctx, m, none); got != 0 {
+		t.Errorf("no catalog draft: wrote %d", got)
+	}
 }
