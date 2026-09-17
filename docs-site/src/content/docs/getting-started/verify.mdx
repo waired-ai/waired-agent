@@ -57,7 +57,7 @@ On a computer that runs models, a healthy output looks like this:
 ```
 Observability:
   Device:   my-desktop  uptime: 1m23s
-  Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
+  Engine:   ready (model=qwen3.8-27b, 0 running, 1 conversations kept warm, inflight=0)
   Share:    enabled   Paused: no
   Mesh:     2 enrolled / 1 reachable / 1 ready
   Last:     (no inference yet)
@@ -65,7 +65,7 @@ Observability:
 
 | Line | What to check |
 |---|---|
-| **Engine** | `ready` means a model is loaded and can answer. `not ready` usually means it is still downloading. See [Nothing answers](/troubleshooting/no-answer/). |
+| **Engine** | `ready` means a model is loaded and can answer. `running` is how many requests it is answering right now, and `conversations kept warm` is how many conversations it can hold in memory at once. On Ollama, the Qwen3.5, Qwen3.6 and Qwen3.8 models other than Qwen3.8 Flash Next answer one request at a time, so this reads `1`, and a second conversation, or a subagent, waits for the first to finish. vLLM serves the same models several at once. `not ready` usually means it is still downloading. See [Nothing answers](/troubleshooting/no-answer/). |
 | **Share** | `enabled` means your other computers may use this one's model. `disabled` has two possible causes: sharing is off on this computer, or the web console has taken it out of your network. `waired share status` says which. |
 | **Paused** | `no` means Waired is handling requests. If it says `yes`, run `waired resume`. |
 | **Mesh** | `enrolled / reachable / ready` across your computers. On a laptop, this line confirms that the computer running your model is up. |

@@ -52,7 +52,7 @@ waired status --observability
 ```
 Observability:
   Device:   my-desktop  uptime: 1m23s
-  Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
+  Engine:   ready (model=qwen3.8-27b, 0 running, 1 conversations kept warm, inflight=0)
   Share:    enabled   Paused: no
   Mesh:     2 enrolled / 1 reachable / 1 ready
   Last:     (no inference yet)
@@ -60,7 +60,7 @@ Observability:
 
 | 行 | 確認すること |
 |---|---|
-| **Engine** | `ready`なら、モデルが読み込まれていて応答できます。`not ready`は多くの場合ダウンロード中です。[応答が返らない](/ja/troubleshooting/no-answer/)を参照してください。 |
+| **Engine** | `ready`なら、モデルが読み込まれていて応答できます。`running`はいま答えているリクエストの数、`conversations kept warm`は同時にメモリに保持できる会話の数です。Ollamaでは、Qwen3.5、Qwen3.6、Qwen3.8のうちQwen3.8 Flash Next以外のモデルは一度に1つのリクエストにしか答えないので、ここは`1`になり、2つ目の会話やサブエージェントは最初のリクエストが終わるまで待ちます。vLLMは同じモデルで複数のリクエストを同時に処理します。`not ready`は多くの場合ダウンロード中です。[応答が返らない](/ja/troubleshooting/no-answer/)を参照してください。 |
 | **Share** | `enabled`なら、自分のほかのパソコンがこのパソコンのモデルを使えます。`disabled`の原因は2つあります。このパソコンで共有をオフにしているか、Webコンソールがこのパソコンをネットワークから外しているかです。どちらかは`waired share status`で分かります。 |
 | **Paused** | `no`ならWairedはリクエストを処理しています。`yes`なら`waired resume`を実行します。 |
 | **Mesh** | 自分のパソコン全体の`enrolled / reachable / ready`です。ノートパソコンでは、モデルを動かしているパソコンが起動していることをこの行で確認します。 |
