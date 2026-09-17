@@ -210,6 +210,9 @@ func TestComputeOllamaTuning_TheDraftComesBeforeASecondSlot(t *testing.T) {
 		t.Fatalf("fixture changed: %+v", v.GGUF)
 	}
 	v.MTPDraftTokens = 2
+	// The sweep is about slots against the draft, so it lifts the build's
+	// own slot cap (catalog.Variant.MaxParallel, waired-ai/waired-agent#1423).
+	v.MaxParallel = 0
 	none := v
 	none.MTPDraftTokens = 0
 
