@@ -125,8 +125,10 @@ waired status --observability
 **Engine**の行に、いま読み込まれているモデルの名前が表示されます。
 
 ```
-Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
+Engine:   ready (model=qwen3.8-27b, 0 running, 1 conversations kept warm, inflight=0)
 ```
+
+`1 conversations kept warm`は、このモデルをOllamaで動かしたときの表示です。Ollamaでは、Qwen3.5、Qwen3.6、Qwen3.8のうちQwen3.8 Flash Next以外のモデルは一度に1つのリクエストにしか答えないので、2つ目の会話やサブエージェントは最初のリクエストが終わるまで待ちます。vLLMは同じモデルで複数のリクエストを同時に処理します。行の残りの読み方は[詳細なステータスを読む](/ja/getting-started/verify/#3-read-the-full-status)を参照してください。
 
 `not ready`と表示される場合は、まだダウンロード中の可能性が高く、`waired models ls`で進み具合を確認できます。ダウンロードが終わっても`not ready`のままなら、そのモデルはこのパソコンに収まりません。小さいモデルに戻してください。
 

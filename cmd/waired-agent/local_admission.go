@@ -42,6 +42,47 @@ type localAdmissionRelay struct {
 	// the admin's per-device override folded into it, and a local guess
 	// must not undo that.
 	mapSaid bool
+	// limit reports the serving build's own ceiling (ServingMaxParallel;
+	// 0 = none), read each time a ceiling is applied. nil = no limit.
+	// capNow keeps the unclamped figure, so a switch to a build without a
+	// limit gives the admin's override back on the next apply rather than
+	// leaving it held at the old build's limit.
+	limit func() int
+}
+
+// SetBuildLimit installs the serving build's limit and re-applies the
+// ceiling under it. An admin override above the limit is held to it
+// (waired-ai/waired-agent#1423): the engine serves that build one request
+// at a time whatever it is asked, so admitting more only queues requests
+// inside the engine, out of sight of this ceiling.
+func (r *localAdmissionRelay) SetBuildLimit(fn func() int) {
+	r.capMu.Lock()
+	defer r.capMu.Unlock()
+	r.limit = fn
+	r.applyLocked()
+}
+
+// applyLocked applies capNow, held to the build limit, to the server.
+// capMu must be held. The limit getter takes only the engine adapter's
+// lock, which never calls back into this relay.
+func (r *localAdmissionRelay) applyLocked() {
+	s := r.srv.Load()
+	if r.capNow <= 0 || s == nil {
+		return
+	}
+	lim := 0
+	if r.limit != nil {
+		lim = r.limit()
+	}
+	s.SetCapacity(capToLimit(r.capNow, lim))
+}
+
+// capToLimit is n held to limit, where limit <= 0 means none.
+func capToLimit(n, limit int) int {
+	if limit > 0 && n > limit {
+		return limit
+	}
+	return n
 }
 
 // Set publishes the session's inference server. Called once during
@@ -51,9 +92,7 @@ func (r *localAdmissionRelay) Set(s *inference.Server) {
 	r.srv.Store(s)
 	r.capMu.Lock()
 	defer r.capMu.Unlock()
-	if r.capNow > 0 && s != nil {
-		s.SetCapacity(r.capNow)
-	}
+	r.applyLocked()
 }
 
 // SeedCapacity applies the boot benchmark's figure. Ignored once the
@@ -70,9 +109,7 @@ func (r *localAdmissionRelay) SeedCapacity(n int) {
 		return
 	}
 	r.capNow = n
-	if s := r.srv.Load(); s != nil {
-		s.SetCapacity(n)
-	}
+	r.applyLocked()
 }
 
 // SetCapacityFromMap applies the capacity the network map served, which is
@@ -99,9 +136,7 @@ func (r *localAdmissionRelay) SetCapacityFromMap(n int) {
 	defer r.capMu.Unlock()
 	r.mapSaid = true
 	r.capNow = n
-	if s := r.srv.Load(); s != nil {
-		s.SetCapacity(n)
-	}
+	r.applyLocked()
 }
 
 // Admit is the gateway.Deps.LocalAdmission hook. The returned release is

@@ -184,8 +184,14 @@ waired status --observability
 The **Engine** line names the model that is loaded now:
 
 ```
-Engine:   ready (model=qwen3.8-27b, 0/4 slots used, inflight=0)
+Engine:   ready (model=qwen3.8-27b, 0 running, 1 conversations kept warm, inflight=0)
 ```
+
+`1 conversations kept warm` is what Ollama shows for this model. On Ollama, the
+Qwen3.5, Qwen3.6 and Qwen3.8 models other than Qwen3.8 Flash Next answer one
+request at a time, so a second conversation, or a subagent, waits for the first
+to finish. vLLM serves the same models several at once. The rest of the line is
+explained in [Read the full status](/getting-started/verify/#3-read-the-full-status).
 
 If it says `not ready`, the model is probably still downloading, and
 `waired models ls` shows how far along it is. If it stays `not ready` after

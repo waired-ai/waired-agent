@@ -78,6 +78,13 @@ func LookupByAlias(name string, manifests []Manifest) (Manifest, bool) {
 	return protocatalog.LookupByAlias(name, manifests)
 }
 
+// ServedMaxParallelIn is the most requests at once the build a device
+// serves is held to (catalog Variant.MaxParallel); 0 = no limit. See the
+// proto function for how an unreported variant resolves.
+func ServedMaxParallelIn(manifests []Manifest, engineType, modelID, variantID string) int {
+	return protocatalog.ServedMaxParallelIn(manifests, engineType, modelID, variantID)
+}
+
 // contains is a small helper used by tests.
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {

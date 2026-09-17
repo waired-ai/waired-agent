@@ -575,10 +575,13 @@ func sanitizeEngineReason(s string) string {
 // Two flags are wanted off it: -np, the request parallelism, and -b, the
 // prompt batch (waired-agent#1127).
 // /api/ps does not expose num_parallel and Ollama silently reduces
-// OLLAMA_NUM_PARALLEL — for a per-slot KV cache that will not fit, for
-// an architecture its build serves single-slot only, or for anything
-// else it decides at load time — so status would otherwise report the
-// intent, not the truth. Likewise the batch: the agent exports no batch
+// OLLAMA_NUM_PARALLEL — at v0.34.0 for embedding models and for the model
+// families its scheduler starts with one slot (server/sched.go
+// Scheduler.load), and in any later build for whatever it decides at load
+// time — so status would otherwise report the intent, not the truth. The
+// catalog's build limit keeps the product from asking for those families
+// (waired-ai/waired-agent#1423); this read is what still sees a reduction
+// the catalog does not know about. Likewise the batch: the agent exports no batch
 // variable, so the runner's own choice is the only figure there is. This
 // reads what was launched and nothing else — the engine's REASON for a
 // load-time decision is in its own log, not in the process table
@@ -675,7 +678,9 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	// would cost a second one for nothing.
 	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw, deps)
 
-	record := func(tn ollamaTuning, verified bool, warning string) {
+	// record stores the applied tuning and returns what it stored, so a
+	// caller can report what the runner was seen doing.
+	record := func(tn ollamaTuning, verified bool, warning string) infruntime.ModelTuning {
 		mt := tn.ModelTuning
 		mt.PostLoadFreeVRAMMB = freeMB()
 		mt.Verified = verified
@@ -783,6 +788,7 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 			mt.Warning = joinTuningWarn(mt.Warning, warning)
 		}
 		sw.SetAppliedTuning(mt)
+		return mt
 	}
 
 	next, restartWarn, kind := degradeStep(t, m, v, hw, verdict, detail)
@@ -801,9 +807,14 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 			record(t, true, detail)
 			return
 		}
+		// parallel is what was asked for and observed_parallel what the
+		// runner serves (0 = its command line was not read); logging only
+		// the first read as the engine's answer when it was not
+		// (waired-ai/waired-agent#1423).
+		applied := record(t, true, "")
 		logger.Info("ollama tuning verified",
-			"ctx", t.ContextLength, "kv", t.KVCacheType, "parallel", t.NumParallel)
-		record(t, true, "")
+			"ctx", t.ContextLength, "kv", t.KVCacheType, "parallel", t.NumParallel,
+			"observed_parallel", applied.ObservedNumParallel)
 		return
 	case verdict == tuningGPUNotEngaged:
 		// The GPU did not take the model at all. That is a backend or

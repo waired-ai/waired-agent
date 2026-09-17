@@ -1318,6 +1318,9 @@ func run(ctx context.Context, args []string) error {
 				if prov != nil {
 					prov.benchCache = cache
 					prov.onSpeedVerdict = func(b BenchResult) { localAdmit.SeedCapacity(b.Capacity) }
+					// The serving build's own limit bounds every ceiling
+					// the relay applies (waired-ai/waired-agent#1423).
+					localAdmit.SetBuildLimit(prov.ServingMaxParallel)
 					if !infCtl.IsDisabled() {
 						bench = prov.seedBootBenchmark(ctx)
 					}

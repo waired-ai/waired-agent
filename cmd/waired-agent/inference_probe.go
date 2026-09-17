@@ -418,20 +418,28 @@ func (d inferenceProbeDeps) cpCtx(fallback context.Context) context.Context {
 // The no-provider return stays 0 on purpose: that is a host with no engine
 // at all, and RunBootBenchmark's skip paths document 0 as the right encoding
 // for "no admission cap" there.
+//
+// Whichever source answers, the serving build's own limit bounds it
+// (ServingMaxParallel, waired-ai/waired-agent#1423). The live slot count is
+// already at or under it; the fallbacks are not, because a measurement taken
+// on the previous model can still be the latched answer while a switch is
+// being verified.
 func capacityFn(boot int, sub *inferenceSubsystem) func() int {
 	if sub != nil && sub.provider != nil {
 		prov := sub.provider
 		return func() int {
-			if n := prov.WarmConversationSlots(); n > 0 {
-				return n
-			}
-			if c := prov.AdvertisedCapacity(); c != 0 {
-				return c
-			}
-			if boot != 0 {
-				return boot
-			}
-			return unmeasuredCapacity
+			return capToLimit(func() int {
+				if n := prov.WarmConversationSlots(); n > 0 {
+					return n
+				}
+				if c := prov.AdvertisedCapacity(); c != 0 {
+					return c
+				}
+				if boot != 0 {
+					return boot
+				}
+				return unmeasuredCapacity
+			}(), prov.ServingMaxParallel())
 		}
 	}
 	return func() int { return boot }

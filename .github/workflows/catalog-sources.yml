@@ -26,7 +26,12 @@ on:
   pull_request:
     paths:
       - "proto/catalog/bundled/**"
-      - "internal/catalog/sources_integration_test.go"
+      - "internal/catalog/*_integration_test.go"
+      - "internal/catalog/ollama_single_request_families_test.go"
+      # The ollama pin: a release can add or lift a family its scheduler
+      # starts with one slot, and max_parallel follows that list
+      # (waired-ai/waired-agent#1423).
+      - "internal/runtime/ollama_version.go"
       - "internal/catalog/hfclient/**"
       - "internal/catalog/ollamaregistry/**"
       - ".github/workflows/catalog-sources.yml"

@@ -21,6 +21,15 @@ package runtime
 //     from .tgz to .tar.zst, which is the kind of change that turns an
 //     install into a 404 on one OS only.
 //
+// A third a bump has to check does not break the install; it makes the
+// catalog describe an engine nobody installs. The scheduler starts some
+// model families with one request slot whatever OLLAMA_NUM_PARALLEL asks
+// (server/sched.go Scheduler.load), and the catalog holds those builds to
+// max_parallel 1 (waired-ai/waired-agent#1423). The catalog-sources
+// workflow runs on this file and re-reads the list from the new tag
+// (internal/catalog/max_parallel_integration_test.go); it is not a
+// required check, so look at it.
+//
 // The AMD/ROCm supported-SKU list is the other thing to revisit, and it
 // now lives in exactly one place — amdROCmSupported in ollama_backend.go.
 // It used to be mirrored in scripts/install/ollama-windows.ps1, which
