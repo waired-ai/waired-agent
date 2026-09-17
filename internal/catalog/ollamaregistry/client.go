@@ -321,9 +321,44 @@ func (r Rendering) String() string {
 // the two calls disagreed and silently returning "renders nothing" would
 // report that as a rendering problem.
 func (c *Client) TagRendering(ctx context.Context, ref string) (Rendering, error) {
-	base, namespace, model, tag, err := c.splitRef(ref)
+	hasTemplate, cfg, err := c.tagManifestConfig(ctx, ref)
 	if err != nil {
 		return Rendering{}, err
+	}
+	return Rendering{Renderer: cfg.Renderer, HasTemplate: hasTemplate}, nil
+}
+
+// TagModelFamily reads ref's model family: the config blob's
+// model_family, which is the value ollama's scheduler compares when it
+// decides how many requests a model may serve at once (ollama v0.34.0
+// server/sched.go Scheduler.load, req.model.Config.ModelFamily). Both
+// registries carry it — the Hub's Docker-shaped config included.
+//
+// Empty with a nil error means the tag names no family, which is an
+// answer rather than a failure to get one; the catalog check that reads
+// this treats it as something to decide by hand.
+func (c *Client) TagModelFamily(ctx context.Context, ref string) (string, error) {
+	_, cfg, err := c.tagManifestConfig(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	return cfg.ModelFamily, nil
+}
+
+// tagConfig is the part of a tag's config blob this package reads.
+type tagConfig struct {
+	Renderer    string `json:"renderer"`
+	ModelFamily string `json:"model_family"`
+}
+
+// tagManifestConfig fetches ref's manifest and the config blob it points
+// at: two requests. It reports whether the manifest carries a template
+// layer. A manifest with no config blob yields a zero config, which names
+// nothing rather than failing.
+func (c *Client) tagManifestConfig(ctx context.Context, ref string) (hasTemplate bool, cfg tagConfig, err error) {
+	base, namespace, model, tag, err := c.splitRef(ref)
+	if err != nil {
+		return false, tagConfig{}, err
 	}
 
 	var man struct {
@@ -336,31 +371,24 @@ func (c *Client) TagRendering(ctx context.Context, ref string) (Rendering, error
 	}
 	manURL := fmt.Sprintf("%s/v2/%s/%s/manifests/%s", base, namespace, model, tag)
 	if err := c.getJSON(ctx, manURL, &man); err != nil {
-		return Rendering{}, err
+		return false, tagConfig{}, err
 	}
 
-	var out Rendering
 	for _, l := range man.Layers {
 		if l.MediaType == templateMediaType {
-			out.HasTemplate = true
+			hasTemplate = true
 			break
 		}
 	}
 	if man.Config.Digest == "" {
-		// A manifest with no config blob names no renderer, which is a
-		// complete answer rather than a failure to get one.
-		return out, nil
+		return hasTemplate, tagConfig{}, nil
 	}
 
-	var cfg struct {
-		Renderer string `json:"renderer"`
-	}
 	cfgURL := fmt.Sprintf("%s/v2/%s/%s/blobs/%s", base, namespace, model, man.Config.Digest)
 	if err := c.getJSON(ctx, cfgURL, &cfg); err != nil {
-		return Rendering{}, err
+		return false, tagConfig{}, err
 	}
-	out.Renderer = cfg.Renderer
-	return out, nil
+	return hasTemplate, cfg, nil
 }
 
 // getJSON fetches url and decodes it, treating every non-2xx as a failure

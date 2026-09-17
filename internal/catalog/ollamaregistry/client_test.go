@@ -269,3 +269,46 @@ func TestTagRendering_HubTagsNameNoRenderer(t *testing.T) {
 		t.Error("Renders() must report the template layer it found")
 	}
 }
+
+// TagModelFamily reads the config blob's model_family from either
+// registry, and a manifest with no config blob names no family rather than
+// failing.
+func TestTagModelFamily(t *testing.T) {
+	const cfg = "sha256:ddd"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v2/library/qwen3.5/manifests/9b-q4_K_M", "/v2/unsloth/Repo-GGUF/manifests/UD-Q2_K_XL":
+			_, _ = io.WriteString(w, `{"config":{"digest":"`+cfg+`"},"layers":[]}`)
+		case "/v2/library/qwen3.5/blobs/" + cfg:
+			_, _ = io.WriteString(w, `{"model_format":"gguf","model_family":"qwen35","model_families":["qwen35"]}`)
+		case "/v2/unsloth/Repo-GGUF/blobs/" + cfg:
+			_, _ = io.WriteString(w, `{"model_format":"gguf","model_family":"qwen35moe","model_type":"34.7B"}`)
+		case "/v2/library/bare/manifests/1b":
+			_, _ = io.WriteString(w, `{"layers":[]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HubBaseURL: srv.URL}
+	ctx := context.Background()
+
+	for _, tc := range []struct{ ref, want string }{
+		{"qwen3.5:9b-q4_K_M", "qwen35"},
+		{"hf.co/unsloth/Repo-GGUF:UD-Q2_K_XL", "qwen35moe"},
+		{"bare:1b", ""},
+	} {
+		got, err := c.TagModelFamily(ctx, tc.ref)
+		if err != nil {
+			t.Errorf("%s: %v", tc.ref, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s: family %q, want %q", tc.ref, got, tc.want)
+		}
+	}
+	if _, err := c.TagModelFamily(ctx, "missing:1b"); err == nil {
+		t.Error("a tag that does not resolve must be an error, not an empty family")
+	}
+}
