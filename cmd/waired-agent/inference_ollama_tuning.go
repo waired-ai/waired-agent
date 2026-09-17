@@ -219,11 +219,18 @@ func recommendedParallel(maxCtx, ctx int) int {
 
 // ollamaObservedServe is what the engine was last seen actually serving,
 // so the sizing can stop re-requesting a slot count the runner already
-// declined. Ollama silently caps OLLAMA_NUM_PARALLEL when the per-slot KV
-// cache does not fit the configured window; #763 reads the runner's own
-// -np back off its command line, and this carries that reading into the
-// next sizing pass rather than leaving it as status-only telemetry
-// (waired-ai/waired-agent#846).
+// declined. #763 reads the runner's own -np back off its command line, and
+// this carries that reading into the next sizing pass rather than leaving
+// it as status-only telemetry (waired-ai/waired-agent#846).
+//
+// #846 put the refusal down to a per-slot KV price the sizing gets wrong.
+// At ollama v0.34.0 that is not where a refusal comes from: the scheduler
+// passes OLLAMA_NUM_PARALLEL to the runner unchanged except for embedding
+// models and a list of model families it starts with one slot
+// (server/sched.go Scheduler.load), and #846's own host was serving
+// qwen3.5-122b-a10b, a qwen35moe build. The catalog now carries that limit
+// (Variant.MaxParallel, waired-ai/waired-agent#1423), so the sizing does
+// not ask; this stays as the backstop for a build the catalog misses.
 //
 // The zero value means "nothing observed", which is what every caller
 // that is not the serve reconcile passes.
@@ -251,6 +258,21 @@ func (o ollamaObservedServe) grantedFor(m catalog.Manifest, v catalog.Variant, c
 	return o.NumParallel
 }
 
+// capToBuild holds the auto-sized slot count and the recommendation to the
+// most requests the build is served with at once (catalog
+// Variant.MaxParallel; 0 = no limit). The owner decided on 2026-09-17 to
+// follow ollama's one-slot families rather than ask for a slot the engine
+// turns down (waired-ai/waired-agent#1423).
+func capToBuild(t *ollamaTuning, limit int) {
+	if limit <= 0 {
+		return
+	}
+	t.NumParallel = min(t.NumParallel, limit)
+	if t.RecommendedMaxParallel > limit {
+		t.RecommendedMaxParallel = limit
+	}
+}
+
 // finalizeParallel applies the operator's max-concurrent-requests override to
 // the computed tuning. operatorParallel <= 0 keeps the auto-sized NumParallel.
 // A positive value is HONORED even above RecommendedMaxParallel — the admin
@@ -258,8 +280,18 @@ func (o ollamaObservedServe) grantedFor(m catalog.Manifest, v catalog.Variant, c
 // verify-degrade recompute (which carries no override) backstops it down to the
 // safe auto value if the requested parallelism can't load. A Warning is attached
 // when it exceeds the recommendation so `waired doctor` / the status surface it.
-func finalizeParallel(t *ollamaTuning, operatorParallel int) {
+//
+// The one thing an override does not pass is the build's own limit (limit > 0,
+// catalog Variant.MaxParallel): the engine serves that build one request at a
+// time whatever it is asked (waired-ai/waired-agent#1423), so asking for more
+// changes nothing but a warning. It is held there without one — nothing is
+// traded away, and the Device page says why the figure stops at the limit.
+func finalizeParallel(t *ollamaTuning, operatorParallel, limit int) {
 	if operatorParallel <= 0 {
+		return
+	}
+	if limit > 0 && operatorParallel > limit {
+		t.NumParallel = limit
 		return
 	}
 	t.NumParallel = operatorParallel
@@ -283,10 +315,17 @@ func finalizeParallel(t *ollamaTuning, operatorParallel int) {
 // observed is what the engine was last seen serving; the zero value opts
 // out. It only ever lowers the auto-sized slot count, and never the
 // operator's override — see the clamp below.
+//
+// The build's own limit (catalog Variant.MaxParallel) bounds all three: the
+// auto-sized count, the recommendation, and the override.
 func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, ceilingCtx, operatorParallel int, observed ollamaObservedServe) (t ollamaTuning) {
-	// The operator override is applied at every exit (named return + defer) so
-	// each sizing branch just records its RecommendedMaxParallel and returns.
-	defer func() { finalizeParallel(&t, operatorParallel) }()
+	// The build limit and the operator override are applied at every exit
+	// (named return + defer) so each sizing branch just records its
+	// RecommendedMaxParallel and returns.
+	defer func() {
+		capToBuild(&t, v.MaxParallel)
+		finalizeParallel(&t, operatorParallel, v.MaxParallel)
+	}()
 	// Resolve the KV/flash-attention pair FIRST: every sizing branch below is
 	// a function of KVFactor, and nothing downstream may ever see "auto".
 	kv := planOllamaKV(m, v, hw, kvType)
@@ -379,18 +418,19 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:
 	// how many full-window slots the KV budget holds.
 	t.RecommendedMaxParallel = recommendedParallel(maxCtx, ctx)
-	// The engine's own answer wins over the estimate above. Ours prices a
-	// slot at its KV cache; the runner also charges a prompt cache, context
-	// checkpoints and, on a multimodal variant, a vision tower — so on some
-	// hosts it grants fewer slots than this arithmetic offers and logs the
-	// reduction. Re-asking every reconcile reserves memory the runner will
-	// decline again and republishes the same warning, so once the runner has
-	// answered for THIS model at THIS window, that answer is the ceiling
-	// (waired-ai/waired-agent#846). RecommendedMaxParallel follows it too: a
-	// measured refusal is better evidence of the ceiling than the estimate,
-	// and leaving it high would advise an operator toward a slot the engine
-	// has already refused. This narrows the gap's damage, not the gap: what
-	// the per-slot price omits is still open on #846.
+	// The engine's own answer wins over the estimate above. Once the runner
+	// has answered for THIS model at THIS window, that answer is the ceiling:
+	// re-asking every reconcile only republishes the same warning and
+	// restarts the engine to change nothing (waired-ai/waired-agent#846).
+	// RecommendedMaxParallel follows it too: a measured refusal is better
+	// evidence of the ceiling than the estimate, and leaving it high would
+	// advise an operator toward a slot the engine has already refused.
+	//
+	// #846 read the refusal as a per-slot price this arithmetic gets wrong.
+	// At ollama v0.34.0 the refusals come from the scheduler's one-slot
+	// model families, which the catalog's build limit now covers (see
+	// ollamaObservedServe); this clamp is what still catches a build the
+	// catalog does not mark.
 	if granted := observed.grantedFor(m, v, ctx); granted > 0 {
 		t.NumParallel = min(t.NumParallel, granted)
 		t.RecommendedMaxParallel = min(t.RecommendedMaxParallel, granted)

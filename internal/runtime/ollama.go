@@ -1200,8 +1200,9 @@ type ModelTuning struct {
 	// ObservedNumParallel is the request parallelism the model runner is
 	// ACTUALLY serving, read from its command line after load (#763). 0 =
 	// not observed; when non-zero it overrides NumParallel (the intent) in
-	// the inference status, because Ollama silently caps OLLAMA_NUM_PARALLEL
-	// when the per-slot KV cache does not fit the configured window.
+	// the inference status, because Ollama can lower OLLAMA_NUM_PARALLEL on
+	// its own (at v0.34.0, for the model families its scheduler starts with
+	// one slot — waired-ai/waired-agent#1423).
 	ObservedNumParallel int
 	// KVCacheType is the OLLAMA_KV_CACHE_TYPE the sizing assumed — "q8_0"
 	// where halving the KV cache buys context, "f16" where it does not (or

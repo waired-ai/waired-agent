@@ -35,8 +35,11 @@ import (
 //   - ollama / llama.cpp partitions KV into slots, each holding one
 //     window. The slot count IS the answer, and the only honest source for
 //     it is the runner's own command line (ObservedNumParallel — #763/#846),
-//     because the engine silently caps the request when the per-slot KV
-//     does not fit.
+//     because the engine can lower the request on its own: ollama v0.34.0
+//     starts some model families with one slot whatever it is asked. The
+//     catalog marks the builds it knows about (Variant.MaxParallel,
+//     waired-ai/waired-agent#1423), and the tuning no longer asks those
+//     for more — but the runner's command line stays the source.
 //
 //     There is deliberately NO fallback to the requested parallelism
 //     (waired-agent#1303). OLLAMA_NUM_PARALLEL is an upper bound on intent,
@@ -115,6 +118,23 @@ func (p *agentInferenceProvider) WarmConversationSlots() int {
 		return 0
 	}
 	return warmConversationSlots(signer.InferenceTypeOllama, p.ollama.AppliedTuning())
+}
+
+// ServingMaxParallel is the most requests at once the build this host
+// serves is held to: the catalog's Variant.MaxParallel for the model and
+// variant the ollama tuning was applied for (waired-ai/waired-agent#1423).
+// 0 means no limit — no engine, no tuning yet, a build without one, or
+// vLLM, which batches the builds ollama serves one at a time.
+//
+// It reads the same manifests the tuning resolved its target from, so the
+// limit the engine was started under and the limit admission holds to
+// cannot come from two different catalogs.
+func (p *agentInferenceProvider) ServingMaxParallel() int {
+	if p == nil || p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
+		return 0
+	}
+	t := p.ollama.AppliedTuning()
+	return catalog.ServedMaxParallelIn(p.manifests, catalog.RuntimeOllama, t.ModelID, t.VariantID)
 }
 
 // RecommendedMaxParallel is the largest concurrency this host can be set
