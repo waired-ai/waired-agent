@@ -185,7 +185,13 @@ func TestOllamaDraftToWrite_FollowsTheHost(t *testing.T) {
 // Where one slot with the draft fits and two do not, the serve tuning gives
 // up the second slot and keeps the draft (owner decision 2026-09-17,
 // waired-ai/waired#1433): ollamaSlotsFit prices two slots with the draft
-// the host would run.
+// the host would run. The window never moves for the draft.
+//
+// Swept over device budgets rather than pinned to one host: the band where
+// the two answers differ is a few GB wide and moves whenever the sizing
+// does (waired-ai/waired-agent#1437 moved it off the 18,432 MiB Mac this
+// test used to sit on, and the test skipped). A sweep that finds no such
+// band fails, because then the rule this test is about never applies.
 func TestComputeOllamaTuning_TheDraftComesBeforeASecondSlot(t *testing.T) {
 	ms, err := catalog.BundledManifests()
 	if err != nil {
@@ -200,21 +206,40 @@ func TestComputeOllamaTuning_TheDraftComesBeforeASecondSlot(t *testing.T) {
 			}
 		}
 	}
-	if v.GGUF == nil || v.GGUF.DraftMaxTokens != 0 {
-		t.Skipf("fixture changed: %+v", v.GGUF)
-	}
-	mac24 := hardware.Profile{OS: "darwin", Arch: "arm64", RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 18432,
-		GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}}}
-	without := computeOllamaTuning(m, v, mac24, "q4_0", ollamaObservedServe{})
-	if without.NumParallel != 2 {
-		t.Skipf("fixture no longer grants two slots without a draft here: %d", without.NumParallel)
+	if v.GGUF == nil || v.GGUF.DraftMaxTokens != 0 || v.GGUF.NextNLayers == 0 {
+		t.Fatalf("fixture changed: %+v", v.GGUF)
 	}
 	v.MTPDraftTokens = 2
-	with := computeOllamaTuning(m, v, mac24, "q4_0", ollamaObservedServe{})
-	if d := hostfit.OllamaDraftTokens(v, mac24.HostFit(), with.KVCacheType, with.ContextLength); d != 2 || with.NumParallel != 1 {
-		t.Errorf("draft %d with %d slots, want the draft (2) with one slot", d, with.NumParallel)
+	// The sweep is about slots against the draft, so it lifts the build's
+	// own slot cap (catalog.Variant.MaxParallel, waired-ai/waired-agent#1423).
+	v.MaxParallel = 0
+	none := v
+	none.MTPDraftTokens = 0
+
+	band := 0
+	for mb := 12000; mb <= 64000; mb += 250 {
+		hw := hardware.Profile{OS: "darwin", Arch: "arm64", RAMTotalGB: mb * 4 / 3 / 1024, UnifiedMemory: true, UsableVRAMMB: mb,
+			GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}}}
+		h := hw.HostFit()
+		without := computeOllamaTuning(m, none, hw, "q4_0", ollamaObservedServe{})
+		with := computeOllamaTuning(m, v, hw, "q4_0", ollamaObservedServe{})
+		if with.ContextLength != without.ContextLength {
+			t.Errorf("%d MiB: window %d with the draft, %d without; the window comes before the draft", mb, with.ContextLength, without.ContextLength)
+		}
+		draft := hostfit.OllamaDraftTokens(v, h, with.KVCacheType, with.ContextLength)
+		if draft > 0 && with.NumParallel > 1 {
+			if need := hostfit.OllamaEstimateMemory(v, h, with.KVCacheType, with.ContextLength, with.NumParallel).DeviceMB(); need > h.OllamaVRAMBudgetMB() {
+				t.Errorf("%d MiB: %d slots granted over the draft (%d MiB needed with it)", mb, with.NumParallel, need)
+			}
+		}
+		if without.NumParallel > 1 && with.NumParallel == 1 {
+			band++
+			if draft != 2 {
+				t.Errorf("%d MiB: the second slot was given up but the draft is %d", mb, draft)
+			}
+		}
 	}
-	if with.ContextLength != without.ContextLength {
-		t.Errorf("window %d with the draft, %d without: the window comes before the draft", with.ContextLength, without.ContextLength)
+	if band == 0 {
+		t.Fatal("no device budget from 12 to 64 GB gives up a second slot for the draft; the rule under test never applies")
 	}
 }
