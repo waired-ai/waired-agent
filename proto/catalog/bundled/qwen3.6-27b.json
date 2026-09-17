@@ -23,6 +23,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 18.0,
@@ -61,6 +62,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 17.42,

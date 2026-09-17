@@ -268,6 +268,22 @@ type Variant struct {
 	// runs through MTPDraftTokens(v). waired-ai/waired#1432,
 	// waired-ai/waired#1433.
 	MTPDraftTokens int `json:"mtp_draft_tokens,omitempty"`
+
+	// MaxParallel is the most requests the engine serves at once for this
+	// build, whatever the tuning or an admin override asks. 0 means the
+	// catalog sets no limit. Read it for a served build through
+	// ServedMaxParallel.
+	//
+	// It exists for ollama's scheduler, which starts some model families
+	// with one slot whatever OLLAMA_NUM_PARALLEL says (ollama v0.34.0
+	// server/sched.go Scheduler.load: "model architecture does not
+	// currently support parallel requests"). The family it compares is
+	// the tag's config-blob model_family. The owner decided on 2026-09-17
+	// to follow that limit, and to hold capacity to it from the catalog
+	// rather than request a second slot the engine turns down
+	// (waired-ai/waired-agent#1423). Only a build ollama serves carries
+	// one: vLLM batches the same models.
+	MaxParallel int `json:"max_parallel,omitempty"`
 }
 
 // MTPDraftTokens is the number of tokens the MTP draft proposes per step
@@ -563,6 +579,7 @@ func LookupByAlias(name string, manifests []Manifest) (Manifest, bool) {
 //   - param_count > 0 (Phase 7 router score input)
 //   - quantization_tier ∈ [1, 8] (Phase 7 router score input)
 //   - AWQ-quantized variants are Hugging Face repositories (any org, waired-ai/waired#1427)
+//   - max_parallel ≥ 0, and nonzero only on a build ollama alone serves (waired-ai/waired-agent#1423)
 //   - context_length > 0
 func (m *Manifest) Validate() error {
 	if m.ModelID == "" {
@@ -643,6 +660,12 @@ func (m *Manifest) Validate() error {
 		}
 		if err := validateMTP(m.ModelID, v); err != nil {
 			return err
+		}
+		if v.MaxParallel < 0 {
+			return fmt.Errorf("manifest %s variant %s: max_parallel must be ≥ 0, got %d", m.ModelID, v.VariantID, v.MaxParallel)
+		}
+		if v.MaxParallel > 0 && !runtimesEqual(v.RuntimeSupport, []string{RuntimeOllama}) {
+			return fmt.Errorf("manifest %s variant %s: max_parallel is read only for a build ollama serves; runtime_support is %v", m.ModelID, v.VariantID, v.RuntimeSupport)
 		}
 		if d := v.Source.Digest; d != "" {
 			if v.Source.Type != SourceOllama {

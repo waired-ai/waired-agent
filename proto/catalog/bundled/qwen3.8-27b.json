@@ -31,6 +31,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "Q4_K_M",
       "runtime_support": [
         "ollama"
@@ -83,6 +84,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "UD-Q3_K_XL",
       "runtime_support": [
         "ollama"
@@ -135,6 +137,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "UD-Q2_K_XL",
       "runtime_support": [
         "ollama"
