@@ -119,3 +119,49 @@ func flagsFor(paths []string) []string {
 	}
 	return args
 }
+
+// withRunner writes the engine's launch flags beside a snapshot, the way the
+// measurement harness leaves them.
+func withRunner(t *testing.T, snapshot, flags string) string {
+	t.Helper()
+	p := strings.TrimSuffix(snapshot, ".state.json") + ".runner.txt"
+	if err := os.WriteFile(p, []byte(flags+"\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+func TestTurnSpeedsImportRecordsTheEngineFlags(t *testing.T) {
+	store := turnSpeedStore(t, "amd-unified-128gb")
+	t0 := time.Date(2026, 9, 18, 3, 0, 0, 0, time.UTC)
+	const flags = "-c=200704 -np=1 -b=2048 -ub=2048 --cache-type-k=q4_0 --flash-attn=on"
+	var paths []string
+	for i := 0; i < 3; i++ {
+		paths = append(paths, withRunner(t, snapshot(t, "qwen3.5-9b", "q4-gguf", t0.Add(time.Duration(i)*time.Minute), 80, nil), flags))
+	}
+	if err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb",
+		"--retrieved", "2026-09-18")); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	set, _ := loadTurnSpeeds(store)
+	if rec, _ := set.Lookup("qwen3.5-9b", "q4-gguf"); rec.EngineFlags != flags {
+		t.Errorf("engine_flags = %q, want %q", rec.EngineFlags, flags)
+	}
+}
+
+// Record of a finding, not a product rule: on the reference host two loads of
+// the same build picked different batches and a dense 27B's prefill moved by
+// 2x, so samples taken under different engine flags are not one figure.
+func TestTurnSpeedsImportRefusesSamplesUnderDifferentEngineFlags(t *testing.T) {
+	store := turnSpeedStore(t, "amd-unified-128gb")
+	t0 := time.Date(2026, 9, 18, 3, 0, 0, 0, time.UTC)
+	paths := []string{
+		withRunner(t, snapshot(t, "qwen3.5-27b", "q4-gguf", t0, 318, nil), "-c=200704 -np=1 -b=2048 -ub=2048"),
+		withRunner(t, snapshot(t, "qwen3.5-27b", "q4-gguf", t0.Add(time.Minute), 318, nil), "-c=200704 -np=1 -b=2048 -ub=2048"),
+		withRunner(t, snapshot(t, "qwen3.5-27b", "q4-gguf", t0.Add(2*time.Minute), 500, nil), "-c=200704 -np=1 -b=512 -ub=512"),
+	}
+	err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb", "--retrieved", "2026-09-18"))
+	if err == nil || !strings.Contains(err.Error(), "different engine flags") {
+		t.Errorf("err = %v, want a refusal to fold samples taken under different engine flags", err)
+	}
+}

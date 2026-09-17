@@ -85,6 +85,14 @@ type VariantTurnSpeed struct {
 	AppliedWindow int    `json:"applied_window,omitempty"`
 	KVCacheType   string `json:"kv_cache_type,omitempty"`
 	NumParallel   int    `json:"num_parallel,omitempty"`
+	// EngineFlags is what the engine process actually ran with during the
+	// samples, read off its command line (e.g. "-c=200704 -np=1 -b=2048
+	// -ub=2048 --cache-type-k=q4_0 --flash-attn=on"). NumParallel above is
+	// the product's request; ollama runs some families in one slot
+	// whatever is asked (#1423), and it sizes the batch itself from the
+	// memory free at load, which moved a dense 27B's prefill by 2x between
+	// two loads of the same build on the reference host.
+	EngineFlags string `json:"engine_flags,omitempty"`
 
 	AgentRevision string `json:"agent_revision,omitempty"`
 	Retrieved     string `json:"retrieved"`

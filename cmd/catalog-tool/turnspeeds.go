@@ -119,7 +119,15 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 
 	type key struct{ model, variant string }
 	samples := map[key]map[time.Time]catalog.VariantMeasurement{}
+	// flags holds the engine's launch flags per sample, when the harness
+	// left them next to the snapshot (<name>.runner.txt beside
+	// <name>.state.json).
+	flags := map[key]map[time.Time]string{}
 	for _, p := range paths {
+		runnerFlags := ""
+		if b, err := os.ReadFile(strings.TrimSuffix(p, ".state.json") + ".runner.txt"); err == nil {
+			runnerFlags = strings.TrimSpace(string(b))
+		}
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return fmt.Errorf("turnspeeds: read %s: %w", p, err)
@@ -142,6 +150,15 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 				samples[k] = map[time.Time]catalog.VariantMeasurement{}
 			}
 			samples[k][m.MeasuredAt] = m
+			// A snapshot carries every variant measured so far; the runner
+			// file describes only the one measured last, so it is taken for
+			// the newest measurement in the snapshot and no other.
+			if runnerFlags != "" && m.MeasuredAt.Equal(newestMeasurement(st)) {
+				if flags[k] == nil {
+					flags[k] = map[time.Time]string{}
+				}
+				flags[k][m.MeasuredAt] = runnerFlags
+			}
 		}
 	}
 
@@ -157,6 +174,21 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 		ms := make([]catalog.VariantMeasurement, 0, len(byTime))
 		for _, m := range byTime {
 			ms = append(ms, m)
+		}
+		engineFlags := ""
+		if byTimeFlags := flags[k]; len(byTimeFlags) > 0 {
+			if len(byTimeFlags) != len(byTime) {
+				return fmt.Errorf("turnspeeds: %s/%s: %d of %d samples carry the engine's flags; a record is either all recorded or none",
+					k.model, k.variant, len(byTimeFlags), len(byTime))
+			}
+			for _, f := range byTimeFlags {
+				if engineFlags == "" {
+					engineFlags = f
+				} else if f != engineFlags {
+					return fmt.Errorf("turnspeeds: %s/%s: samples ran under different engine flags (%q vs %q); the batch ollama picks moves prefill, so they are not one figure",
+						k.model, k.variant, engineFlags, f)
+				}
+			}
 		}
 		engineVersion := ms[0].EngineVersion
 		for _, m := range ms[1:] {
@@ -190,6 +222,7 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 			AppliedWindow: ms[0].AppliedWindow,
 			KVCacheType:   ms[0].KVCacheType,
 			NumParallel:   ms[0].NumParallel,
+			EngineFlags:   engineFlags,
 			AgentRevision: o.AgentRevision,
 			Retrieved:     o.Retrieved,
 			Notes:         o.Notes,
@@ -246,3 +279,15 @@ func median(f func(catalog.VariantMeasurement) float64, ms []catalog.VariantMeas
 }
 
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
+
+// newestMeasurement is the latest measured_at in a snapshot: the variant
+// the harness measured just before copying it.
+func newestMeasurement(st snapshotState) time.Time {
+	var newest time.Time
+	for _, m := range st.MeasuredVariants {
+		if m.MeasuredAt.After(newest) {
+			newest = m.MeasuredAt
+		}
+	}
+	return newest
+}
