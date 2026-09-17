@@ -61,6 +61,8 @@ var receiveOnly = []exemption{
 		"withholds a shipped model from automatic choice while leaving it in the catalog; authored in the manifest, read by the pickers"},
 	{reflect.TypeFor[catalog.Variant](), "KVCacheTypes",
 		"KV-cache types a build may be served with; authored in the manifest (#1349), read by the tuning"},
+	{reflect.TypeFor[catalog.Variant](), "MaxParallel",
+		"the most requests a build is served with at once; authored in the manifest (#1423), read by the tuning, local admission and the control plane"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "LlamaCPP",
 		"vendor×runtime support cell; authored in the catalog, read by the picker"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "MLX",

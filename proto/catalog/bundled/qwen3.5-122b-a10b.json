@@ -28,6 +28,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "Q4_K_M",
       "runtime_support": [
         "ollama"

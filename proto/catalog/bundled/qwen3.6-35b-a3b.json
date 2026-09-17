@@ -23,6 +23,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 22.6,
@@ -62,6 +63,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "Q4_K_M",
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 23.9,
@@ -98,6 +100,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "UD-Q3_K_XL",
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 18.13,
@@ -139,6 +142,7 @@
         "f16"
       ],
       "format": "ollama-tag",
+      "max_parallel": 1,
       "quantization": "UD-Q2_K_XL",
       "runtime_support": ["ollama"],
       "estimated_weight_gb": 13.48,
