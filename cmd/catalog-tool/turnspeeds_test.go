@@ -21,7 +21,12 @@ func turnSpeedStore(t *testing.T, hostClass string) string {
 	return p
 }
 
-// snapshot writes a state.json holding one measurement of modelID/variantID.
+// testEngineFlags is what snapshot records as the engine's launch flags
+// unless a test writes its own with withRunner.
+const testEngineFlags = "-c=200704 -np=1 -b=2048 -ub=2048 --cache-type-k=q4_0 --flash-attn=on"
+
+// snapshot writes a state.json holding one measurement of modelID/variantID,
+// with the engine's launch flags beside it.
 func snapshot(t *testing.T, modelID, variantID string, at time.Time, turn float64, mutate func(*catalog.VariantMeasurement)) string {
 	t.Helper()
 	bundled, err := catalog.BundledManifests()
@@ -48,7 +53,7 @@ func snapshot(t *testing.T, modelID, variantID string, at time.Time, turn float6
 	if err := os.WriteFile(p, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return withRunner(t, p, testEngineFlags)
 }
 
 func TestTurnSpeedsImportTakesTheMedianOfRepeatedRuns(t *testing.T) {
@@ -134,7 +139,7 @@ func withRunner(t *testing.T, snapshot, flags string) string {
 func TestTurnSpeedsImportRecordsTheEngineFlags(t *testing.T) {
 	store := turnSpeedStore(t, "amd-unified-128gb")
 	t0 := time.Date(2026, 9, 18, 3, 0, 0, 0, time.UTC)
-	const flags = "-c=200704 -np=1 -b=2048 -ub=2048 --cache-type-k=q4_0 --flash-attn=on"
+	const flags = "-c=200704 -np=1 -b=1024 -ub=1024 --cache-type-k=q4_0 --flash-attn=on"
 	var paths []string
 	for i := 0; i < 3; i++ {
 		paths = append(paths, withRunner(t, snapshot(t, "qwen3.5-9b", "q4-gguf", t0.Add(time.Duration(i)*time.Minute), 80, nil), flags))
@@ -163,5 +168,42 @@ func TestTurnSpeedsImportRefusesSamplesUnderDifferentEngineFlags(t *testing.T) {
 	err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb", "--retrieved", "2026-09-18"))
 	if err == nil || !strings.Contains(err.Error(), "different engine flags") {
 		t.Errorf("err = %v, want a refusal to fold samples taken under different engine flags", err)
+	}
+}
+
+// Record of today's importer (#1400): a sample with no launch flags beside it
+// cannot be compared with the others, so the whole variant is refused rather
+// than written without them — whether one sample lacks them or all do.
+func TestTurnSpeedsImportRefusesSamplesWithoutEngineFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		drop    []int
+		wantErr string
+	}{
+		{"one sample", []int{1}, "2 of 3 samples carry the engine's flags"},
+		{"every sample", []int{0, 1, 2}, "0 of 3 samples carry the engine's flags"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := turnSpeedStore(t, "amd-unified-128gb")
+			t0 := time.Date(2026, 9, 18, 3, 0, 0, 0, time.UTC)
+			paths := []string{
+				snapshot(t, "qwen3.5-9b", "q4-gguf", t0, 80, nil),
+				snapshot(t, "qwen3.5-9b", "q4-gguf", t0.Add(time.Minute), 80, nil),
+				snapshot(t, "qwen3.5-9b", "q4-gguf", t0.Add(2*time.Minute), 80, nil),
+			}
+			for _, i := range tc.drop {
+				if err := os.Remove(paths[i] + ".runner.txt"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb", "--retrieved", "2026-09-18"))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want a refusal naming the sample count", err)
+			}
+			set, _ := loadTurnSpeeds(store)
+			if len(set.Models) != 0 {
+				t.Errorf("records written without flags: %+v", set.Models)
+			}
+		})
 	}
 }

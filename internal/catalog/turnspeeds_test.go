@@ -64,6 +64,14 @@ func TestTurnSpeedEntriesCarryProvenance(t *testing.T) {
 				if rec.DepthTokens < 32768 || rec.AppliedWindow < 200704 {
 					t.Errorf("%s: depth %d / window %d is not the product's measurement", where, rec.DepthTokens, rec.AppliedWindow)
 				}
+				// Record of today's store (#1400): seconds are compared
+				// only between records taken under the same engine
+				// flags, so a measured ollama record says which ones.
+				// num_parallel is the product's request, not what the
+				// engine ran (#1423).
+				if rec.Engine == RuntimeOllama && rec.EngineFlags == "" {
+					t.Errorf("%s: a measured ollama record needs engine_flags", where)
+				}
 			case TurnSpeedEstimated:
 				if rec.Notes == "" {
 					t.Errorf("%s: an estimate must say how it was computed", where)

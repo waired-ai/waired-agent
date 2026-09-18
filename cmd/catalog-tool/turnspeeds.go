@@ -119,9 +119,8 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 
 	type key struct{ model, variant string }
 	samples := map[key]map[time.Time]catalog.VariantMeasurement{}
-	// flags holds the engine's launch flags per sample, when the harness
-	// left them next to the snapshot (<name>.runner.txt beside
-	// <name>.state.json).
+	// flags holds the engine's launch flags per sample, read from
+	// <name>.runner.txt beside <name>.state.json. Every sample needs one.
 	flags := map[key]map[time.Time]string{}
 	for _, p := range paths {
 		runnerFlags := ""
@@ -176,18 +175,17 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 			ms = append(ms, m)
 		}
 		engineFlags := ""
-		if byTimeFlags := flags[k]; len(byTimeFlags) > 0 {
-			if len(byTimeFlags) != len(byTime) {
-				return fmt.Errorf("turnspeeds: %s/%s: %d of %d samples carry the engine's flags; a record is either all recorded or none",
-					k.model, k.variant, len(byTimeFlags), len(byTime))
-			}
-			for _, f := range byTimeFlags {
-				if engineFlags == "" {
-					engineFlags = f
-				} else if f != engineFlags {
-					return fmt.Errorf("turnspeeds: %s/%s: samples ran under different engine flags (%q vs %q); the batch ollama picks moves prefill, so they are not one figure",
-						k.model, k.variant, engineFlags, f)
-				}
+		byTimeFlags := flags[k]
+		if len(byTimeFlags) != len(byTime) {
+			return fmt.Errorf("turnspeeds: %s/%s: %d of %d samples carry the engine's flags; save them beside each snapshot as <name>.runner.txt",
+				k.model, k.variant, len(byTimeFlags), len(byTime))
+		}
+		for _, f := range byTimeFlags {
+			if engineFlags == "" {
+				engineFlags = f
+			} else if f != engineFlags {
+				return fmt.Errorf("turnspeeds: %s/%s: samples ran under different engine flags (%q vs %q); the batch ollama picks moves prefill, so they are not one figure",
+					k.model, k.variant, engineFlags, f)
 			}
 		}
 		engineVersion := ms[0].EngineVersion

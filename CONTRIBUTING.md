@@ -165,7 +165,11 @@ What the three gates ask:
   offered. The records come from the product's own measurement, repeated:
   on the host class, select the variant, let the automatic measurement
   finish, run `waired runtimes benchmark` three more times, and copy
-  `state.json` after each run. Then fold the copies in with
+  `state.json` after each run. Beside each copy, save the flags the
+  engine process was launched with (`-c`, `-np`, `-b`, `-ub`, the KV
+  cache type, flash attention and any `--spec-*`) as `<name>.runner.txt`:
+  ollama picks the batch from the memory free at load, and seconds taken
+  under different flags are not one figure. Then fold the copies in with
   `catalog-tool turnspeeds --import <state.json>... --host <class>
   --backend <backend> --agent-revision <sha> --retrieved <YYYY-MM-DD>`,
   which keeps a variant only with three or more measurements at the
