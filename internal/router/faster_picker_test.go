@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -270,6 +271,74 @@ func TestFasterCandidate_ChainTerminates(t *testing.T) {
 	}
 }
 
+// The same property on the shipped catalog and the shipped records, on the
+// host class they were taken on. Record of today's behaviour: from a dense
+// 27B the chain passes through flash-next (itself over the line) to the
+// 35B-A3B and on down, each step at least 5% faster by the recorded seconds.
+// It also fails when the shipped store answers nothing — an import that
+// disarms the step-down would otherwise go unnoticed, as FasterCandidate
+// reports that as "no faster model" rather than an error.
+func TestFasterCandidate_ShippedChainTerminates(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	store, err := catalog.TurnSpeeds()
+	if err != nil {
+		t.Fatalf("TurnSpeeds: %v", err)
+	}
+	in := PickInput{
+		Catalog:       manifests,
+		Hardware:      reviewHostStrixHalo(),
+		Engine:        catalog.RuntimeOllama,
+		EngineVersion: runtime.OllamaPinnedVersion,
+	}
+	modelID, variantID := "qwen3.5-27b", "q4-gguf"
+	m, v, ok := findCatalogPair(manifests, modelID, variantID)
+	if !ok {
+		t.Fatalf("the catalog no longer carries %s/%s", modelID, variantID)
+	}
+	prev, _, ok := store.For(m, v)
+	if !ok {
+		t.Fatalf("no recorded seconds for %s/%s", modelID, variantID)
+	}
+	var path []string
+	for {
+		p, ok := FasterCandidate(in, modelID, variantID)
+		if !ok {
+			break
+		}
+		secs, _, ok := store.For(p.Manifest, p.Variant)
+		if !ok || secs > prev*FasterStepFactor {
+			t.Fatalf("%s/%s (%.0f s) -> %s/%s (%.0f s, recorded=%v) is not 5%% faster",
+				modelID, variantID, prev, p.Manifest.ModelID, p.Variant.VariantID, secs, ok)
+		}
+		modelID, variantID, prev = p.Manifest.ModelID, p.Variant.VariantID, secs
+		path = append(path, fmt.Sprintf("%s/%s %.0f s", modelID, variantID, secs))
+		if len(path) > len(manifests) {
+			t.Fatalf("the chain did not terminate: %v", path)
+		}
+	}
+	t.Logf("chain: %v", path)
+	// Anti-vacuity: a chain of zero or one step satisfies everything above.
+	if len(path) < 2 {
+		t.Errorf("chain %v — the shipped records no longer give this host a multi-step chain, so nothing above was exercised", path)
+	}
+}
+
+// reviewHostStrixHalo is the v0.0.3-rc2 review host (waired-ai/waired#1223):
+// a Windows Ryzen AI Max 395 with a Radeon 8060S iGPU, 128 GB installed and
+// a 96 GB GPU budget — the reference host class the records were taken on.
+func reviewHostStrixHalo() hardware.Profile {
+	return hardware.Profile{
+		OS: "windows", Arch: "amd64",
+		RAMTotalGB:    128,
+		UnifiedMemory: true,
+		UsableVRAMMB:  96 * 1024,
+		GPUs:          []hardware.GPU{{Vendor: "amd", Model: "Radeon 8060S (synthetic)"}},
+	}
+}
+
 // manual_only and internal_only models are never offered: FasterCandidate
 // ranks through RankModels, which withholds both.
 func TestFasterCandidate_NeverAWithheldModel(t *testing.T) {
@@ -283,17 +352,6 @@ func TestFasterCandidate_NeverAWithheldModel(t *testing.T) {
 	}), "active", "q4-gguf"))
 	if got != "offered" {
 		t.Errorf("got %q, want offered", got)
-	}
-}
-
-// reviewHostStrixHalo is the v0.0.3-rc2 review host (waired-ai/waired#1223).
-func reviewHostStrixHalo() hardware.Profile {
-	return hardware.Profile{
-		OS: "windows", Arch: "amd64",
-		RAMTotalGB:    128,
-		UnifiedMemory: true,
-		UsableVRAMMB:  96 * 1024,
-		GPUs:          []hardware.GPU{{Vendor: "amd", Model: "Radeon 8060S (synthetic)"}},
 	}
 }
 
