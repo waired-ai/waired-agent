@@ -25,35 +25,60 @@ func turnSpeedStore(t *testing.T, hostClass string) string {
 // unless a test writes its own with withRunner.
 const testEngineFlags = "-c=200704 -np=1 -b=2048 -ub=2048 --cache-type-k=q4_0 --flash-attn=on"
 
-// snapshot writes a state.json holding one measurement of modelID/variantID,
-// with the engine's launch flags beside it.
-func snapshot(t *testing.T, modelID, variantID string, at time.Time, turn float64, mutate func(*catalog.VariantMeasurement)) string {
-	t.Helper()
-	bundled, err := catalog.BundledManifests()
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, ok := findShippedVariant(bundled, modelID, variantID)
-	if !ok {
-		t.Fatalf("no shipped %s/%s", modelID, variantID)
-	}
-	m := catalog.VariantMeasurement{
+// measurement is one measured_variants entry as the product writes it.
+func measurement(modelID, variantID string, at time.Time, turn float64) catalog.VariantMeasurement {
+	return catalog.VariantMeasurement{
 		ModelID: modelID, VariantID: variantID, EngineKind: catalog.RuntimeOllama,
 		EngineVersion: "0.34.0", MeasuredAt: at, MeasuredTokps: 40, PrefillTokps: 900,
 		DepthTokens: 33313, TurnSeconds: turn, Samples: 1, AppliedWindow: 200704,
 		KVCacheType: "q4_0", NumParallel: 1,
 	}
-	if mutate != nil {
-		mutate(&m)
+}
+
+// writeSnapshot writes a state.json whose last run is lb and whose
+// measured_variants holds ms, with the engine's launch flags beside it.
+func writeSnapshot(t *testing.T, lb catalog.BenchmarkRecord, ms ...catalog.VariantMeasurement) string {
+	t.Helper()
+	bundled, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]any{
-		"measured_variants": map[string]catalog.VariantMeasurement{catalog.VariantSHA(v): m},
-	})
+	byKey := map[string]catalog.VariantMeasurement{}
+	for _, m := range ms {
+		v, ok := findShippedVariant(bundled, m.ModelID, m.VariantID)
+		if !ok {
+			t.Fatalf("no shipped %s/%s", m.ModelID, m.VariantID)
+		}
+		byKey[catalog.VariantSHA(v)] = m
+	}
+	data, _ := json.Marshal(map[string]any{"last_benchmark": lb, "measured_variants": byKey})
 	p := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(p, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return withRunner(t, p, testEngineFlags)
+}
+
+// ranHere is the last_benchmark a run that measured m leaves behind. The
+// product stamps it with its own clock read, a fraction of a millisecond
+// before the entry's (observed on the reference host: .1497 s against
+// .1503 s).
+func ranHere(m catalog.VariantMeasurement) catalog.BenchmarkRecord {
+	return catalog.BenchmarkRecord{
+		ModelID: m.ModelID, VariantID: m.VariantID, MeasuredAt: m.MeasuredAt.Add(-500 * time.Microsecond),
+		TurnSeconds: m.TurnSeconds, Outcome: "measured",
+	}
+}
+
+// snapshot writes a state.json taken right after the product measured
+// modelID/variantID, with the engine's launch flags beside it.
+func snapshot(t *testing.T, modelID, variantID string, at time.Time, turn float64, mutate func(*catalog.VariantMeasurement)) string {
+	t.Helper()
+	m := measurement(modelID, variantID, at, turn)
+	if mutate != nil {
+		mutate(&m)
+	}
+	return writeSnapshot(t, ranHere(m), m)
 }
 
 func TestTurnSpeedsImportTakesTheMedianOfRepeatedRuns(t *testing.T) {
@@ -205,5 +230,55 @@ func TestTurnSpeedsImportRefusesSamplesWithoutEngineFlags(t *testing.T) {
 				t.Errorf("records written without flags: %+v", set.Models)
 			}
 		})
+	}
+}
+
+// Record of today's importer (#1400): a snapshot contributes only what its
+// own last run measured. On the reference host the product answered some
+// runs with a figure stored two days earlier under another build (cached),
+// and every snapshot also carried older entries for other variants; the
+// runner file beside a snapshot describes neither. A failed run is the
+// same case: the entry for its variant is an earlier run's.
+func TestTurnSpeedsImportTakesOnlyWhatEachSnapshotsRunMeasured(t *testing.T) {
+	store := turnSpeedStore(t, "amd-unified-128gb")
+	old := time.Date(2026, 9, 16, 13, 0, 0, 0, time.UTC)
+	t0 := time.Date(2026, 9, 18, 13, 0, 0, 0, time.UTC)
+	stale9b := measurement("qwen3.5-9b", "q4-gguf", old, 140)
+	stale4b := measurement("qwen3.5-4b", "q4-gguf", old.Add(time.Hour), 90)
+	reused := ranHere(stale9b)
+	reused.MeasuredAt, reused.Cached = t0, true
+	// The same answer stamped with the figure's own time: still not a
+	// sample, because the run measured nothing.
+	reusedAsStamped := ranHere(stale9b)
+	reusedAsStamped.MeasuredAt, reusedAsStamped.Cached = stale9b.MeasuredAt, true
+	var paths []string
+	// The automatic run answered with the stored 9b figure.
+	paths = append(paths, writeSnapshot(t, reused, stale9b, stale4b))
+	paths = append(paths, writeSnapshot(t, reusedAsStamped, stale9b, stale4b))
+	// A run that failed leaves the entry an earlier run wrote.
+	failed := catalog.BenchmarkRecord{ModelID: "qwen3.5-9b", VariantID: "q4-gguf", MeasuredAt: t0, Failed: true, Outcome: "failed"}
+	paths = append(paths, writeSnapshot(t, failed, stale9b, stale4b))
+	var run3 catalog.VariantMeasurement
+	for i := 1; i <= 3; i++ {
+		run3 = measurement("qwen3.5-9b", "q4-gguf", t0.Add(time.Duration(i)*time.Minute), 100)
+		paths = append(paths, writeSnapshot(t, ranHere(run3), run3, stale4b))
+	}
+	// Then the harness moved to 4b, whose automatic run answered with the
+	// stored figure. That snapshot's newest entry is 9b's third run, and
+	// the runner file beside it is 4b's engine, not 9b's.
+	reused4b := ranHere(stale4b)
+	reused4b.MeasuredAt, reused4b.Cached = t0.Add(10*time.Minute), true
+	paths = append(paths, withRunner(t, writeSnapshot(t, reused4b, run3, stale4b), "-c=200704 -np=1 -b=512 -ub=512"))
+	if err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb",
+		"--retrieved", "2026-09-18")); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	set, _ := loadTurnSpeeds(store)
+	rec, ok := set.Lookup("qwen3.5-9b", "q4-gguf")
+	if !ok || rec.Samples != 3 || rec.TurnSeconds != 100 {
+		t.Errorf("9b record = %+v, want 3 samples at 100 s (the reused 140 s figure is not a sample)", rec)
+	}
+	if rec, ok := set.Lookup("qwen3.5-4b", "q4-gguf"); ok {
+		t.Errorf("4b recorded from entries no run in these snapshots measured: %+v", rec)
 	}
 }

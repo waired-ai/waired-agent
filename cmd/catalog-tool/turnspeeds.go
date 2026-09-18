@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -84,6 +85,7 @@ type turnSpeedImportOpts struct {
 // snapshotState is the part of state.json the importer reads.
 type snapshotState struct {
 	MeasuredVariants map[string]catalog.VariantMeasurement `json:"measured_variants"`
+	LastBenchmark    *catalog.BenchmarkRecord              `json:"last_benchmark"`
 }
 
 func loadTurnSpeeds(path string) (catalog.TurnSpeedSet, error) {
@@ -100,8 +102,12 @@ func loadTurnSpeeds(path string) (catalog.TurnSpeedSet, error) {
 	return s, nil
 }
 
-// importTurnSpeeds folds product measurements into the store. Every
-// snapshot contributes the measured_variants entries it holds; the same
+// importTurnSpeeds folds product measurements into the store. A snapshot
+// contributes one measurement: the measured_variants entry its own
+// last_benchmark wrote, and none when that run answered with a stored
+// figure (cached) instead of measuring, or failed. The other entries a snapshot
+// carries are older runs — other builds, other sessions, other engine
+// flags — and the runner file beside it does not describe them. The same
 // measurement seen in two snapshots (same measured_at) counts once. A
 // variant gets a record only with at least minTurnSpeedSamples
 // measurements taken at the product's own depth and window — anything
@@ -122,6 +128,7 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 	// flags holds the engine's launch flags per sample, read from
 	// <name>.runner.txt beside <name>.state.json. Every sample needs one.
 	flags := map[key]map[time.Time]string{}
+	var notMeasured []string
 	for _, p := range paths {
 		runnerFlags := ""
 		if b, err := os.ReadFile(strings.TrimSuffix(p, ".state.json") + ".runner.txt"); err == nil {
@@ -135,30 +142,34 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 		if err := json.Unmarshal(data, &st); err != nil {
 			return fmt.Errorf("turnspeeds: decode %s: %w", p, err)
 		}
-		for sha, m := range st.MeasuredVariants {
-			v, ok := findShippedVariant(o.Bundled, m.ModelID, m.VariantID)
-			if !ok || catalog.VariantSHA(v) != sha {
-				continue // not a shipped build, or not this build of it
-			}
-			if m.EngineKind != catalog.RuntimeOllama || m.EngineVersion == "" || m.TurnSeconds <= 0 ||
-				m.DepthTokens < hostfit.SpeedMeasurementDepthTokens || m.AppliedWindow < hostfit.ServingWindow200k {
-				continue
-			}
-			k := key{m.ModelID, m.VariantID}
-			if samples[k] == nil {
-				samples[k] = map[time.Time]catalog.VariantMeasurement{}
-			}
-			samples[k][m.MeasuredAt] = m
-			// A snapshot carries every variant measured so far; the runner
-			// file describes only the one measured last, so it is taken for
-			// the newest measurement in the snapshot and no other.
-			if runnerFlags != "" && m.MeasuredAt.Equal(newestMeasurement(st)) {
-				if flags[k] == nil {
-					flags[k] = map[time.Time]string{}
-				}
-				flags[k][m.MeasuredAt] = runnerFlags
-			}
+		sha, m, ok := measuredByThisRun(st)
+		if !ok {
+			notMeasured = append(notMeasured, filepath.Base(p))
+			continue
 		}
+		v, ok := findShippedVariant(o.Bundled, m.ModelID, m.VariantID)
+		if !ok || catalog.VariantSHA(v) != sha {
+			continue // not a shipped build, or not this build of it
+		}
+		if m.EngineKind != catalog.RuntimeOllama || m.EngineVersion == "" || m.TurnSeconds <= 0 ||
+			m.DepthTokens < hostfit.SpeedMeasurementDepthTokens || m.AppliedWindow < hostfit.ServingWindow200k {
+			continue
+		}
+		k := key{m.ModelID, m.VariantID}
+		if samples[k] == nil {
+			samples[k] = map[time.Time]catalog.VariantMeasurement{}
+		}
+		samples[k][m.MeasuredAt] = m
+		if runnerFlags != "" {
+			if flags[k] == nil {
+				flags[k] = map[time.Time]string{}
+			}
+			flags[k][m.MeasuredAt] = runnerFlags
+		}
+	}
+	if len(notMeasured) > 0 {
+		fmt.Printf("turnspeeds: %d snapshot(s) hold no measurement of their own (the run reused a stored figure or failed): %s\n",
+			len(notMeasured), strings.Join(notMeasured, ", "))
 	}
 
 	if set.Models == nil {
@@ -278,14 +289,21 @@ func median(f func(catalog.VariantMeasurement) float64, ms []catalog.VariantMeas
 
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
 
-// newestMeasurement is the latest measured_at in a snapshot: the variant
-// the harness measured just before copying it.
-func newestMeasurement(st snapshotState) time.Time {
-	var newest time.Time
-	for _, m := range st.MeasuredVariants {
-		if m.MeasuredAt.After(newest) {
-			newest = m.MeasuredAt
+// measuredByThisRun is the measured_variants entry the snapshot's own
+// last_benchmark wrote: same model and variant, and the same seconds,
+// which both copy from one run. Not the same measured_at: the product
+// stamps the two with separate clock reads (inference_recommendation.go).
+// A run that answered with a stored figure (cached) or failed wrote no
+// entry, and the one its variant holds is an earlier run's.
+func measuredByThisRun(st snapshotState) (string, catalog.VariantMeasurement, bool) {
+	lb := st.LastBenchmark
+	if lb == nil || lb.Cached {
+		return "", catalog.VariantMeasurement{}, false
+	}
+	for sha, m := range st.MeasuredVariants {
+		if m.ModelID == lb.ModelID && m.VariantID == lb.VariantID && m.TurnSeconds == lb.TurnSeconds {
+			return sha, m, true
 		}
 	}
-	return newest
+	return "", catalog.VariantMeasurement{}, false
 }
