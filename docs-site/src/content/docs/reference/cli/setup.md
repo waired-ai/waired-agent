@@ -104,7 +104,7 @@ Below that, `Notices:` is anything Waired has to say about this computer:
 
 ```
 Notices:
-  ⚠ Lighter model recommended — switch to qwen3-8b-instruct
+  ⚠ Faster model recommended — switch to qwen3-8b-instruct
     This computer takes 228 s per request with qwen3-30b-a3b (target: 190 s or less).
   ⬆ Update available — install v0.9.3
     This computer runs v0.9.1.

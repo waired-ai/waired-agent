@@ -17,8 +17,8 @@ waired runtimes benchmark
 ```
 
 This times one request the size of a coding agent's with the model this
-computer runs. If it takes longer than the target, Waired offers a lighter
-model. Accepting is usually right.
+computer runs. If it takes longer than the target, Waired offers a faster
+model that fits this computer. Accepting is usually right.
 
 Other things worth checking:
 
@@ -114,11 +114,11 @@ next short request works, and Waired keeps the warning where you see it: in
 `waired models ls --detail`, in `waired status`, and in `waired doctor`.
 
 The model is too big for this computer at the length you need. Switch to a
-lighter model. See [Change the model](/guides/choose-a-model/). Waired does
-not offer a lighter model automatically in this case, on purpose. That
-suggestion is for a computer that measured slow. Running out of memory is a
-different problem, and a smaller model at the same conversation length is
-not always the fix.
+smaller model. See [Change the model](/guides/choose-a-model/). Waired does
+not suggest a model automatically in this case, on purpose. That suggestion
+is for a computer that measured slow, and it picks for speed, not for memory.
+Running out of memory is a different problem, and a smaller model at the
+same conversation length is not always the fix.
 
 ## Windows: giving the graphics chip more memory made things worse
 

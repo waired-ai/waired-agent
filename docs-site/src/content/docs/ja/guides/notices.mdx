@@ -22,11 +22,11 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 | お知らせ | 意味 | 対処 |
 |---|---|---|
-| **⚠ Lighter model recommended — switch to …** | 動かしているモデルで、コーディングエージェントと同じ大きさのリクエスト1つに、このパソコンでは目標より長くかかりました。本文に数値が示されます。*This computer takes 228 s per request with qwen3.8-27b (target: 190 s or less).* | 行を選択すると切り替わります。［No］と答えると、そのモデルの組み合わせについては再び聞かれません。 |
+| **⚠ Faster model recommended — switch to …** | 動かしているモデルで、コーディングエージェントと同じ大きさのリクエスト1つに、このパソコンでは目標より長くかかりました。本文に数値が示されます。*This computer takes 228 s per request with qwen3.8-27b (target: 190 s or less).* | 行を選択すると切り替わります。［No］と答えると、そのモデルの組み合わせについては再び聞かれません。 |
 | **⬆ Update available — install …** | このパソコンが動かしているものより新しいWairedのバージョンがあります。本文に現在のバージョンが示されます。 | 行を選択します。管理者権限を求められ、その場で更新されます。[Wairedをアップデートする](/ja/getting-started/update/)を参照してください。 |
 | **⚠ Ollama is not running the version Waired pins** | ここでリクエストに答えている推論エンジンが、このビルドのWairedが想定するバージョンではありません。自分でインストールしたものか、古いWairedが残したものであることが普通です。 | 本文に、戻すためのコマンドが示されます。 |
 | **⬆ Ollama sized this model for this computer** | 問題ではありません。推論エンジンが意図的に調整を行いました。たとえば、速度を少し犠牲にして長いコンテキストウィンドウを保つ、といった調整です。 | 何もしません。調整が見えるようにするための行です。 |
-| **⚠ Ollama is serving a configuration this computer could not hold** | 推論エンジンはこのパソコンに合わせて調整されましたが、それを維持できませんでした。モデルがシステムRAMにあふれたか、GPUの容量が足りなくなったか、推論エンジンがGPUをまったく使いませんでした。答えが遅くなるか、リクエストが失敗することがあります。 | 本文にどちらかが示されます。通常は軽いモデルに切り替えます。[モデルを変更する](/ja/guides/choose-a-model/)を参照してください。 |
+| **⚠ Ollama is serving a configuration this computer could not hold** | 推論エンジンはこのパソコンに合わせて調整されましたが、それを維持できませんでした。モデルがシステムRAMにあふれたか、GPUの容量が足りなくなったか、推論エンジンがGPUをまったく使いませんでした。答えが遅くなるか、リクエストが失敗することがあります。 | 本文にどちらかが示されます。通常は小さいモデルに切り替えます。[モデルを変更する](/ja/guides/choose-a-model/)を参照してください。 |
 | **⚠ Ollama is running but not answering** | 推論エンジンのプロセスは動いていますが、自身のヘルスチェックに答えていません。自分のほかのパソコンはこれに気づき、ここへ処理を送るのをやめています。 | 推論エンジンを再起動します。`waired inference engine stop`のあと`start`を実行します。 |
 
 上の行の推論エンジンの名前は、このパソコンが動かしているものです。vLLMを使うLinuxのパソコンでは、行に**vLLM**と表示されます。

@@ -40,7 +40,7 @@ func TestStatusReport_CarriesTheNotices(t *testing.T) {
 
 	_, details := statusReport(Update(snap), snap, "0.0.3-rc4", "90dd4a5", testReportNow())
 
-	for _, want := range []string{"NOTICES", "Lighter model recommended", "light"} {
+	for _, want := range []string{"NOTICES", "Faster model recommended", "light"} {
 		if !strings.Contains(details, want) {
 			t.Errorf("report is missing %q:\n%s", want, details)
 		}

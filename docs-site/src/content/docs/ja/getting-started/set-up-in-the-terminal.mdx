@@ -90,14 +90,14 @@ import Expected from '../../../../components/Expected.astro';
    ✅ Local inference works. Qwen3.8 27B takes 66 s per request on this computer.
    ```
 
-   リクエストが目標より長くかかる場合を除いて、質問はありません。長くかかる場合は、より軽いモデルの名前が示され、切り替えるかを聞かれます。リクエストが終わる前に目標を超えた場合は、その時点でそのことが表示され、そこで聞かれます。
+   リクエストが目標より長くかかる場合を除いて、質問はありません。長くかかる場合は、このコンピュータのメモリに収まるより速いモデルの名前が示され、切り替えるかを聞かれます。リクエストが終わる前に目標を超えた場合は、その時点でそのことが表示され、そこで聞かれます。
 
    ```
    🐢 Qwen3.8 27B takes 190 s or more per request (target: 190 s or less).
      Switch to Qwen3.5 9B? The measurement keeps running if you stay. [Y/n] (default: Yes)
    ```
 
-   noと答えた場合や、提案できる軽いモデルがない場合は、*「Waiting for the measurement to finish.」*と表示され、ターミナルは結果を待ちます。
+   noと答えた場合や、提案できる速いモデルがない場合は、*「Waiting for the measurement to finish.」*と表示され、ターミナルは結果を待ちます。
 
 9. **Route Claude Code inference through Waired now? `[Y/n]`**（Claude Codeの推論をWaired経由にしますか）
 
@@ -207,10 +207,10 @@ Pick one with `waired models pull <model>`, or in the Waired console.
    Model     qwen3.5-9b — 228 s per request
    Claude    routed through Waired
    Local inference is running here at 228 s per request (target: 190 s or less).
-   Pick a lighter model with `waired runtimes benchmark`, or keep using your other computers.
+   Find a faster model with `waired runtimes benchmark`, or keep using your other computers.
 ```
 
-ベンチマークの結果、このパソコンのモデルでは1リクエストに目標より長くかかると分かりましたが、パソコンはそのモデルを使い続けています。`--non-interactive`ではこうなります。2回目のダウンロードを始めるのではなく、ハードウェアから選んだモデルを維持するためです。より軽いモデルへの切り替えにnoと答えた場合も同じです。セットアップは終わっていて、すべて動いています。`waired runtimes benchmark`でもう一度計測すると、より軽いモデルが提案されます。自分のほかのパソコンのモデルには影響ありません。
+ベンチマークの結果、このパソコンのモデルでは1リクエストに目標より長くかかると分かりましたが、パソコンはそのモデルを使い続けています。`--non-interactive`ではこうなります。2回目のダウンロードを始めるのではなく、ハードウェアから選んだモデルを維持するためです。より速いモデルへの切り替えにnoと答えた場合も同じです。セットアップは終わっていて、すべて動いています。`waired runtimes benchmark`でもう一度計測すると、より速いモデルが提案されます。自分のほかのパソコンのモデルには影響ありません。
 </Expected>
 
 <Expected tone="bad">
@@ -273,7 +273,7 @@ Pick one with `waired models pull <model>`, or in the Waired console.
 | *Set up coding-agent integration?* | このパソコンのコーディングツール | `--non-interactive`、`--skip-integration` |
 | *Route Claude Code inference through Waired now?* | Claude Code。Anthropic APIのまま | `--non-interactive`、`--skip-claude-route` |
 
-ほかの質問では実行は止まりません。答えがない場合の結果が`--non-interactive`と同じだからです。モデルの一覧はWairedが選んだモデルを維持し、ベンチマークのあとの軽いモデルの提案は動いているモデルを維持し、*Keep local inference on anyway?*は自分でオンにした設定を維持します。
+ほかの質問では実行は止まりません。答えがない場合の結果が`--non-interactive`と同じだからです。モデルの一覧はWairedが選んだモデルを維持し、ベンチマークのあとの速いモデルの提案は動いているモデルを維持し、*Keep local inference on anyway?*は自分でオンにした設定を維持します。
 
 インストーラがここに至ることはありません。`install.sh`はターミナルのないパソコンでは、`--non-interactive`を付けない限りサインインを省きます。`install.ps1`は入力がリダイレクトされていれば常に`--non-interactive`を付けます。こうなるのは、スクリプトから、またはターミナルのない`ssh`で、`waired init`を自分で実行したときです。
 

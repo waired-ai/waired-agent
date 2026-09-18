@@ -59,7 +59,7 @@ var benchNarrateEvery = 30 * time.Second
 // promptBenchmarkRecommendation is `waired runtimes benchmark`: it asks the
 // daemon to measure the active model again (mode rerun — a person asking for
 // a new number overwrites the stored one) and, when one request takes longer
-// than the line and a lighter model fits, prompts the user to switch (issue
+// than the line and a faster model fits, prompts the user to switch (issue
 // #133; waired-ai/waired-agent#1341). It NEVER switches
 // without confirmation; --non-interactive prints the recommendation but
 // does not auto-accept.
@@ -186,7 +186,7 @@ func benchModelLabel(mgmtURL, modelID string) string {
 //
 // The wait has no cap once the measurement runs (waired-ai/waired#1382).
 // When it passes the line before it ends, the person is told then and
-// offered the lighter model at that moment; staying keeps the measurement
+// offered the faster model at that moment; staying keeps the measurement
 // running and the flow waits for it to finish.
 func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, bool, error) {
 	// switchTo is the suggestion the person accepted while the measurement
@@ -227,16 +227,16 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 	sm := resp.SpeedMeasurement
 
 	if rec := resp.Recommendation; rec != nil && !rec.Dismissed {
-		// Special case: the step-down lands on the lightest model we
-		// offer. There's nothing lighter to fall back to after it, so
-		// instead of the neutral "switch to a lighter model" flow, confirm
+		// Special case: the step-down lands on the fastest model we
+		// offer. There's nothing faster to fall back to after it, so
+		// instead of the neutral "switch to a faster model" flow, confirm
 		// whether to keep local inference at all (drop to it) or turn it
 		// off. Default No.
-		if isLightestOfferedModel(rec.ToModelID) && declined != rec.ToModelID {
+		if isFastestOfferedModel(rec.ToModelID) && declined != rec.ToModelID {
 			return tinyBenchmarkDisableFlow(mgmtURL, nonInteractive, out, sc, tty, rec, resp)
 		}
 
-		// Over the line → lighter-model flow (issue #133).
+		// Over the line → faster-model flow (issue #133).
 		from := bundledModelLabelDefault(rec.FromModelID)
 		to := bundledModelLabelDefault(rec.ToModelID)
 		writePromptf(out, "\n%s Local inference is slow: %s takes %s %s.\n",
@@ -254,7 +254,7 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 			}
 			return resp, false, nil
 		}
-		writePromptf(out, "Waired recommends switching from %s to %s. The lighter model should run more smoothly on this hardware.\n",
+		writePromptf(out, "Waired recommends switching from %s to %s, which answers faster and fits in this computer's memory.\n",
 			from, to)
 
 		if nonInteractive {
@@ -285,19 +285,19 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 		return resp, false, nil
 	}
 
-	// Over the line with no lighter model to propose. Reaching here
-	// means the daemon judged the request too slow and LighterCandidate
+	// Over the line with no faster model to propose. Reaching here
+	// means the daemon judged the request too slow and FasterCandidate
 	// found nothing — most often because this host is already serving
-	// the smallest model Waired offers, which is the one case where
-	// "switch to something lighter" has no answer (waired-agent#784).
+	// the fastest model Waired offers, which is the one case where
+	// "switch to something faster" has no answer (waired-agent#784).
 	//
-	// The check is isLightestOfferedModel, not the absence of a
+	// The check is isFastestOfferedModel, not the absence of a
 	// recommendation: a proposal can also be missing because the engine
 	// pick failed or the measurement describes a model that is no longer
 	// active, and offering to turn local inference off for either of
 	// those would be answering a question nobody asked.
 	if overLine(sm) && resp.Recommendation == nil {
-		if modelID := activeModelForDisplay(mgmtURL); modelID != "" && isLightestOfferedModel(modelID) {
+		if modelID := activeModelForDisplay(mgmtURL); modelID != "" && isFastestOfferedModel(modelID) {
 			return noLighterModelFlow(mgmtURL, nonInteractive, out, sc, modelID, resp)
 		}
 	}
@@ -316,8 +316,8 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 		}
 	case sm.Judged():
 		// Over the line, and the two arms above did not take it: the
-		// daemon had no lighter model to propose and this host is not on
-		// the smallest one, so something else — a failed engine pick, a
+		// daemon had no faster model to propose and this host is not on
+		// the fastest one, so something else — a failed engine pick, a
 		// measurement describing a model that is no longer active —
 		// stopped the proposal.
 		//
@@ -495,7 +495,7 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 // polls through.
 //
 // Any recommendation the second run carries is deliberately ignored. The
-// lighter model can itself measure over the line, and acting on that here
+// faster model can itself measure over the line, and acting on that here
 // would step down again inside a flow the operator answered once.
 // `waired runtimes benchmark` is where that conversation belongs.
 func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRunResponse {
@@ -525,7 +525,7 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 			writePromptf(out, "%s %s here %s.\n",
 				emo("🐢", "!"), speedPhrase(sm), speedTarget(sm))
 		}
-		writePrompt(out, "   Run `waired runtimes benchmark` to step down again.")
+		writePrompt(out, "   Run `waired runtimes benchmark` to look for a faster model again.")
 		return resp
 	}
 	if label != "" {
@@ -540,9 +540,9 @@ func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRu
 
 // tinyBenchmarkDisableFlow is the benchmark-time counterpart of the install
 // spec-check dialog: one request with the active model takes longer than the
-// line and the ONLY lighter step-down is the bottom of the ladder — nothing Waired
-// offers is ranked below it (isLightestOfferedModel, init_modelselect.go).
-// Rather than the neutral "switch to a lighter model" flow, it confirms whether
+// line and the step-down lands on the fastest model — nothing Waired offers
+// answers faster (isFastestOfferedModel, init_modelselect.go).
+// Rather than the neutral "switch to a faster model" flow, it confirms whether
 // to keep local inference by dropping to that last model, or turn it off.
 // Default No → disable local inference; the node keeps working as a
 // gateway/relay.
@@ -569,7 +569,7 @@ func tinyBenchmarkDisableFlow(
 	// recommended on any computer") kept asserting the floor itself, which
 	// #522 abolished; the branch is selected by an ordering. So the line
 	// now says only what the gate actually tested (waired-agent#834).
-	writePromptf(out, "   %s is the smallest model Waired offers, so there's nothing lighter to switch to after it.\n", label)
+	writePromptf(out, "   %s is the fastest model Waired offers, so there's nothing faster to switch to after it.\n", label)
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
@@ -607,18 +607,21 @@ func tinyBenchmarkDisableFlow(
 }
 
 // noLighterModelFlow is what happens when the host is ALREADY on the
-// bottom of the ladder and measured over the line (waired-agent#784).
+// fastest model Waired offers and measured over the line
+// (waired-agent#784). The name predates #1400, when the step-down walked
+// down by weight; the wire id it answers to (RecommendationLighter) kept
+// its name too.
 //
-// tinyBenchmarkDisableFlow next door handles the rung above this one:
-// the step-down's target is the smallest model, so there is still a move
-// to offer. Here the smallest model is what is running, so the only
+// tinyBenchmarkDisableFlow next door handles the step before this one:
+// the step-down's target is the fastest model, so there is still a move
+// to offer. Here the fastest model is what is running, so the only
 // question left is whether to keep local inference at all. That is the
 // owner's rule for this case — a machine that cannot run the lightest
 // model Waired offers is under-specified, and whether to run anyway is
 // the operator's call, not the wizard's.
 //
 // Default No, matching its sibling: this host has now measured the
-// bottom of the ladder and come up short. An exhausted stdin is NOT
+// fastest model and come up short. An exhausted stdin is NOT
 // that No — turning local inference off on a machine nobody was
 // watching is waired-agent#754.
 func noLighterModelFlow(
@@ -628,7 +631,7 @@ func noLighterModelFlow(
 	label := bundledModelLabelDefault(activeModelID)
 	writePromptf(out, "\n%s Local inference is slow here: %s takes %s %s.\n",
 		emo("⚠", "!"), label, speedPhrase(resp.SpeedMeasurement), speedTarget(resp.SpeedMeasurement))
-	writePromptf(out, "   %s is the smallest model Waired offers, so there's nothing lighter to switch to.\n", label)
+	writePromptf(out, "   %s is the fastest model Waired offers, so there's nothing faster to switch to.\n", label)
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", label)
@@ -661,7 +664,7 @@ func disableLocalInference(mgmtURL string) error {
 
 // waitForBenchmark polls the daemon until the engine + active model are
 // ready, then runs the benchmark and returns the full response (the
-// measurement plus any lighter-model suggestion). ok=false means "could not
+// measurement plus any faster-model suggestion). ok=false means "could not
 // obtain a result" (daemon too old, model never readied within the deadline,
 // terminal pull failure) — the caller should treat that as a non-error skip.
 //

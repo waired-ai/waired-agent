@@ -38,7 +38,7 @@ func statusRecProvider(t *testing.T, bench BenchResult) *agentInferenceProvider 
 // assigned by anything, from the initial populate onwards. Everything
 // downstream was in place and waiting: the catalog handler copies both
 // fields (internal/management/inference_catalog.go), the tray renders
-// "⚠ Lighter model recommended — switch to …" plus a confirmation popup
+// "⚠ Faster model recommended — switch to …" plus a confirmation popup
 // from them (internal/gui/tray/state.go, tray.go), and four docs-site
 // pages describe the feature. The row simply never appeared on any host.
 func TestStatus_CarriesTheBenchmarkRecommendation(t *testing.T) {

@@ -2473,7 +2473,7 @@ const (
 	noticeClickUpdate
 )
 
-// onShowRecommendationPopup presents the lighter-model suggestion in a
+// onShowRecommendationPopup presents the faster-model suggestion in a
 // native yes/no dialog. Yes posts the preferred-model switch; No records
 // a dismissal so the same pairing does not nag again. When no desktop
 // dialog backend is available it falls back to copying the CLI command
@@ -2495,7 +2495,7 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	title := "Local inference is slow"
 	body := fmt.Sprintf(
 		"This computer takes %s per request with %s %s.\n\n"+
-			"Switch to the lighter model %s? It applies live. Waired keeps answering.",
+			"Switch to %s, which answers faster? It applies live. Waired keeps answering.",
 		notice.RequestSeconds(rec.TurnSeconds, rec.TurnFloorSeconds), rec.FromModelID,
 		notice.TargetClause(rec.BudgetSeconds), rec.ToModelID)
 

@@ -411,7 +411,7 @@ func (c *Client) SetPreferredModel(ctx context.Context, modelID string) (*manage
 }
 
 // DismissRecommendation records that the operator declined the #133
-// lighter-model suggestion (from→to variant IDs) so it is not
+// faster-model suggestion (from→to variant IDs) so it is not
 // re-surfaced after a re-benchmark of the same pairing. 404 →
 // ErrCatalogUnsupported so the tray degrades silently on older daemons.
 func (c *Client) DismissRecommendation(ctx context.Context, fromVariantID, toVariantID string) error {

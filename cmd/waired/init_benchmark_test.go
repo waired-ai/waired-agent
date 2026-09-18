@@ -209,15 +209,15 @@ func (b *benchStub) server() *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// tinyRec is a recommendation that steps down onto the lightest model we
+// tinyRec is a recommendation that steps down onto the fastest model we
 // offer, which triggers the disable-or-proceed dialog instead of the
-// neutral lighter-model switch: there is nothing lighter to fall back to
+// neutral faster-model switch: there is nothing faster to fall back to
 // after it, so the real question is whether to keep local inference at
 // all.
 //
-// The target is qwen3.5-0.8b, the lightest offered entry since #200
-// retired qwen2.5-coder-0.5b-instruct. Not cosmetic:
-// isLightestOfferedModel is what selects the branch under test, and a
+// The target is qwen3.5-0.8b, the fastest offered entry on the reference
+// host class (internal/catalog/turnspeeds.json). Not cosmetic:
+// isFastestOfferedModel is what selects the branch under test, and a
 // target the catalog cannot resolve takes the OTHER one. Record of
 // today's catalog.
 //
@@ -545,7 +545,7 @@ func TestPromptBenchmark_OffSubsystemSkipsImmediately(t *testing.T) {
 	}
 }
 
-// When the only lighter step-down is the tiny 0.5B, declining (default No)
+// When the step-down lands on the fastest model, declining (default No)
 // disables local inference rather than switching / dismissing.
 func TestPromptBenchmark_TinyDeclineDisables(t *testing.T) {
 	stub := &benchStub{ready: true, rec: tinyRec()}
@@ -592,7 +592,7 @@ func TestPromptBenchmark_TinyAcceptSwitches(t *testing.T) {
 // 2026-08-08) abolished the one it used to test and
 // docs/decisions/20260808/0452-model-size-class-replaces-the-quality-number.md
 // removed the quality number from user-facing text entirely. The branch is
-// selected by an ordering (isLightestOfferedModel), and the line may say only
+// selected by an ordering (isFastestOfferedModel), and the line may say only
 // that.
 //
 // Product contract. Ratifying sources: #522, #537, and decision
@@ -666,7 +666,7 @@ func setBenchTiming(t *testing.T, interval, grace, deadline time.Duration) {
 
 // A transient `no_engine` (engine still coming up on a fresh bundled install,
 // issue #489) must be waited out, not skipped: once the engine/model become
-// ready within the grace window the benchmark — and the #133 lighter switch —
+// ready within the grace window the benchmark — and the #133 faster switch —
 // must run.
 func TestPromptBenchmark_TransientNoEngineThenRuns(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
@@ -682,7 +682,7 @@ func TestPromptBenchmark_TransientNoEngineThenRuns(t *testing.T) {
 		t.Errorf("transient no_engine must not skip immediately; got: %q", out.String())
 	}
 	if stub.acceptCount != 1 || stub.acceptedID != "light" {
-		t.Errorf("expected the #133 lighter switch to run after the wait: accept=%d id=%q\nout=%q",
+		t.Errorf("expected the #133 faster switch to run after the wait: accept=%d id=%q\nout=%q",
 			stub.acceptCount, stub.acceptedID, out.String())
 	}
 }
@@ -712,7 +712,7 @@ func TestPromptBenchmark_PersistentNoEngineSkipsAfterGrace(t *testing.T) {
 	}
 }
 
-// realRec is a lighter recommendation between two real bundled-catalog models,
+// realRec is a faster-model recommendation between two real bundled-catalog models,
 // so the display resolves labels and quality tiers (waired#773).
 func realRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
@@ -744,7 +744,7 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 		"Local inference is slow: Qwen3.6 35B-A3B takes 228 s per request (target: 190 s or less).",
 		"Waired recommends switching from Qwen3.6 35B-A3B to Qwen3.6 27B",
 		// The direction, which the numbers used to carry.
-		"The lighter model should run more smoothly",
+		"which answers faster and fits in this computer's memory",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q; got:\n%s", want, got)
@@ -1071,7 +1071,7 @@ func TestPromptBenchmark_EngineLoadWaitDoesNotNameADownload(t *testing.T) {
 // The install summary read `Model 26 tok/s` on a host that had just
 // moved off the model measured at 26 tok/s, because one response was
 // taken before the recommendation and reused after the switch. An
-// operator reads that as "I switched to the lighter model and it is
+// operator reads that as "I switched to the faster model and it is
 // still as slow".
 func TestPromptBenchmark_AcceptSwitchesThenRemeasures(t *testing.T) {
 	stub := &benchStub{
@@ -1156,7 +1156,7 @@ func TestPromptBenchmark_RemeasureFailureDropsTheRate(t *testing.T) {
 	}
 }
 
-// The lighter model can itself measure over the line. Acting on that
+// The faster model can itself measure over the line. Acting on that
 // here would step down again inside a flow the operator answered once, so
 // the second run's recommendation is read for its number only.
 func TestPromptBenchmark_RemeasureIgnoresASecondRecommendation(t *testing.T) {
@@ -1416,21 +1416,22 @@ func TestOfferToRemoveRejected_StillOffersWhenTheActiveModelIsUnknown(t *testing
 	}
 }
 
-// lightestOfferedModelID is the bottom of today's shipped ladder. The
-// branch under test is selected by isLightestOfferedModel, which reads
-// the real bundled catalog, so a stand-in the catalog cannot resolve
+// fastestOfferedModelID is the fastest model on today's shipped record
+// (internal/catalog/turnspeeds.json). The branch under test is selected
+// by isFastestOfferedModel, which reads the real bundled catalog and
+// store, so a stand-in the catalog cannot resolve
 // takes the OTHER branch and the test goes green having exercised
 // nothing — the same trap tinyRec() documents above.
-const lightestOfferedModelID = "qwen3.5-0.8b"
+const fastestOfferedModelID = "qwen3.5-0.8b"
 
-func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T) {
-	if !isLightestOfferedModel(lightestOfferedModelID) {
-		t.Fatalf("%s is no longer the lightest offered model; this test selects the branch through it",
-			lightestOfferedModelID)
+func TestPromptBenchmark_FastestModelBelowFloorAsksAboutInference(t *testing.T) {
+	if !isFastestOfferedModel(fastestOfferedModelID) {
+		t.Fatalf("%s is no longer the fastest offered model; this test selects the branch through it",
+			fastestOfferedModelID)
 	}
 	stub := &benchStub{
 		ready: true, measured: 228, floor: 190,
-		active: &management.ActiveSelection{ModelID: lightestOfferedModelID, VariantID: "q8-gguf"},
+		active: &management.ActiveSelection{ModelID: fastestOfferedModelID, VariantID: "q8-gguf"},
 	}
 	srv := stub.server()
 	defer srv.Close()
@@ -1443,7 +1444,7 @@ func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T)
 	got := out.String()
 
 	// PRODUCT CONTRACT (waired-agent#784): the run must not call a
-	// below-floor host working. It used to: with nothing lighter to
+	// below-floor host working. It used to: with nothing faster to
 	// propose, the daemon returned no recommendation and the CLI read
 	// that absence as "fast enough".
 	if strings.Contains(got, "Local inference works") {
@@ -1452,7 +1453,7 @@ func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T)
 	if !strings.Contains(got, "228 s per request (target: 190 s or less)") {
 		t.Errorf("the measurement and the target are not both stated:\n%s", got)
 	}
-	if !strings.Contains(got, "nothing lighter to switch to") {
+	if !strings.Contains(got, "nothing faster to switch to") {
 		t.Errorf("the reason there is no step-down is not stated:\n%s", got)
 	}
 	// Owner's rule for this case: a machine that cannot run the lightest
@@ -1462,17 +1463,17 @@ func TestPromptBenchmark_LightestModelBelowFloorAsksAboutInference(t *testing.T)
 		t.Errorf("disable calls = %d, want 1 (answered No)", stub.disableCount)
 	}
 	if stub.acceptCount != 0 {
-		t.Errorf("accept calls = %d, want 0 — there is no lighter model to switch to", stub.acceptCount)
+		t.Errorf("accept calls = %d, want 0 — there is no faster model to switch to", stub.acceptCount)
 	}
 }
 
 // PRODUCT CONTRACT (waired-agent#754, preserved): an exhausted stdin is
 // not a No. Turning local inference off is a decision, and nobody made
 // it here.
-func TestPromptBenchmark_LightestModelNoAnswerKeepsInference(t *testing.T) {
+func TestPromptBenchmark_FastestModelNoAnswerKeepsInference(t *testing.T) {
 	stub := &benchStub{
 		ready: true, measured: 228, floor: 190,
-		active: &management.ActiveSelection{ModelID: lightestOfferedModelID, VariantID: "q8-gguf"},
+		active: &management.ActiveSelection{ModelID: fastestOfferedModelID, VariantID: "q8-gguf"},
 	}
 	srv := stub.server()
 	defer srv.Close()
@@ -1488,7 +1489,7 @@ func TestPromptBenchmark_LightestModelNoAnswerKeepsInference(t *testing.T) {
 }
 
 // PRODUCT CONTRACT (waired-agent#784): a below-floor host that is NOT on
-// the smallest model is told where it stands, and is NOT offered the
+// the fastest model is told where it stands, and is NOT offered the
 // turn-it-off question. A missing proposal there means something else
 // stopped it — a failed engine pick, a measurement describing a model
 // that is no longer active — and offering to disable local inference
@@ -1514,7 +1515,7 @@ func TestPromptBenchmark_BelowFloorWithoutAProposalSaysSoOnly(t *testing.T) {
 		t.Errorf("the measurement is not stated:\n%s", got)
 	}
 	if stub.disableCount != 0 {
-		t.Errorf("disable calls = %d, want 0 — this host has lighter models it has not tried",
+		t.Errorf("disable calls = %d, want 0 — this host has faster models it has not tried",
 			stub.disableCount)
 	}
 }
@@ -1615,7 +1616,7 @@ func TestBenchmark_ModesByCaller(t *testing.T) {
 
 // PRODUCT CONTRACT (waired-ai/waired#1382; decisions 4-5 of
 // docs/decisions/20260913/2245): a measurement past its line is said once,
-// the lighter model is offered at that moment, and staying keeps the flow
+// the faster model is offered at that moment, and staying keeps the flow
 // waiting for the measurement to end — the result is reported only then.
 // The answer given while it ran stands: the finished figure does not ask
 // the same question again.
@@ -1755,7 +1756,7 @@ func TestBenchmark_OverTheLineNonInteractiveAsksNothing(t *testing.T) {
 	}
 }
 
-// With no lighter model to offer, the line is said and the wait goes on.
+// With no faster model to offer, the line is said and the wait goes on.
 func TestBenchmark_OverTheLineWithoutACandidateWaits(t *testing.T) {
 	fastPolls(t)
 	stub := &benchStub{

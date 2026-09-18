@@ -525,14 +525,18 @@ type AvailableUpdate struct {
 }
 
 // RecommendationLighter is BenchmarkRecommendation's only direction. The
+// value is a wire identifier kept from before waired-ai/waired-agent#1400:
+// the suggestion is a model measured faster on the reference host class,
+// which can be heavier than the active one (router.FasterCandidate). The
 // zero value (legacy wire payloads from older daemons) means lighter too;
 // the "upgrade" direction is retired (waired-ai/waired-agent#1342), and a
 // client must not render one it receives from an older daemon.
 const RecommendationLighter = "lighter"
 
 // BenchmarkRecommendation describes a benchmark-driven model-switch
-// suggestion: step down to a lighter model when one request with the
-// active model takes longer than the line (issue #133;
+// suggestion: switch to a model measured faster on the reference host
+// class (router.FasterCandidate) when one request with the active model
+// takes longer than the line (issue #133;
 // waired-ai/waired-agent#1341). The switch is never applied
 // automatically; the user accepts it via the preferred-model endpoint or
 // declines it via the dismiss endpoint.

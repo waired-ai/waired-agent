@@ -112,7 +112,7 @@ func precacheVariantManifests() []catalog.Manifest {
 		ms[i].Variants = append([]catalog.Variant{{
 			VariantID: "mtp-q4", Format: "ollama-tag", Quantization: "Q4_K_M",
 			RuntimeSupport: []string{"ollama"}, EstimatedWeightGB: 5.0,
-			MinRAMGB: 12, QualityTier: 51, ParamCount: 8_000_000_000,
+			MinRAMGB: 12, QualityTier: 51, ParamCount: 8_000_000_000, KVBytesPerTokenFP16: 4096,
 			MinEngineVersion: "0.30.0",
 			Source:           catalog.VariantSource{Type: "ollama", Tag: "heavy:8b-mtp"},
 		}}, ms[i].Variants...)

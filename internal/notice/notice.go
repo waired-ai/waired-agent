@@ -155,7 +155,9 @@ type Notice struct {
 	ExpiresAt time.Time `json:"-"`
 }
 
-// LighterModel is the #133 suggestion to step down: one request with
+// LighterModel is the #133 suggestion to switch to a faster model (the
+// name is kept with its wire kind, lighter_model, from before
+// waired-ai/waired-agent#1400): one request with
 // from takes turnSeconds on this computer, or — for a measurement still
 // running past the line — at least turnFloorSeconds, against budget, the
 // line. from and to are model ids.
@@ -164,7 +166,7 @@ func LighterModel(from, to string, turnSeconds, turnFloorSeconds, budget float64
 		Kind:     KindLighterModel,
 		Severity: SeverityWarn,
 		Subject:  "model suggestion",
-		Title:    sanitise("Lighter model recommended — switch to " + to),
+		Title:    sanitise("Faster model recommended — switch to " + to),
 		Text: sanitise("This computer takes " + RequestSeconds(turnSeconds, turnFloorSeconds) +
 			" per request with " + from + " " + TargetClause(budget) + "."),
 		Action: ActionModelSuggestion,

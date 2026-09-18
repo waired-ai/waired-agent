@@ -230,6 +230,23 @@ jobs:
         # keeps the context name and needs no ruleset edit.
         run: go run ./cmd/catalog-tool shapes --check --require-accepted
 
+      - name: reference-host speed coverage guard (every offered ollama variant has seconds)
+        # #1400: when a host measures its model over the line, the step-down
+        # offers the first ranked model that fits and is at least 5% faster
+        # on the reference host class (decisions 2 and 5 of
+        # docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md).
+        # "Faster" reads internal/catalog/turnspeeds.json. A variant with no
+        # record there is never offered, and a host running one is never
+        # offered anything — the step-down goes quiet without an error.
+        #
+        # --check fails when an offered ollama variant has no measured record
+        # for its current build (variant_sha). Every such variant can be
+        # measured on the host class; a vLLM variant borrows its model's
+        # ollama figure or carries an estimate, so it is not listed.
+        # Records are written by `catalog-tool turnspeeds --import` from the
+        # product's own measurements, never by hand.
+        run: go run ./cmd/catalog-tool turnspeeds --check
+
       - name: no tracked file is a compiled binary
         # #1099 committed a 14,999,779-byte ELF (catalog-tool) to the root
         # of this public repository. It passed review, gofmt, vet,

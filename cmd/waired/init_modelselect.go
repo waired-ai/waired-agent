@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/router"
 )
 
 // bundledModelLabel returns a short human-facing label for a bundled model
@@ -88,28 +89,28 @@ func canonicalBundledModelID(modelID string) string {
 // direction it is offering — so it says so in its own prose rather than
 // leaving the reader to compare two numbers. See benchmarkWithScanner.
 
-// isLightestOfferedModel reports whether modelID (id or alias) resolves to
-// a bundled model with nothing lighter offered beneath it — the case where
-// "switch to a lighter model" has no next step, and the real question is
-// whether to keep local inference on this machine at all.
+// isFastestOfferedModel reports whether modelID (id or alias) resolves to
+// a bundled model that nothing offered answers faster than — the case
+// where the step-down has no next move, and the real question is whether
+// to keep local inference on this machine at all.
 //
-// An ORDERING, not a floor. It used to ask whether the model sat below
-// the install quality floor; #522 removed that floor because a tier
-// threshold could not say what it was being asked to say. quality_tier
-// survives as the internal ranking (#518), and "is anything ranked below
-// this" is a different question from "is this good enough" — the second
-// is the one that had no answer.
+// "Faster" is the daemon's: the seconds recorded for the reference host
+// class (catalog.TurnSpeeds) and the same 5% factor
+// (router.FasterStepFactor), per decision 2 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md.
+// It used to be an ordering by quality_tier ("nothing ranked below this"),
+// which the step-down no longer walks (#1400): with the rank decoupled
+// from speed, the bottom of the ladder is not the end of the step-down.
 //
-// The comparison runs over the OFFERED set while the lookup runs over the
-// complete one, so an internal-only id (a test harness pinning
-// waired/tiny) resolves and correctly reports that there is nothing to
-// step down to.
+// The CLI holds a model id, not a variant, so each model is compared by
+// its fastest recorded variant.
 //
-// Which model that is moves with the catalog, so this does not name one:
-// it was qwen2.5-coder-0.5b until #200 retired it, and the lightest
-// offered entry is qwen3.5-0.8b today. Best-effort: false when the
-// catalog is unreadable or the id is unknown.
-func isLightestOfferedModel(modelID string) bool {
+// Which model that is moves with the catalog and the measurements, so
+// this does not name one. Best-effort: false when the catalog or the store
+// is unreadable, the id is unknown, or the model has no recorded seconds —
+// without a figure there is nothing to say "nothing is faster" about, and
+// the daemon offers no step-down from such a model either.
+func isFastestOfferedModel(modelID string) bool {
 	all, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return false
@@ -118,8 +119,12 @@ func isLightestOfferedModel(modelID string) bool {
 	if !ok {
 		return false
 	}
-	mine := bestVariantTier(m)
-	if mine <= 0 {
+	speeds, err := catalog.TurnSpeeds()
+	if err != nil {
+		return false
+	}
+	mine, ok := fastestRecordedSeconds(speeds, m)
+	if !ok {
 		return false
 	}
 	offered, err := catalog.BundledManifests()
@@ -130,22 +135,21 @@ func isLightestOfferedModel(modelID string) bool {
 		if o.ModelID == m.ModelID {
 			continue
 		}
-		if t := bestVariantTier(o); t > 0 && t < mine {
+		if s, ok := fastestRecordedSeconds(speeds, o); ok && s <= mine*router.FasterStepFactor {
 			return false
 		}
 	}
 	return true
 }
 
-// bestVariantTier is the manifest's highest variant quality_tier, 0 when
-// it has no annotated variant. Mirrors catalog.BestTier's contract that
-// an unknown tier is 0 and ranks below every real one.
-func bestVariantTier(m catalog.Manifest) int {
-	best := 0
+// fastestRecordedSeconds is the smallest seconds any variant of m has on
+// record, in the lookup order the daemon uses (catalog.TurnSpeedSet.For).
+func fastestRecordedSeconds(speeds catalog.TurnSpeedSet, m catalog.Manifest) (float64, bool) {
+	best, found := 0.0, false
 	for _, v := range m.Variants {
-		if v.QualityTier > best {
-			best = v.QualityTier
+		if s, _, ok := speeds.For(m, v); ok && (!found || s < best) {
+			best, found = s, true
 		}
 	}
-	return best
+	return best, found
 }
