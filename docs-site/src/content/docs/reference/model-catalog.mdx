@@ -143,11 +143,14 @@ for that computer, and logs the move:
 | `qwen2.5-coder-14b-instruct` | `qwen3.5-9b` | The same 32,000-token limit as the 7B. |
 | `qwen3-coder-30b-a3b-instruct` | `qwen3.6-27b` | An older generation of the same kind of model. |
 | `qwen3-coder-next-80b-a3b-instruct` | `qwen3.6-35b-a3b` | An older generation. The replacement is smaller and scores better. |
-| `qwen3-coder-480b-a35b-instruct` | `glm-5.2` | An older generation. |
-| `glm-4.5-air-106b-a12b` | `glm-5.2` | An older generation, and it could hold only a 131,000-token conversation. |
+| `qwen3-coder-480b-a35b-instruct` | `qwen3.8-27b` | An older generation. |
+| `glm-4.5-air-106b-a12b` | `qwen3.8-27b` | An older generation, and it could hold only a 131,000-token conversation. |
 | `gpt-oss-20b` | — | It could hold only a 131,072-token conversation, below the roughly 200,000 tokens the catalog now asks of every model. |
 | `gpt-oss-120b` | — | The same 131,072-token limit as the 20B. |
+| `glm-5.2` | — | The catalog now carries only models that have been run on its reference computer, a Strix Halo PC with 128 GB of unified memory, and no build of it fits there. It shipped only vLLM builds of 465 GB or more. |
+| `deepseek-v4-flash` | — | The only builds of it that fit the reference computer remove part of the model (expert pruning), which makes them a different model. It shipped only a 160 GB vLLM build. |
 
 Waired carries one generation of models at a time, and most of these were the
 generation before the current one. The two `gpt-oss` rows were dropped for
-their context window, not their age.
+their context window, not their age; `glm-5.2` and `deepseek-v4-flash` because
+no build of either fits the reference computer.

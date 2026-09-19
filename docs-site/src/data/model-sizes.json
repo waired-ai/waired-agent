@@ -1,6 +1,4 @@
 {
-	"deepseek-v4-flash": "large",
-	"glm-5.2": "large",
 	"qwen3.5-0.8b": "small",
 	"qwen3.5-122b-a10b": "large",
 	"qwen3.5-27b": "medium",
