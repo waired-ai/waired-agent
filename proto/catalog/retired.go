@@ -173,12 +173,12 @@ var retirements = []Retirement{
 			"qwen3-coder-480b-a35b",
 			"Qwen/Qwen3-Coder-480B-A35B-Instruct",
 		},
-		SuccessorModelID: "glm-5.2",
+		SuccessorModelID: "qwen3.8-27b",
 		Reason: "the 2025 generation left when #518 pinned the catalog to qwen3.5/3.6 " +
 			"(waired-ai/waired-agent#522). Released 2025-07-22. Unmeasurable (290 GB of " +
-			"weights, no runner available) and so is its successor, so the swap loses no " +
-			"evidence. glm-5.2 succeeds it on quality tier (97 > 95) and carries the same " +
-			"MIT licence.",
+			"weights, no runner available). Its first successor, glm-5.2, retired in turn " +
+			"(waired-ai/waired#1427), so it points at qwen3.8-27b, the successor named " +
+			"there for the entries that pointed at glm-5.2.",
 	},
 	{
 		Names: []string{
@@ -186,13 +186,13 @@ var retirements = []Retirement{
 			"glm-4.5-air",
 			"zai-org/GLM-4.5-Air",
 		},
-		SuccessorModelID: "glm-5.2",
+		SuccessorModelID: "qwen3.8-27b",
 		Reason: "the 2025 generation left when #518 pinned the catalog to qwen3.5/3.6 " +
 			"(waired-ai/waired-agent#522). The oldest entry in the catalog, released " +
 			"2025-07-20. Its 131,072-token native window meant DeclarableNativeWindow " +
-			"returned 0 for it, so no host ever auto-selected it. Carried for vendor " +
-			"diversity rather than licence, and the licence is covered regardless: glm-5.2 " +
-			"and deepseek-v4-flash are both MIT.",
+			"returned 0 for it, so no host ever auto-selected it. Its first successor, " +
+			"glm-5.2, retired in turn (waired-ai/waired#1427), so it points at qwen3.8-27b, " +
+			"the successor named there for the entries that pointed at glm-5.2.",
 	},
 
 	// gpt-oss (waired-ai/waired-agent#1400). Both left together and with no
@@ -223,6 +223,38 @@ var retirements = []Retirement{
 			"no successor: it was manual_only, so only a person who asked for it by name " +
 			"ran it, and a host that still names it falls back to the model recommended " +
 			"for it.",
+	},
+
+	// glm-5.2 and deepseek-v4-flash (waired-ai/waired#1427). Both left
+	// together and with no successor. Both shipped only vLLM builds that no
+	// host in the reference class can hold (755 / 465 GB for glm-5.2, 160 GB
+	// for deepseek-v4-flash), and the catalog now admits a model only after
+	// one of its builds has been run on the reference host (owner decisions
+	// 2026-09-20, docs/decisions/20260920/0300-catalog-admits-what-was-run-on-the-reference-host.md).
+	// deepseek-v4-flash's builds that load there are expert-pruned, and
+	// those were ruled out as a different model; glm-5.2 has no build under
+	// 211 GB.
+	{
+		Names: []string{
+			"glm-5.2",
+			"zai-org/GLM-5.2",
+		},
+		Reason: "no build of it fits a Strix Halo with 128 GB, so it can never be run on " +
+			"the reference host the catalog now admits by (owner decision 2026-09-20, " +
+			"waired-ai/waired#1427). Retired with no successor: it shipped only vLLM " +
+			"builds needing 465 GB or more, so no host held it, and a host that still " +
+			"names it falls back to the model recommended for it.",
+	},
+	{
+		Names: []string{
+			"deepseek-v4-flash",
+			"deepseek-ai/DeepSeek-V4-Flash",
+		},
+		Reason: "the only builds of it that fit a Strix Halo with 128 GB are expert-pruned, " +
+			"and the owner ruled those a different model rather than a build of this one " +
+			"(owner decision 2026-09-20, waired-ai/waired#1427). Retired with no successor: " +
+			"it shipped only a 160 GB vLLM build, so no host in the reference class held " +
+			"it, and a host that still names it falls back to the model recommended for it.",
 	},
 }
 

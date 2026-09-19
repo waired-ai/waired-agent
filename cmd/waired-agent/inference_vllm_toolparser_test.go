@@ -19,8 +19,8 @@ func TestResolveVLLMToolParser(t *testing.T) {
 		// map entries went with them — an entry for a model the catalog
 		// no longer ships is dead code that reads as coverage.
 		{"qwen3.6 ships the XML dialect", "qwen3.6-27b", "", vllmParserQwen3XML},
-		// gpt-oss (openai) went the same way with #1400.
-		{"deepseek v4 flash", "deepseek-v4-flash", "", vllmParserDeepSeekV4},
+		// gpt-oss (openai) went the same way with #1400, and
+		// deepseek-v4-flash (deepseek_v4) with waired-ai/waired#1427.
 
 		// An unestablished template must NOT be guessed into a
 		// plausible neighbour: "" means "emit no flags", which leaves
@@ -33,7 +33,7 @@ func TestResolveVLLMToolParser(t *testing.T) {
 		// after this binary was built, so it is passed through
 		// unvalidated and outranks the table.
 		{"override wins over a mapped model", "qwen3.6-27b", "llama3_json", "llama3_json"},
-		{"override supplies a parser for an unmapped model", "glm-5.2", "glm47", "glm47"},
+		{"override supplies a parser for an unmapped model", "some-model-nobody-mapped", "glm47", "glm47"},
 	}
 
 	for _, tt := range tests {
@@ -54,7 +54,9 @@ func TestResolveVLLMToolParser(t *testing.T) {
 // unit test that only exercises the mapped models would notice.
 func TestVLLMToolParserTableUsesRegisteredNames(t *testing.T) {
 	// hermes and glm45 have no row in the table since #522 retired the
-	// models that used them, and openai none since #1400 retired gpt-oss. They stay declared: these are vLLM's
+	// models that used them, openai none since #1400 retired gpt-oss, and
+	// deepseek_v4 none since waired-ai/waired#1427 retired
+	// deepseek-v4-flash. They stay declared: these are vLLM's
 	// registered parser names read out of its source at the pinned
 	// version, not names we invented, and the next model of either
 	// lineage needs them back. The check below is over the table's
@@ -90,9 +92,8 @@ var vllmToolParserUnestablished = map[string]string{
 	// kept: the guard below iterates the shipped manifests, so an
 	// exemption for a model nobody ships excuses nothing.
 	//
-	// vLLM 0.24.0 documents glm45 for GLM-4.5/4.6 and glm47 for GLM-4.7.
-	// zai-org/GLM-5.2 is a later major version with neither listed.
-	"glm-5.2": "no vLLM parser documented for the GLM-5 line",
+	// glm-5.2 sat here ("no vLLM parser documented for the GLM-5 line")
+	// until waired-ai/waired#1427 retired it.
 }
 
 // A bundled model that vLLM can serve either resolves to a parser or is

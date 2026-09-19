@@ -680,7 +680,6 @@ func TestBundledManifests_HFAliasesResolve(t *testing.T) {
 		{"qwen3.6-35b-a3b", "qwen3.6-35b-a3b"},
 		{"qwen3.5-9b", "qwen3.5-9b"},
 		{"qwen3.5-35b-a3b", "qwen3.5-35b-a3b"},
-		{"glm-5.2", "glm-5.2"},
 	}
 	for _, c := range cases {
 		got, ok := LookupByAlias(c.alias, ms)

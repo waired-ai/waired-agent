@@ -128,10 +128,8 @@ var vllmToolParserByModelID = map[string]string{
 	// The gpt-oss rows (docs §"OpenAI OSS Models (`openai`)") went with
 	// waired-ai/waired-agent#1400, which retired both with no successor.
 
-	// No docs section, but vLLM registers `deepseek_v4` and its
-	// DeepSeekV4ToolParser is documented in-source as "DeepSeek V4 DSML
-	// tool parser" — the same major version this variant loads.
-	"deepseek-v4-flash": vllmParserDeepSeekV4, // deepseek-ai/DeepSeek-V4-Flash
+	// The deepseek-v4-flash row (deepseek_v4) went with
+	// waired-ai/waired#1427, which retired it with no successor.
 }
 
 // resolveVLLMToolParser returns the value for vLLM's --tool-call-parser

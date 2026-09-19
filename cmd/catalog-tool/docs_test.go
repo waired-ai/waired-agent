@@ -41,8 +41,8 @@ func TestRenderCatalogBlock_Deterministic(t *testing.T) {
 		"#### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）",
 		"**Dense**",
 		"**MoE（総 / アクティブ）**",
-		"deepseek-v4-flash", // a vLLM-only family
-		"qwen3.5-9b",        // an Ollama-only family
+		"qwen3.6-27b",        // a family built for both engines
+		"qwen3.8-flash-next", // an Ollama-only family
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("generated block missing %q", want)
@@ -55,9 +55,9 @@ func TestRenderCatalogBlock_Deterministic(t *testing.T) {
 
 // TestRenderCatalogBlock_EngineArchSplit locks the two-axis layout: the catalog
 // is grouped by engine (Ollama / vLLM) then architecture (Dense before MoE), and
-// a family is listed only under an engine it actually ships a build for. The
-// vLLM-only GLM family must never appear in an Ollama section; the dual-engine
-// Qwen coder must appear under both.
+// a family is listed only under an engine it actually ships a build for. An
+// Ollama-only family must never appear in a vLLM section; a dual-engine family
+// must appear under both.
 func TestRenderCatalogBlock_EngineArchSplit(t *testing.T) {
 	block := renderCatalogBlock(loadManifestsT(t))
 
@@ -69,20 +69,19 @@ func TestRenderCatalogBlock_EngineArchSplit(t *testing.T) {
 	if i, j := strings.Index(ollama, "**Dense**"), strings.Index(ollama, "**MoE"); i < 0 || j < 0 || i > j {
 		t.Errorf("Ollama section must list Dense before MoE (dense=%d moe=%d)", i, j)
 	}
-	// A vLLM-only family must not leak into the Ollama section, and must appear
-	// under vLLM.
+	// A family built for one engine must not leak into the other engine's
+	// section, and must appear under its own.
 	//
-	// The exemplars moved with #522: glm-4.5-air was the vLLM-only family
-	// and qwen2.5-coder-7b the dual-engine one, and both retired with the
-	// 2025 generation. deepseek-v4-flash takes the first role. The second
-	// is now down to ONE candidate — qwen3.6-27b is the pinned
-	// generation's only safetensors build, so it is the only family that
-	// appears under both engines. #575 tracks widening that back out.
-	if strings.Contains(ollama, "deepseek-v4-flash") {
-		t.Error("vLLM-only deepseek-v4-flash leaked into the Ollama family section")
+	// The exemplars moved with #522 (glm-4.5-air was the vLLM-only family,
+	// qwen2.5-coder-7b the dual-engine one) and again with
+	// waired-ai/waired#1427, which retired deepseek-v4-flash and glm-5.2, the
+	// last vLLM-only families. The one-engine role is now played from the
+	// other side: qwen3.8-flash-next ships only an Ollama build.
+	if strings.Contains(vllm, "qwen3.8-flash-next") {
+		t.Error("Ollama-only qwen3.8-flash-next leaked into the vLLM family section")
 	}
-	if !strings.Contains(vllm, "deepseek-v4-flash") {
-		t.Error("vLLM-only deepseek-v4-flash missing from the vLLM family section")
+	if !strings.Contains(ollama, "qwen3.8-flash-next") {
+		t.Error("Ollama-only qwen3.8-flash-next missing from the Ollama family section")
 	}
 	// A dual-engine family appears under both engines.
 	if !strings.Contains(ollama, "qwen3.6-27b") || !strings.Contains(vllm, "qwen3.6-27b") {

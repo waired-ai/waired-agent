@@ -123,8 +123,8 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 	// Which BUILD of it, asked of the host rather than read off manifest
 	// order. FirstPullableVariant answers "can this engine load it at
 	// all" and returns the first row that says yes, which is the right
-	// question only while a model ships one variant per engine. glm-5.2
-	// already ships two safetensors builds (fp8 then nvfp4), and #575
+	// question only while a model ships one variant per engine.
+	// qwen3.6-27b ships two safetensors builds (fp8 then nvfp4), and #575
 	// adds more, so the first row would have been served to hosts it does
 	// not fit. The ollama side asked the same question and was moved onto
 	// FamilyBestFit in waired-agent#1265; this is the vLLM half of it.
