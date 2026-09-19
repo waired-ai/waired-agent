@@ -489,7 +489,7 @@ type setupReconciler struct {
 	// Zero means "never watched one change", i.e. everything we know is
 	// leftovers.
 	desiredChangedAt time.Time
-	modelApplied     map[string]bool // one setupApplyModel call per desired model value
+	modelApplied     map[string]bool // one admission per desired model value: applied, or converged on arrival (#1445)
 	// modelAdmitted is the last desired model value this process spent an
 	// admission on. It is what tells a REPEAT of an instruction from a
 	// RETURN to an earlier one (waired-agent#779).
@@ -961,14 +961,27 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, d setupDesired, 
 	// never the cache type the engine ended up with, which the verify pass
 	// may have degraded to f16 and which a re-apply would only bounce the
 	// engine back into (waired-agent#1348).
-	if state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == modelID &&
-		r.provider.setupBuildChosen(modelID, d.variantID, d.kvType) {
-		return // converged
-	}
+	converged := state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == modelID &&
+		r.provider.setupBuildChosen(modelID, d.variantID, d.kvType)
+	// Spent either way: applied here, or already true when it arrived.
+	//
+	// The converged case used to record nothing, and it is the common one
+	// since the control plane started moving desired_model_id onto the
+	// model a device serves after a person there chose it (#647): the
+	// device watches that instruction change while already serving it.
+	// Left un-spent, it stayed live for the whole freshness window, and
+	// the reconcile pass re-applied it over the next local switch two
+	// seconds after the person made it (waired-ai/waired-agent#1445).
+	// modelAdmitted is recorded too, or the #779 block in Apply would
+	// re-arm the key on the next frame — and a return to the model
+	// admitted before it would compare equal and be dropped.
 	r.mu.Lock()
 	r.modelApplied[key] = true
 	r.modelAdmitted = key
 	r.mu.Unlock()
+	if converged {
+		return
+	}
 	if _, err := r.provider.setupApplyModel(ctx, modelID, d.variantID, d.kvType); err != nil {
 		r.mu.Lock()
 		// Classified HERE, where the error value still exists.

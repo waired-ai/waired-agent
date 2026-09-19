@@ -345,14 +345,20 @@ func TestSetResidencyRecordsWhoChose(t *testing.T) {
 	t.Run("LocalChoiceAt reports nothing before anyone has chosen", func(t *testing.T) {
 		a := &fakeApplier{current: 15 * time.Minute, present: true}
 		c, _ := newTestResidencyController(t, a)
-		if got := c.LocalChoiceAt(); got != "" {
-			t.Errorf("LocalChoiceAt = %q, want empty — no record is NO ORDERING AVAILABLE", got)
+		if value, at := c.LocalChoiceAt(); value != "" || at != "" {
+			t.Errorf("LocalChoiceAt = (%q, %q), want empty — no record is NO ORDERING AVAILABLE", value, at)
 		}
 		if _, _, err := c.SetResidency(context.Background(), 45*time.Minute); err != nil {
 			t.Fatalf("set: %v", err)
 		}
-		if got, want := c.LocalChoiceAt(), testResidencyNow.Format(time.RFC3339Nano); got != want {
-			t.Errorf("LocalChoiceAt = %q, want %q", got, want)
+		// The value comes back with the time: the probe publishes the time
+		// only while the residency it reports is this value (#1445).
+		value, at := c.LocalChoiceAt()
+		if want := testResidencyNow.Format(time.RFC3339Nano); at != want {
+			t.Errorf("LocalChoiceAt time = %q, want %q", at, want)
+		}
+		if value != "45m0s" {
+			t.Errorf("LocalChoiceAt value = %q, want 45m0s", value)
 		}
 	})
 }

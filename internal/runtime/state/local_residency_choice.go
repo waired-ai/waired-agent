@@ -38,13 +38,16 @@ import (
 // rather than off the applied-state record.
 type LocalResidencyChoice struct {
 	// ChosenAt is when the choice was made, RFC3339Nano. This is the
-	// field the wire carries and the only one any decision may read.
+	// field the wire carries.
 	ChosenAt string `json:"chosen_at"`
 
-	// Value is what was chosen, as a Go duration string. Diagnostics only
-	// — the residency actually in force is read from the live engine, and
-	// a consumer that took this instead would report a value the engine
-	// may have moved on from.
+	// Value is what was chosen, as a Go duration string. It is never
+	// reported as the residency: the residency actually in force is read
+	// from the live engine, and a consumer that took this instead would
+	// report a value the engine may have moved on from. Its one decision
+	// is the comparison with that live value — ChosenAt is published only
+	// while the two agree (waired-ai/waired-agent#1445), because the
+	// control plane moves its instruction onto the reported value.
 	Value string `json:"value,omitempty"`
 }
 

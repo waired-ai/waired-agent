@@ -44,8 +44,18 @@ type benchStub struct {
 	// running, when set, makes /benchmark/status answer it while the first
 	// /benchmark call is held open until release is closed (or the client
 	// leaves) — a measurement still in flight.
+	//
+	// Only WHILE held: before the first call has reached the handler,
+	// status answers idle, the way a daemon with no measurement running
+	// does. It used to answer running from the start, so a status poll
+	// that beat the first POST to the server (a slow runner under -race)
+	// let the client abandon a request the stub had never counted; the
+	// re-measure's POST then became call 1, was held with no one left to
+	// release it, and the test waited out the 10-minute deadline
+	// (waired-ai/waired-agent#1418).
 	running *management.BenchmarkStatusResponse
 	release chan struct{}
+	held    bool // a call is parked in the hold below
 	// abandoned counts /benchmark calls whose client left before an answer.
 	abandoned int
 	// failAfter makes /benchmark answer 503 from that call onwards, so a
@@ -59,7 +69,17 @@ type benchStub struct {
 	// and deleteStatus refuses them (0 = 200 OK).
 	deleted      []string
 	deleteStatus int
-	downloading  bool         // preferred-model response Downloading
+	downloading  bool // preferred-model response Downloading
+	// An accepted switch makes the default /status report the target Ready
+	// and Active, the way the daemon's in-process switch does for weights
+	// on disk. switchNotServed keeps the old Active instead — a switch
+	// that has not landed, or one the daemon undid
+	// (waired-ai/waired-agent#1445).
+	switchNotServed bool
+	// benchModelID is the model_id every /benchmark answer names ("" = a
+	// daemon from before the field, which is what most fixtures here
+	// exercise).
+	benchModelID string
 	statusSeq    []statusStep // scripted /status sequence (last repeats)
 	statusCalls  int
 	acceptedID   string
@@ -71,6 +91,7 @@ type benchStub struct {
 
 	mu         sync.Mutex
 	benchCalls int
+	switchedTo string // the model an accepted switch named
 }
 
 func (b *benchStub) server() *httptest.Server {
@@ -87,16 +108,24 @@ func (b *benchStub) server() *httptest.Server {
 			i := min(call, len(b.measuredSeq)) - 1
 			measured = b.measuredSeq[i]
 		}
+		ready := b.ready || flipped
+		if hold && ready {
+			b.held = true
+		}
 		b.mu.Unlock()
-		if !b.ready && !flipped {
+		if !ready {
 			w.WriteHeader(http.StatusTooEarly)
 			return
 		}
 		if hold {
 			select {
 			case <-b.release:
+				b.mu.Lock()
+				b.held = false
+				b.mu.Unlock()
 			case <-r.Context().Done():
 				b.mu.Lock()
+				b.held = false
 				b.abandoned++
 				b.mu.Unlock()
 				return
@@ -126,7 +155,7 @@ func (b *benchStub) server() *httptest.Server {
 		// a fake accept any body.
 		over := b.floor > 0 && measured > b.floor
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
-			Ran: true, Recommendation: b.rec,
+			Ran: true, Recommendation: b.rec, ModelID: b.benchModelID,
 			SpeedMeasurement: management.SpeedMeasurement{
 				TurnSeconds: measured, BudgetSeconds: b.floor, OverBudget: over,
 			},
@@ -135,6 +164,9 @@ func (b *benchStub) server() *httptest.Server {
 	mux.HandleFunc("/waired/v1/inference/benchmark/status", func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		running := b.running
+		if !b.held {
+			running = nil
+		}
 		b.mu.Unlock()
 		if running == nil {
 			_ = json.NewEncoder(w).Encode(management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle})
@@ -147,6 +179,11 @@ func (b *benchStub) server() *httptest.Server {
 		i := b.statusCalls
 		b.statusCalls++
 		seq := b.statusSeq
+		active := b.active
+		var ready []string
+		if b.switchedTo != "" {
+			ready = []string{b.switchedTo}
+		}
 		b.mu.Unlock()
 		if len(seq) > 0 {
 			if i >= len(seq) {
@@ -159,7 +196,10 @@ func (b *benchStub) server() *httptest.Server {
 			_ = json.NewEncoder(w).Encode(seq[i].st)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: b.state, Active: b.active})
+		_ = json.NewEncoder(w).Encode(management.InferenceStatus{
+			SubsystemState: b.state, Active: active,
+			Models: management.ModelsSnapshot{Ready: ready},
+		})
 	})
 	mux.HandleFunc("/waired/v1/inference/preferred-model", func(w http.ResponseWriter, r *http.Request) {
 		var req management.PreferredModelRequest
@@ -174,6 +214,12 @@ func (b *benchStub) server() *httptest.Server {
 			})
 			return
 		}
+		b.mu.Lock()
+		b.switchedTo = req.ModelID
+		if !b.switchNotServed {
+			b.active = &management.ActiveSelection{ModelID: req.ModelID}
+		}
+		b.mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(management.PreferredModelResponse{
 			ModelID: req.ModelID, WillRestart: true, Downloading: b.downloading,
@@ -807,10 +853,23 @@ func switchDownloading(modelID string, completed, total int64) statusStep {
 	}}
 }
 
+// switchReady is the target downloaded AND served: the switch landed.
 func switchReady(modelID string) statusStep {
 	return statusStep{st: management.InferenceStatus{
 		SubsystemState: "ready",
+		Active:         &management.ActiveSelection{ModelID: modelID},
 		Models:         management.ModelsSnapshot{Ready: []string{modelID}},
+	}}
+}
+
+// switchReadyServing is the target downloaded while the service still
+// serves another model — a switch that has not landed, or one the daemon
+// undid (waired-ai/waired-agent#1445).
+func switchReadyServing(modelID, serving string) statusStep {
+	return statusStep{st: management.InferenceStatus{
+		SubsystemState: "ready",
+		Active:         &management.ActiveSelection{ModelID: serving},
+		Models:         management.ModelsSnapshot{Ready: []string{modelID, serving}},
 	}}
 }
 
@@ -979,6 +1038,104 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "ready. The background service is now serving it") {
 		t.Errorf("expected the wait to reach ready, got:\n%s", out.String())
+	}
+}
+
+// shortSwitchServeGrace shrinks how long a switch wait gives the service
+// to start serving a downloaded target, for one test.
+func shortSwitchServeGrace(t *testing.T) {
+	t.Helper()
+	old := switchServeGrace
+	switchServeGrace = 50 * time.Millisecond
+	t.Cleanup(func() { switchServeGrace = old })
+}
+
+// PRODUCT CONTRACT (waired-ai/waired-agent#1445, found on hardware
+// 2026-09-19): "now serving it" is said only once the service serves the
+// target, and a switch that never lands is neither reported as done nor
+// re-measured. On the reported host the daemon undid the accepted switch
+// within seconds; the CLI printed "…ready. The background service is now
+// serving it." from the finished download, and "Measuring the new
+// model…" then reported the replaced model's 288 s.
+func TestAcceptSwitch_ReadyButNotServedSaysSo(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	shortSwitchServeGrace(t)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: true, measured: 228,
+		statusSeq: []statusStep{
+			switchDownloading(target, 1<<30, 4<<30),
+			switchReadyServing(target, "qwen3.5-122b-a10b"), // repeats: never served
+		}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "now serving it") {
+		t.Errorf("reported the switch served while the service ran another model:\n%s", got)
+	}
+	if !strings.Contains(got, "Qwen3.5 122B-A10B") {
+		t.Errorf("did not name the model the service still runs:\n%s", got)
+	}
+	if stub.benchCalls != 1 {
+		t.Errorf("benchmark calls = %d, want no re-measurement of a switch that did not land", stub.benchCalls)
+	}
+}
+
+// A downloaded target is waited on too, briefly: the in-process switch
+// flips the active selection a moment after the accept, and the
+// re-measure that follows must time the model switched to.
+func TestAcceptSwitch_AlreadyDownloadedWaitsForTheService(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: false, measuredSeq: []float64{228, 70},
+		statusSeq: []statusStep{
+			switchReadyServing(target, "qwen3.5-122b-a10b"),
+			switchReadyServing(target, "qwen3.5-122b-a10b"),
+			switchReady(target),
+		}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"already downloaded", "Qwen3.6 27B ready. The background service is now serving it"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	if stub.benchCalls != 2 {
+		t.Errorf("benchmark calls = %d, want the re-measurement once the target is served", stub.benchCalls)
+	}
+}
+
+// The same undone switch on the already-downloaded path, which used to
+// return "switched" without looking at all.
+func TestAcceptSwitch_AlreadyDownloadedNotServedDoesNotRemeasure(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	shortSwitchServeGrace(t)
+	stub := &benchStub{ready: true, rec: realRec(), downloading: false, measured: 228,
+		switchNotServed: true,
+		active:          &management.ActiveSelection{ModelID: "qwen3.5-122b-a10b"}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "now serving it") || strings.Contains(got, "Measuring the new model") {
+		t.Errorf("an undone switch was reported or re-measured:\n%s", got)
+	}
+	if stub.benchCalls != 1 {
+		t.Errorf("benchmark calls = %d, want no re-measurement", stub.benchCalls)
 	}
 }
 
@@ -1534,7 +1691,7 @@ func TestRemeasureAfterSwitch_StillSlowDoesNotClaimSuccess(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	resp := remeasureAfterSwitch(srv.URL, &out)
+	resp := remeasureAfterSwitch(srv.URL, "qwen3.5-4b", &out)
 	if resp == nil {
 		t.Fatal("re-measurement returned nothing")
 	}
@@ -1558,11 +1715,59 @@ func TestRemeasureAfterSwitch_FastEnoughStillSaysItWorks(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if resp := remeasureAfterSwitch(srv.URL, &out); resp == nil {
+	if resp := remeasureAfterSwitch(srv.URL, "qwen3.5-4b", &out); resp == nil {
 		t.Fatal("re-measurement returned nothing")
 	}
 	if got := out.String(); !strings.Contains(got, "Local inference works") {
 		t.Errorf("70 s per request against a 190 s line did not report success:\n%s", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-ai/waired-agent#1445): the re-measurement
+// after a switch reports only the switched-to model's figure. The daemon
+// measures whatever it serves, and on the reported host that was still
+// the replaced model: "Measuring the new model…" answered "Qwen3.5
+// 122B-A10B takes 288 s per request here" for a switch to the 35B-A3B.
+func TestRemeasureAfterSwitch_AnotherModelsFigureIsDropped(t *testing.T) {
+	stub := &benchStub{ready: true, measured: 288, floor: 190, benchModelID: "qwen3.5-122b-a10b"}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if resp := remeasureAfterSwitch(srv.URL, "qwen3.6-35b-a3b", &out); resp != nil {
+		t.Errorf("returned %+v, want no figure for the switched-to model", resp)
+	}
+	got := out.String()
+	if strings.Contains(got, "288 s per request") {
+		t.Errorf("the replaced model's figure was reported after the switch:\n%s", got)
+	}
+	if !strings.Contains(got, "Qwen3.5 122B-A10B") || !strings.Contains(got, "Qwen3.6 35B-A3B") {
+		t.Errorf("did not say which model was measured instead of which:\n%s", got)
+	}
+}
+
+// A measurement of another model still running when the re-measure asks
+// is not narrated as the new model's: its over-the-line line used to print
+// under "Measuring the new model…".
+func TestRemeasureAfterSwitch_DoesNotNarrateAnotherModel(t *testing.T) {
+	fastPolls(t)
+	stub := &benchStub{
+		ready: true, measured: 70, floor: 190,
+		running: overLineRunning(nil), release: make(chan struct{}), // names qwen3.8-27b
+	}
+	srv := stub.server()
+	defer srv.Close()
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		close(stub.release)
+	}()
+
+	var out syncBuilder
+	if resp := remeasureAfterSwitch(srv.URL, "qwen3.5-4b", &out); resp == nil {
+		t.Fatal("re-measurement returned nothing")
+	}
+	if got := out.String(); strings.Contains(got, "Qwen3.8 27B") {
+		t.Errorf("narrated another model's measurement as the new one:\n%s", got)
 	}
 }
 
@@ -1607,7 +1812,7 @@ func TestBenchmark_ModesByCaller(t *testing.T) {
 		bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("benchmark: %v", err)
 	}
-	remeasureAfterSwitch(srv.URL, &out)
+	remeasureAfterSwitch(srv.URL, "qwen3.5-4b", &out)
 	want := []string{management.BenchmarkModeRerun, management.BenchmarkModeEnsure, management.BenchmarkModeEnsure}
 	if strings.Join(stub.modes, ",") != strings.Join(want, ",") {
 		t.Errorf("modes = %v, want %v", stub.modes, want)

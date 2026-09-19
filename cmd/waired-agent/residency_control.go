@@ -194,22 +194,27 @@ func (c *residencyController) recordLocalChoice(local bool, idle time.Duration) 
 }
 
 // LocalChoiceAt reports when a person here last set residency, formatted
-// for signer.InferenceState's field of the same name. Read live rather
-// than cached: the answer arrives through the loopback management API at
-// any time, and the control plane's use for it is an ordering against its
-// own instruction, so a stale reading is worse than none.
+// for signer.InferenceState's field of the same name, and the value they
+// set. Read live rather than cached: the answer arrives through the
+// loopback management API at any time, and the control plane's use for it
+// is an ordering against its own instruction, so a stale reading is worse
+// than none.
 //
-// "" whenever there is no claim to make — no state dir, no file, or a
-// record this build cannot parse.
-func (c *residencyController) LocalChoiceAt() string {
+// The value never goes on the wire. The probe uses it to publish the time
+// only while the residency it reports is that value
+// (residencyChoiceInForce).
+//
+// Both "" whenever there is no claim to make — no state dir, no file, or
+// a record this build cannot parse.
+func (c *residencyController) LocalChoiceAt() (value, at string) {
 	if c == nil || c.stateDir == "" {
-		return ""
+		return "", ""
 	}
 	rec, err := state.ReadLocalResidencyChoice(c.stateDir)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	return rec.ChosenAt
+	return rec.Value, rec.ChosenAt
 }
 
 // alreadyInForce reports whether BOTH halves of the setting already hold the

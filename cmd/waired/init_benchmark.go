@@ -209,13 +209,13 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 		}
 		return false
 	}
-	resp, ok, ranAndFailed := waitForBenchmark(mgmtURL, mode, out, offer)
+	resp, ok, ranAndFailed := waitForBenchmark(mgmtURL, mode, "", out, offer)
 	if switchTo != nil {
 		from := bundledModelLabelDefault(switchTo.FromModelID)
 		to := bundledModelLabelDefault(switchTo.ToModelID)
 		var after *management.BenchmarkRunResponse
 		if switchAndWait(mgmtURL, switchTo.ToModelID, to, out, sc, tty) {
-			after = remeasureAfterSwitch(mgmtURL, out)
+			after = remeasureAfterSwitch(mgmtURL, switchTo.ToModelID, out)
 			offerToRemoveRejected(mgmtURL, switchTo.FromModelID, from, nonInteractive, out, sc)
 		}
 		return after, false, nil
@@ -279,7 +279,7 @@ func benchmarkWithScanner(mgmtURL, mode string, nonInteractive bool, out io.Writ
 			return resp, false, nil
 		}
 		if switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty) {
-			resp = remeasureAfterSwitch(mgmtURL, out)
+			resp = remeasureAfterSwitch(mgmtURL, rec.ToModelID, out)
 			offerToRemoveRejected(mgmtURL, rec.FromModelID, from, nonInteractive, out, sc)
 		}
 		return resp, false, nil
@@ -385,7 +385,12 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 	}
 	if !pmr.Downloading {
 		writePromptf(out, "Switching to %s (already downloaded).\n", label)
-		return true
+		// Through the same wait, which ends at once when the service
+		// already serves it. Returning true here unseen let the re-measure
+		// time the OLD model whenever the switch had not landed, or had
+		// been undone (waired-ai/waired-agent#1445). No Enter escape: there
+		// is no download to leave running.
+		return waitForModelSwitch(mgmtURL, modelID, out, tty, newBackgroundWatch(nil))
 	}
 	// The Enter escape is a terminal gesture: it exists only when this run
 	// owns stdin (init_stdin.go). Off a terminal the wait simply runs to
@@ -498,10 +503,23 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 // faster model can itself measure over the line, and acting on that here
 // would step down again inside a flow the operator answered once.
 // `waired runtimes benchmark` is where that conversation belongs.
-func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRunResponse {
+//
+// modelID is the model switched to. The daemon measures whatever it
+// serves, so an answer about another model is not this model's figure and
+// is dropped rather than printed under the new model's name
+// (waired-ai/waired-agent#1445, where "Measuring the new model…" reported
+// the model the switch had just left). An answer that names no model — a
+// daemon from before the field — is taken as it always was.
+func remeasureAfterSwitch(mgmtURL, modelID string, out io.Writer) *management.BenchmarkRunResponse {
 	writePrompt(out, "Measuring the new model...")
-	resp, ok, _ := waitForBenchmark(mgmtURL, management.BenchmarkModeEnsure, out, nil)
+	resp, ok, _ := waitForBenchmark(mgmtURL, management.BenchmarkModeEnsure, modelID, out, nil)
 	if !ok || resp == nil || !resp.Judged() {
+		return nil
+	}
+	if resp.ModelID != "" && canonicalBundledModelID(resp.ModelID) != canonicalBundledModelID(modelID) {
+		writePromptf(out, "The background service measured %s, not %s. There is no figure for the new model yet.\n",
+			bundledModelLabelDefault(resp.ModelID), bundledModelLabelDefault(modelID))
+		writePrompt(out, "Check `waired status`, then run `waired runtimes benchmark` again.")
 		return nil
 	}
 	// The second run's own verdict decides the wording. Claiming "works"
@@ -591,7 +609,7 @@ func tinyBenchmarkDisableFlow(
 	}
 	if answer == ynYes {
 		if switchAndWait(mgmtURL, rec.ToModelID, label, out, sc, tty) {
-			resp = remeasureAfterSwitch(mgmtURL, out)
+			resp = remeasureAfterSwitch(mgmtURL, rec.ToModelID, out)
 			// The same leftover as the ordinary step-down: this host was
 			// measured too slow for the model it just moved off.
 			offerToRemoveRejected(mgmtURL, rec.FromModelID, from, nonInteractive, out, sc)
@@ -683,7 +701,11 @@ func disableLocalInference(mgmtURL string) error {
 // nothing to offer) with the daemon's status. offer returning true means
 // the person chose to leave the measurement — the wait abandons its
 // request and returns ok=false, and the caller carries out the choice.
-func waitForBenchmark(mgmtURL, mode string, out io.Writer, offer func(management.BenchmarkStatusResponse) bool) (resp *management.BenchmarkRunResponse, ok, ranAndFailed bool) {
+//
+// model, when set, is the model the caller expects measured: a running
+// measurement of another model is not narrated (see benchNarration.model).
+// "" narrates whatever runs.
+func waitForBenchmark(mgmtURL, mode, model string, out io.Writer, offer func(management.BenchmarkStatusResponse) bool) (resp *management.BenchmarkRunResponse, ok, ranAndFailed bool) {
 	deadline := time.Now().Add(benchPollDeadline)
 	// announcedWait is the lead of the wait line last printed, not a bool:
 	// what init is waiting on can change mid-wait (the download finishes and
@@ -697,7 +719,7 @@ func waitForBenchmark(mgmtURL, mode string, out io.Writer, offer func(management
 	// gives up after the grace rather than spinning to the full deadline.
 	var noEngineDeadline time.Time
 	engineSeen := false
-	narr := &benchNarration{mgmtURL: mgmtURL, out: out, offer: offer}
+	narr := &benchNarration{mgmtURL: mgmtURL, out: out, offer: offer, model: model}
 	for {
 		// Try the benchmark; the handler returns 425 until the engine and
 		// model are both ready.
@@ -945,6 +967,12 @@ type benchNarration struct {
 	mgmtURL string
 	out     io.Writer
 	offer   func(management.BenchmarkStatusResponse) bool
+	// model, when set, is the model this wait expects measured. A running
+	// status that names another model is not narrated: the re-measure after
+	// a switch otherwise printed the replaced model's over-the-line line
+	// under "Measuring the new model…" (waired-ai/waired-agent#1445). A
+	// status that names no model is narrated as before.
+	model string
 
 	// measured is true once a measurement has been seen running on the
 	// request in flight; startedAt / saidAt time the progress lines.
@@ -985,6 +1013,10 @@ func (n *benchNarration) post(target string) (status int, body []byte, err error
 		case <-tick.C:
 			st, ok := fetchBenchmarkStatus(n.mgmtURL)
 			if !ok || st.State != management.BenchmarkStateRunning {
+				continue
+			}
+			if n.model != "" && st.ModelID != "" &&
+				canonicalBundledModelID(st.ModelID) != canonicalBundledModelID(n.model) {
 				continue
 			}
 			if n.observe(st) {

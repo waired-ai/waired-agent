@@ -1158,6 +1158,121 @@ func TestSetupDesiredModelConvergesOnTheReconcilePass(t *testing.T) {
 	}
 }
 
+// localSwitch is a person at this machine choosing another model — `waired
+// models use`, or accepting the step-down offer — which moves the
+// preference and the served model without any control-plane frame.
+func (f *fakeSetupProvider) localSwitch(model string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.preferred = model
+	f.activeModel = model
+	f.chosenVariant, f.chosenKV = "", ""
+}
+
+// TestSetupConvergedDesiredModelIsSpent: an instruction the device had
+// already converged on when it arrived is spent, the same as one this
+// process applied. A local switch made after it stays.
+//
+// Product contract (waired-ai/waired-agent#1445). The control plane moves
+// desired_model_id onto the model a device serves once a person there
+// chose it (#647), so the device watches the instruction change while
+// already serving it. The converged return used to record nothing, so the
+// reconcile pass (#779) re-applied the old value over the next local
+// switch two seconds later — reproduced on hardware, where a step-down
+// accept was undone and the re-measure timed the model it replaced.
+func TestSetupConvergedDesiredModelIsSpent(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		variant, kv string
+	}{
+		{name: "model only"},
+		// A named build keys the admission on the triple (#1348); the
+		// converged return is shared, so the rule has to hold for it too.
+		{name: "named build", variant: "q4_k_m", kv: "q8_0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSetupProvider{
+				modelState:    catalog.ModelStateReady,
+				preferred:     "model-a",
+				activeModel:   "model-a",
+				chosenVariant: tc.variant,
+				chosenKV:      tc.kv,
+			}
+			r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+			ctx := context.Background()
+
+			// The control plane follows the device onto the model it serves.
+			st := desiredFrame("", "model-a", 0)
+			st.DesiredVariantID, st.DesiredKVCacheType = tc.variant, tc.kv
+			r.Apply(ctx, st)
+			if got := f.appliedModels(); len(got) != 0 {
+				t.Fatalf("applies on a converged device = %v, want none", got)
+			}
+
+			f.localSwitch("model-b")
+			for range 3 {
+				r.reconcileDesiredModel(ctx)
+			}
+			// The control plane re-sends its instruction on every frame.
+			r.Apply(ctx, st)
+			r.reconcileDesiredModel(ctx)
+
+			if got := f.appliedModels(); len(got) != 0 {
+				t.Fatalf("applies after a local switch = %v, want none: the converged instruction reverted the switch", got)
+			}
+			if got := f.setupPreferredModelID(); got != "model-b" {
+				t.Fatalf("served model = %q, want model-b (the local choice)", got)
+			}
+		})
+	}
+}
+
+// TestSetupReturnAfterAConvergedInstructionIsReapplied: a return to a
+// model this process applied, after an instruction the device had already
+// converged on, is a new instruction (#779).
+//
+// Product contract (waired-ai/waired-agent#779). The converged
+// instruction has to be recorded as the last admission. Otherwise the
+// admission still names the model applied before it, the return compares
+// equal to that, and the return is dropped without an apply or a log line
+// — the silent drop #779 exists to prevent.
+func TestSetupReturnAfterAConvergedInstructionIsReapplied(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateReady}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+	f.localSwitch("model-b")
+	r.Apply(ctx, desiredFrame("", "model-b", 0)) // converged on arrival
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+
+	if got := f.appliedModels(); len(got) != 2 || got[0] != "model-a" || got[1] != "model-a" {
+		t.Fatalf("applies = %v, want [model-a model-a]", got)
+	}
+	if got := f.setupPreferredModelID(); got != "model-a" {
+		t.Fatalf("served model = %q, want model-a", got)
+	}
+}
+
+// TestSetupRetryReappliesAConvergedInstruction: a spent instruction is
+// re-armed by a retry (#136) — the operator asking again — even when the
+// device had converged on it and has since moved away.
+//
+// Product contract (#136: a generation bump is the operator's retry).
+func TestSetupRetryReappliesAConvergedInstruction(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateReady, preferred: "model-a", activeModel: "model-a"}
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+	f.localSwitch("model-b")
+	r.Apply(ctx, retryFrame("", "model-a", 1))
+
+	if got := f.appliedModels(); len(got) != 1 || got[0] != "model-a" {
+		t.Fatalf("applies after a retry = %v, want [model-a]", got)
+	}
+}
+
 // TestSetupReconcilePassLeavesLeftoversAlone: the pass runs on a timer, so
 // it is the easiest place to accidentally undo #626 — starting a
 // multi-gigabyte download of an instruction nobody here chose. It answers

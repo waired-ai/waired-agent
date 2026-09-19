@@ -1825,7 +1825,7 @@ func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *tes
 	}
 
 	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
-	push := func(chosenAt func() string) string {
+	push := func(active string, chosenAt func() (modelID, at string)) string {
 		t.Helper()
 		var mu sync.Mutex
 		var bodies []string
@@ -1860,6 +1860,7 @@ func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *tes
 			MachineKey:         machinePriv,
 			EngineTarget:       staticEngineTarget(signer.InferenceTypeOllama, port),
 			EngineTags:         func() (string, string) { return "llama3.1:8b", "llama3.1:8b" },
+			ActiveModel:        func() string { return active },
 			LocalModelChoiceAt: chosenAt,
 			Logger:             slog.Default(),
 		}, "push a state to the control plane", func() bool {
@@ -1875,20 +1876,38 @@ func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *tes
 		return bodies[0]
 	}
 
-	b := push(func() string { return "2026-08-10T02:31:04.512Z" })
+	chose := func(model string) func() (string, string) {
+		return func() (string, string) { return model, "2026-08-10T02:31:04.512Z" }
+	}
+	b := push("qwen3.5-2b", chose("qwen3.5-2b"))
 	if !strings.Contains(b, `"local_model_choice_at":"2026-08-10T02:31:04.512Z"`) {
 		t.Errorf("a host where someone chose did not publish when: %s", b)
+	}
+
+	// PRODUCT CONTRACT (waired-ai/waired#1454, found on hardware
+	// 2026-09-19): while the chosen model is not yet the one served — a
+	// download still running, or a model this engine cannot serve — the
+	// time stays off the wire. The control plane moves its instruction
+	// onto ActiveModel when the time is newer; with the time on the wire
+	// here it moved the instruction onto qwen3.5-9b, the model the person
+	// was leaving, and the device applied that over the choice.
+	b = push("qwen3.5-9b", chose("qwen3.5-122b-a10b"))
+	if !strings.Contains(b, `"active_model":"qwen3.5-9b"`) {
+		t.Errorf("the served model did not reach the wire: %s", b)
+	}
+	if strings.Contains(b, "local_model_choice_at") {
+		t.Errorf("a choice not yet in force licensed a realign onto the model being left: %s", b)
 	}
 
 	// The getter answers "" for every no-claim case the provider knows —
 	// no file, an abandoned question, an instruction the reconciler
 	// applied, a record from before provenance existed.
-	if b := push(func() string { return "" }); strings.Contains(b, "local_model_choice_at") {
+	if b := push("qwen3.5-2b", func() (string, string) { return "", "" }); strings.Contains(b, "local_model_choice_at") {
 		t.Errorf("a host making no claim put the field on the wire: %s", b)
 	}
 	// An agent built before the getter was wired, and every provider that
 	// does not have one: byte-identical to what it pushed before.
-	if b := push(nil); strings.Contains(b, "local_model_choice_at") {
+	if b := push("qwen3.5-2b", nil); strings.Contains(b, "local_model_choice_at") {
 		t.Errorf("an unwired probe put the field on the wire: %s", b)
 	}
 }
@@ -1914,7 +1933,7 @@ func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
 	}
 
 	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
-	push := func(residency, chosenAt func() string) string {
+	push := func(residency func() string, chosenAt func() (value, at string)) string {
 		t.Helper()
 		var mu sync.Mutex
 		var bodies []string
@@ -1965,10 +1984,10 @@ func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
 		return bodies[0]
 	}
 
-	b := push(
-		func() string { return "45m0s" },
-		func() string { return "2026-08-21T09:15:04.5Z" },
-	)
+	chose := func(value string) func() (string, string) {
+		return func() (string, string) { return value, "2026-08-21T09:15:04.5Z" }
+	}
+	b := push(func() string { return "45m0s" }, chose("45m0s"))
 	if !strings.Contains(b, `"residency_idle_timeout":"45m0s"`) {
 		t.Errorf("the residency this host has did not reach the wire: %s", b)
 	}
@@ -1983,10 +2002,23 @@ func TestRunLocalInferenceProbe_ResidencyRidesWithItsProvenance(t *testing.T) {
 		t.Errorf("an indefinite hold was swallowed as if it were no claim: %s", b)
 	}
 
+	// A choice that is not the residency in force keeps its time off the
+	// wire — a vLLM host reports 0s whatever was chosen. With the time on
+	// the wire, the control plane moved its instruction onto 0s, a value
+	// nobody chose, and the device applied it over the setting
+	// (waired-ai/waired-agent#1445, the residency twin of waired#1454).
+	b = push(func() string { return "0s" }, chose("45m0s"))
+	if !strings.Contains(b, `"residency_idle_timeout":"0s"`) {
+		t.Errorf("the reported value was dropped with the withheld choice: %s", b)
+	}
+	if strings.Contains(b, "local_residency_choice_at") {
+		t.Errorf("a choice not in force licensed a realign onto the reported value: %s", b)
+	}
+
 	// Each axis is silent on its own terms: a host that reports a value
 	// but no local choice is the ordinary case, and it must not appear to
 	// have chosen.
-	b = push(func() string { return "45m0s" }, func() string { return "" })
+	b = push(func() string { return "45m0s" }, func() (string, string) { return "", "" })
 	if !strings.Contains(b, `"residency_idle_timeout":"45m0s"`) {
 		t.Errorf("the value was dropped along with the absent provenance: %s", b)
 	}
