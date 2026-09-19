@@ -1,7 +1,7 @@
 ---
 status: accepted
-supersedes: []
-superseded_by: []
+supersedes:
+  - docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md
 ---
 
 # カタログは参照機で動かしたものに限り、枝刈りしたビルドは入れず、量子化していない variant は推測の速さで添える (20260920 03:00)
