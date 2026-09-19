@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -20,6 +22,68 @@ import (
 // (an engine bounce, a probe eviction) is warm again well inside a
 // human's idea of "just now".
 const residencyWarmRetry = time.Minute
+
+// residencyWarmBackoffMax caps how far consecutive failures of the same
+// load stretch the maintainer's pace.
+//
+// A load that fails every time is not always cheap to retry. On a
+// unified-memory host a model too large to load was retried every minute,
+// and each attempt put the host back under the memory pressure that had
+// already hung it twice (waired-ai/waired-agent#1443). The first retry
+// stays at a minute, so a load that failed for a passing reason comes
+// back as quickly as before.
+const residencyWarmBackoffMax = 30 * time.Minute
+
+// residencyWarmRetryAfter is the maintainer's pace after fails consecutive
+// failed warm-ups of the same load: a minute for the first, then doubling,
+// up to residencyWarmBackoffMax.
+func residencyWarmRetryAfter(fails int) time.Duration {
+	if fails <= 1 {
+		return residencyWarmRetry
+	}
+	shift := min(fails-1, 6) // 1m<<6 is past the cap already
+	return min(residencyWarmRetry<<shift, residencyWarmBackoffMax)
+}
+
+// warmFailureRecord counts consecutive failed warm-ups of one load — the
+// same tag under the same serve tuning and backend. A failure of a
+// different load starts the count again; any warm that finds the model
+// loaded, or loads it, clears it.
+type warmFailureRecord struct {
+	mu    sync.Mutex
+	key   string
+	count int
+}
+
+func (r *warmFailureRecord) fail(key string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.key != key {
+		r.key, r.count = key, 0
+	}
+	r.count++
+	return r.count
+}
+
+func (r *warmFailureRecord) reset() {
+	r.mu.Lock()
+	r.key, r.count = "", 0
+	r.mu.Unlock()
+}
+
+func (r *warmFailureRecord) consecutive() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count
+}
+
+// warmLoadKey names the load a warm-up attempts: what failed once will
+// fail the same way while none of these move.
+func (p *agentInferenceProvider) warmLoadKey(tag string) string {
+	t := p.ollama.AppliedTuning()
+	return fmt.Sprintf("%s|ctx=%d|np=%d|kv=%s|backend=%v",
+		tag, t.ContextLength, t.NumParallel, t.KVCacheType, p.ollama.ResolvedBackend())
+}
 
 // warmBudget bounds one warm-up attempt. Generous on purpose: the whole
 // point is the cold load of a multi-GB model, which is minutes on a slow
@@ -90,6 +154,7 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 	if err := getJSON(ctx, client, baseURL+"/api/ps", probeHTTPTimeout, &ps); err == nil {
 		for _, m := range ps.Models {
 			if m.Name == tag {
+				p.warmFails.reset()
 				return
 			}
 		}
@@ -121,12 +186,15 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 	// would be undone minutes later on the very hosts that cannot be
 	// bounced to fix it.
 	if err := loadOllamaModel(wctx, client, baseURL, tag, p.keepAlive()); err != nil {
+		fails := p.warmFails.fail(p.warmLoadKey(tag))
 		if p.logger != nil {
 			p.logger.Info("warm-up load did not complete; the first request will pay for it",
-				"model", tag, "err", err, "after", time.Since(start).Round(time.Second))
+				"model", tag, "err", err, "after", time.Since(start).Round(time.Second),
+				"consecutive_failures", fails, "next_automatic_warm_up_after", residencyWarmRetryAfter(fails))
 		}
 		return
 	}
+	p.warmFails.reset()
 	if p.logger != nil {
 		p.logger.Info("serving model warmed",
 			"model", tag, "took", time.Since(start).Round(time.Second))
@@ -250,8 +318,10 @@ func (p *agentInferenceProvider) maintainResidency() {
 		// run yet.
 		return
 	}
+	// Only this periodic path backs off. A boot, a reconcile or an operator
+	// start warms at once whatever the count: each is a new reason to try.
 	if ended := p.warmEndedAt.Load(); ended != 0 &&
-		time.Since(time.Unix(0, ended)) < residencyWarmRetry {
+		time.Since(time.Unix(0, ended)) < residencyWarmRetryAfter(p.warmFails.consecutive()) {
 		return
 	}
 	p.warmServingModel()

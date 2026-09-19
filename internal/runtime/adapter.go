@@ -184,6 +184,34 @@ type RunningProcess interface {
 	Kill() error
 }
 
+// ProcessTree is implemented by a RunningProcess that can tell whether
+// any process it started is still running: the child and every
+// descendant still in its process group (Unix) or Job Object (Windows).
+//
+// Done() tracks the child alone. An engine's child is its server, and the
+// memory lives in the server's children — ollama's llama-server runner,
+// vLLM's EngineCore and workers — which the server hands pipes of their
+// own, so nothing about Done() waits for them. A runner killed in the
+// middle of a GPU allocation or transfer stayed alive for eight to nine
+// minutes on a Windows unified-memory host, holding the allocation, while
+// its server had already exited (waired-ai/waired-agent#1443).
+type ProcessTree interface {
+	// TreeAlive reports whether any process of the tree is still running.
+	// An error means the answer is unknown; callers treat that the way
+	// they did before this existed, as "nothing left to wait for".
+	TreeAlive() (bool, error)
+}
+
+// DefaultTreeExitTimeout bounds how long a start waits for the processes a
+// retired engine started to exit before it gives up rather than spawn a new
+// engine beside them. It is a start budget, never a stop budget: Stop keeps
+// its StopTimeout bound (#316). Sized from the eight to nine minutes a
+// killed runner outlived its server in waired-ai/waired-agent#1443.
+const DefaultTreeExitTimeout = 15 * time.Minute
+
+// treeExitPoll is how often awaitTreeExit asks the tree again.
+const treeExitPoll = time.Second
+
 // ParseBaseURL is a small helper for adapters that need to validate
 // or rewrite their own BaseURL during proxying.
 func ParseBaseURL(raw string) (*url.URL, error) {

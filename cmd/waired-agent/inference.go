@@ -568,7 +568,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		"probes_fallback", backendPlan.Probes(),
 		"reason", backendPlan.Reason)
 
+	// One record of retired engines for the whole host: every engine start
+	// waits for the processes of every engine stopped before it, whichever
+	// engine that was (waired-ai/waired-agent#1443). The vLLM adapters are
+	// built later, per bootstrap, and read it from the provider.
+	engineExits := infruntime.NewPendingExits(0, 0)
 	ollamaCfg := infruntime.OllamaConfig{
+		PendingExits: engineExits,
 		// waired-agent#861: residency is an operator setting, not a
 		// constant. 0 (the default) holds the model indefinitely.
 		KeepAlive:      cfg.IdleTimeout.Duration(),
@@ -688,6 +694,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		profiler:       profiler,
 		registry:       registry,
 		ollama:         ollama,
+		engineExits:    engineExits,
 		puller:         puller,
 		notices:        deps.Notices,
 		stateDir:       stateDir,
@@ -1272,6 +1279,11 @@ type agentInferenceProvider struct {
 	registry  *infruntime.Registry
 	ollama    *infruntime.OllamaAdapter
 	puller    *download.Puller
+	// engineExits is the host-wide record of retired engines whose
+	// processes may still be running; every adapter this provider builds
+	// shares it (waired-ai/waired-agent#1443). nil in unit tests that
+	// build a provider directly, which gives each vLLM adapter its own.
+	engineExits *infruntime.PendingExits
 
 	// notices is where this provider republishes the model-switch
 	// suggestions, so the tray, `waired doctor` and `waired status` all
@@ -1448,6 +1460,9 @@ type agentInferenceProvider struct {
 	// that fails on a broken engine must not be restarted every probe
 	// tick for the life of the process.
 	warmEndedAt atomic.Int64
+	// warmFails counts consecutive failed warm-ups of the same load, which
+	// stretches that pace (residencyWarmRetryAfter, waired-ai/waired-agent#1443).
+	warmFails warmFailureRecord
 
 	// setupFrameMu guards the four fields below: what the last folded
 	// control-plane frame said about this host. Written by the setup
@@ -2478,6 +2493,16 @@ func (p *agentInferenceProvider) onEngineStartFailed(detail string) {
 		n, engineRecoveryStableFor, detail))
 }
 
+// wedgeRestartWarranted reports whether a start that failed after a bounce
+// should fall back to restarting the agent. Only after a model switch (the
+// one restart #812 keeps), and not when the start only declined to spawn
+// beside a previous engine's processes that are still exiting: a restarted
+// agent would not know about them and would spawn at once, which is the
+// overlap the decline exists to prevent (waired-ai/waired-agent#1443).
+func wedgeRestartWarranted(swap bool, startErr error) bool {
+	return swap && !errors.Is(startErr, infruntime.ErrPreviousEngineStillExiting)
+}
+
 // reconcileEngineServe recomputes the ollama serve env for the currently
 // effective preferred/Active model and desiredParallel, and bounces the engine
 // (Stop → EnsureRunning) to apply it — the agent process, gateway, mesh, and
@@ -2648,7 +2673,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 			}
 			if err := p.ollama.EnsureRunning(ctx); err != nil {
 				p.logger.Warn("restart for engine reconcile failed; engine down until retry", "err", err)
-				if swap && p.restartOnWedge != nil {
+				if p.restartOnWedge != nil && wedgeRestartWarranted(swap, err) {
 					// Wedged after an in-process model switch: fall back to the
 					// supervised restart (preferred-model.json is saved, so the
 					// reboot serves the new model). The only restart #812 keeps.

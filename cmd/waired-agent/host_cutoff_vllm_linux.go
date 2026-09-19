@@ -129,7 +129,10 @@ func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, vari
 		// serving crash out of the current generation.
 		LogDir:  filepath.Join(p.stateDir, "runtimes", "vllm", "logs", "host-speed-probe"),
 		Spawner: infruntime.DefaultSpawner{},
-		Parked:  p.vllmIsParked,
+		// The probe engine shares the host-wide record: the serving engine
+		// follows it on the same GPU (waired-ai/waired-agent#1443).
+		PendingExits: p.engineExits,
+		Parked:       p.vllmIsParked,
 		// No OnUnhealthy / OnStartFailed. Those record strikes and set the
 		// give-up latch for the engine this host SERVES with; a probe that
 		// could not start has said what it needs to say by returning an

@@ -27,6 +27,15 @@ type warmEngine struct {
 	mu       sync.Mutex
 	resident []string // what /api/ps reports as loaded
 	loads    []map[string]any
+	// failLoads answers /api/generate with a 500 and loads nothing: a
+	// model the runner will not load (waired-ai/waired-agent#1443).
+	failLoads bool
+}
+
+func (e *warmEngine) setFailLoads(v bool) {
+	e.mu.Lock()
+	e.failLoads = v
+	e.mu.Unlock()
 }
 
 func (e *warmEngine) recorded() []map[string]any {
@@ -53,8 +62,16 @@ func (e *warmEngine) start(t *testing.T) (host string, port int) {
 			_ = json.Unmarshal(body, &got)
 			e.mu.Lock()
 			e.loads = append(e.loads, got)
-			e.resident = append(e.resident, got["model"].(string))
+			fail := e.failLoads
+			if !fail {
+				e.resident = append(e.resident, got["model"].(string))
+			}
 			e.mu.Unlock()
+			if fail {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":"llama runner process has terminated"}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"done":true}`))
 		default: // /api/tags and the health probe
 			_, _ = w.Write([]byte(`{"models":[]}`))
