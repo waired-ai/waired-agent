@@ -44,8 +44,18 @@ type benchStub struct {
 	// running, when set, makes /benchmark/status answer it while the first
 	// /benchmark call is held open until release is closed (or the client
 	// leaves) — a measurement still in flight.
+	//
+	// Only WHILE held: before the first call has reached the handler,
+	// status answers idle, the way a daemon with no measurement running
+	// does. It used to answer running from the start, so a status poll
+	// that beat the first POST to the server (a slow runner under -race)
+	// let the client abandon a request the stub had never counted; the
+	// re-measure's POST then became call 1, was held with no one left to
+	// release it, and the test waited out the 10-minute deadline
+	// (waired-ai/waired-agent#1418).
 	running *management.BenchmarkStatusResponse
 	release chan struct{}
+	held    bool // a call is parked in the hold below
 	// abandoned counts /benchmark calls whose client left before an answer.
 	abandoned int
 	// failAfter makes /benchmark answer 503 from that call onwards, so a
@@ -87,16 +97,24 @@ func (b *benchStub) server() *httptest.Server {
 			i := min(call, len(b.measuredSeq)) - 1
 			measured = b.measuredSeq[i]
 		}
+		ready := b.ready || flipped
+		if hold && ready {
+			b.held = true
+		}
 		b.mu.Unlock()
-		if !b.ready && !flipped {
+		if !ready {
 			w.WriteHeader(http.StatusTooEarly)
 			return
 		}
 		if hold {
 			select {
 			case <-b.release:
+				b.mu.Lock()
+				b.held = false
+				b.mu.Unlock()
 			case <-r.Context().Done():
 				b.mu.Lock()
+				b.held = false
 				b.abandoned++
 				b.mu.Unlock()
 				return
@@ -135,6 +153,9 @@ func (b *benchStub) server() *httptest.Server {
 	mux.HandleFunc("/waired/v1/inference/benchmark/status", func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		running := b.running
+		if !b.held {
+			running = nil
+		}
 		b.mu.Unlock()
 		if running == nil {
 			_ = json.NewEncoder(w).Encode(management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle})
