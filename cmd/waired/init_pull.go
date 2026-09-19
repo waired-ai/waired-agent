@@ -537,12 +537,30 @@ func writeModelRefusal(out io.Writer, model, code, detail string) {
 // the wait.
 const switchFailedStreak = 3
 
+// switchServeGrace bounds how long waitForModelSwitch waits, once the
+// switch target is downloaded, for the background service to serve it.
+// The in-process switch flips the active selection as soon as the weights
+// are on disk, and a switch that needs a restart is waited out by the
+// restart arm, so this is room for the engine reconcile, not for a
+// download. A var so tests can shrink it.
+var switchServeGrace = 2 * time.Minute
+
 // waitForModelSwitch blocks until modelID — just accepted via
-// /inference/preferred-model — is pulled and ready, tolerating the agent
-// restart the accept schedules (status fetches fail for a few seconds;
-// keep polling). Unlike waitForBundledModel it keys strictly off modelID
-// in Models.Ready / Models.Failed / Models.Downloads, NOT st.Active: the
-// switch target only becomes the active model once its pull completes.
+// /inference/preferred-model — is pulled, ready AND the model the
+// background service serves, tolerating the agent restart the accept
+// schedules (status fetches fail for a few seconds; keep polling). Unlike
+// waitForBundledModel it keys the download off modelID in Models.Ready /
+// Models.Failed / Models.Downloads, not st.Active: the switch target only
+// becomes the active model once its pull completes.
+//
+// Ready alone is not the answer, though. It says the weights are on disk,
+// and the caller goes on to measure whatever the service serves: a switch
+// the daemon undid (waired-ai/waired-agent#1445), or one that has not
+// landed yet, was reported "now serving it" and the re-measure timed the
+// model it replaced. So success also needs st.Active to name modelID, and
+// a Ready target the service still is not serving after switchServeGrace
+// ends the wait saying which model it serves instead.
+//
 // enter (inert = no backgrounding) lets the user press Enter to leave the
 // download running in the background.
 // Returns true once the model is ready and serving.
@@ -554,6 +572,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 	failedStreak := 0
 	dlHinted := false
 	var engineFailedSince time.Time // see waitForBundledModel's arm (#310)
+	var readySince time.Time        // when the target was first seen Ready but not served
 
 	lastStep := ""
 	announce := func(step, msg string) {
@@ -577,11 +596,25 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 		case !ok:
 			// The accept schedules an immediate agent restart, so the
 			// management API is briefly unreachable — expected, keep polling.
+			// A restart is also how a cross-engine switch lands, so the
+			// serve grace starts over after it.
+			readySince = time.Time{}
 			announce("restart", "Waiting for the background service to restart...")
-		case slices.Contains(st.Models.Ready, modelID):
+		case slices.Contains(st.Models.Ready, modelID) && servesModel(st, modelID):
 			endProgressLine(out, tty, &line)
 			writePromptf(out, "%s  %s ready. The background service is now serving it.\n", emo("✅", "*"), label)
 			return true
+		case slices.Contains(st.Models.Ready, modelID):
+			// Downloaded, and not what the service serves (yet).
+			if readySince.IsZero() {
+				readySince = time.Now()
+			}
+			if time.Since(readySince) > switchServeGrace {
+				endProgressLine(out, tty, &line)
+				printSwitchNotServing(out, modelID, label, st)
+				return false
+			}
+			announce("activating", "Waiting for the background service to start serving "+label+"...")
 		case slices.Contains(st.Models.Failed, modelID):
 			failedStreak++
 			if failedStreak >= switchFailedStreak {
@@ -656,6 +689,29 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 func printSwitchBackgroundNote(out io.Writer, label string) {
 	writePromptf(out, "Continuing in the background. The background service will finish the download and start serving %s when it's ready.\n", label)
 	writePrompt(out, "Check progress with `waired models ls` or `waired status`.")
+}
+
+// servesModel reports whether the background service's active selection
+// is modelID. Both sides are canonicalised, so an alias on either end
+// still compares equal.
+func servesModel(st management.InferenceStatus, modelID string) bool {
+	return st.Active != nil && st.Active.ModelID != "" &&
+		canonicalBundledModelID(st.Active.ModelID) == canonicalBundledModelID(modelID)
+}
+
+// printSwitchNotServing ends a switch wait whose target is downloaded but
+// is not the model the background service serves, naming the one it does
+// serve when the status says (waired-ai/waired-agent#1445). "instead", not
+// "still": the status says only that the target is not served, not that
+// the model served is the one the switch left.
+func printSwitchNotServing(out io.Writer, modelID, label string, st management.InferenceStatus) {
+	if st.Active != nil && st.Active.ModelID != "" {
+		writePromptf(out, "%s is downloaded, but the background service is serving %s instead.\n",
+			label, bundledModelLabelDefault(st.Active.ModelID))
+	} else {
+		writePromptf(out, "%s is downloaded, but the background service isn't serving it.\n", label)
+	}
+	writePromptf(out, "Check `waired status`. To switch, run `waired models use %s` or `waired runtimes benchmark` again.\n", modelID)
 }
 
 // downloadFor returns the in-flight download entry for modelID; found is
