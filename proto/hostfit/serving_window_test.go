@@ -43,14 +43,18 @@ func TestDeclarableNativeWindow_CatalogClasses(t *testing.T) {
 // catalog has none — so the step would cost hosts (a larger KV cache)
 // and buy no models at all.
 //
-// It also pins that BOTH declarable windows are actually reachable by
-// something we ship, so neither constant is decoration.
+// It also pins that the 200k window is reachable by something we ship.
+// The 1M window was reachable too until waired-ai/waired#1427 retired
+// glm-5.2 and deepseek-v4-flash, the only models whose own window is 1M;
+// no shipped model declares it now. The constant stays because the wire
+// and the routing already carry it, and a build that reaches 1M through
+// YaRN is to declare it again (waired-ai/waired#1456).
 func TestCatalogHasNoWindowClassBetweenTheTwo(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	var got1M, got200k int
+	var got200k int
 	for _, m := range manifests {
 		if m.ContextLength > hostfit.ServingWindow200k && m.ContextLength < hostfit.ServingWindow1M &&
 			m.ContextLength != 262144 {
@@ -58,15 +62,9 @@ func TestCatalogHasNoWindowClassBetweenTheTwo(t *testing.T) {
 				"contract cannot express it — decide whether it declares 200k or nothing",
 				m.ModelID, m.ContextLength)
 		}
-		switch hostfit.DeclarableNativeWindow(m) {
-		case hostfit.ServingWindow1M:
-			got1M++
-		case hostfit.ServingWindow200k:
+		if hostfit.DeclarableNativeWindow(m) == hostfit.ServingWindow200k {
 			got200k++
 		}
-	}
-	if got1M == 0 {
-		t.Error("no bundled manifest can declare the 1M window; the constant serves nothing")
 	}
 	if got200k == 0 {
 		t.Error("no bundled manifest can declare the 200k window; local coding is unreachable")

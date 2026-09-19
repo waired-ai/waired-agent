@@ -13,11 +13,10 @@ import (
 // admission rule yet, each with the change that takes it out of the
 // catalog. An entry that starts passing fails the test too, so the table
 // cannot outlive the reason it was written for.
-var admissionExemptions = map[string]string{
-	"glm-5.2/fp8-safetensors":           "needs 1,130,000 MB of accelerator memory; retired in waired-ai/waired#1427",
-	"glm-5.2/nvfp4-safetensors":         "needs 560,000 MB of accelerator memory; retired in waired-ai/waired#1427",
-	"deepseek-v4-flash/fp8-safetensors": "needs 196,608 MB of accelerator memory; retired in waired-ai/waired#1427",
-}
+//
+// Empty since waired-ai/waired#1427 retired glm-5.2 and deepseek-v4-flash,
+// whose three vLLM builds sat here.
+var admissionExemptions = map[string]string{}
 
 // TestBundledCatalog_EveryBuildFitsTheReferenceHost is the catalog's
 // admission rule (decision 3 of

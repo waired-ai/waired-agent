@@ -1346,13 +1346,20 @@ function Assert-ServiceRecoveryFlag {
 # there, and comes back as ErrModelSwitchUnavailable -- HTTP 409, no restart
 # scheduled at all.
 #
-# What does reach it is a model with no variant for that engine:
+# What does reach it is a model with no variant that engine can serve:
 # FirstPullableVariant finds nothing and SwapPreferredModel returns
-# errSwapNeedsRestart before touching the weights. So the target is chosen by
-# the catalog's own verdict -- fit.reason == no_variant_for_engine, the same
-# families the tray renders as "not available on this computer" -- rather than
-# by position, and the switch costs no download whatever the leg's engine
-# state.
+# errSwapNeedsRestart before touching the weights. The catalog names such a
+# family in two ways, and both are taken here. fit.reason ==
+# no_variant_for_engine is a family with no build for the engine at all (the
+# tray's "not available on this computer"). fit.reason == engine_too_old is a
+# family whose every build asks for a newer engine than the one on this host,
+# and on this leg, where no engine is installed, the version is unknown and
+# the agent fails closed (internal/router.engineVersionSatisfies). The first
+# kind ran out when waired-ai/waired#1427 retired glm-5.2 and
+# deepseek-v4-flash, the last families with no ollama build; qwen3.8-27b and
+# qwen3.8-flash-next are of the second. Either way the target is chosen by the
+# catalog's own verdict rather than by position, and the switch costs no
+# download.
 function Assert-RestartFallbackReturns {
     param([string]$Waired)
 
@@ -1363,11 +1370,11 @@ function Assert-RestartFallbackReturns {
     try {
         $cat = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/catalog' -TimeoutSec 5
         foreach ($f in @($cat.families)) {
-            if ($f.fit -and $f.fit.reason -eq 'no_variant_for_engine') { $model = [string]$f.model_id; break }
+            if ($f.fit -and ($f.fit.reason -eq 'no_variant_for_engine' -or $f.fit.reason -eq 'engine_too_old')) { $model = [string]$f.model_id; break }
         }
     } catch { }
     if (-not $model) {
-        ItBad "no family with fit.reason=no_variant_for_engine in the catalog -- that verdict is how a switch reaches the supervised-restart fallback without a download, so nothing below would be testing it"
+        ItBad "no family with fit.reason=no_variant_for_engine or engine_too_old in the catalog -- those verdicts are how a switch reaches the supervised-restart fallback without a download, so nothing below would be testing it"
         # Still three: a leg that reports two has a block that stopped
         # executing, and the floor is what says so.
         ItBad "skipped: the supervised-restart exit was never taken"

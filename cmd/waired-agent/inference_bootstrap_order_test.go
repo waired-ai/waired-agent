@@ -69,10 +69,12 @@ func bootstrapPulledTags(t *testing.T, p *agentInferenceProvider, r *blockingRun
 	return r.pulledTags()
 }
 
-// noOllamaVariantManifest mirrors the three bundled manifests that ship
-// with no ollama-servable variant at all (glm-5.2, glm-4.5-air-106b-a12b,
-// deepseek-v4-flash). LookupByAlias finds them, so "the preference
-// resolves in the catalog" is NOT evidence that anything can be pulled.
+// noOllamaVariantManifest mirrors a bundled manifest that ships with no
+// ollama-servable variant at all, as glm-5.2, glm-4.5-air-106b-a12b and
+// deepseek-v4-flash did until they retired (the last two in
+// waired-ai/waired#1427). LookupByAlias finds such an entry, so "the
+// preference resolves in the catalog" is NOT evidence that anything can be
+// pulled.
 func noOllamaVariantManifest(id string) catalog.Manifest {
 	return catalog.Manifest{
 		ModelID: id,

@@ -375,7 +375,7 @@ func TestVLLMTarget_NoVLLMVariant(t *testing.T) {
 //
 // FirstPullableVariant answers "can this engine load it at all" and stops
 // at the first yes, which is the right question only while a model ships
-// one variant per engine. glm-5.2 already ships two safetensors builds,
+// one variant per engine. qwen3.6-27b ships two safetensors builds,
 // and waired-agent#575 adds more. The ollama side was moved onto
 // FamilyBestFit in waired-agent#1265; this is the vLLM half.
 func TestVLLMTarget_PicksTheVariantTheHostFits(t *testing.T) {

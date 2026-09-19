@@ -188,8 +188,8 @@ type RequestShapeGap struct {
 //
 // A manifest with no ollama variant at all is ONE model-level gap
 // rather than a skip: a vLLM-only entry with nothing to probe would
-// otherwise pass a coverage check having proved nothing, which is how
-// deepseek-v4-flash and glm-5.2 are shaped today.
+// otherwise pass a coverage check having proved nothing. deepseek-v4-flash
+// and glm-5.2 were shaped that way until waired-ai/waired#1427 retired them.
 func (s RequestShapeSet) RequestShapeGaps(manifests []Manifest, unmeasurable map[string]string, want []ShapeRef) []RequestShapeGap {
 	var out []RequestShapeGap
 	for _, m := range manifests {
