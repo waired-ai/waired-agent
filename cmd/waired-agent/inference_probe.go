@@ -218,13 +218,16 @@ type inferenceProbeDeps struct {
 	RefreshResidency func(context.Context)
 
 	// LocalModelChoiceAt, when non-nil, answers when a person at this
-	// machine last chose a model — see the wire field of the same name.
-	// Read live each tick, like the getters above, because the answer can
-	// arrive at any time through the loopback management API.
+	// machine last chose a model — see the wire field of the same name —
+	// and which model, as a canonical id ("" for "run without a local
+	// model"). Read live each tick, like the getters above, because the
+	// answer can arrive at any time through the loopback management API.
 	//
-	// Nil, or an empty return, keeps the field off the wire, which is the
-	// "no claim" case every consumer must already handle.
-	LocalModelChoiceAt func() string
+	// The time is published only while the chosen model is the ActiveModel
+	// this same push reports (localModelChoiceInForce). Nil, an empty time,
+	// or a choice not yet in force keeps the field off the wire, which is
+	// the "no claim" case every consumer must already handle.
+	LocalModelChoiceAt func() (modelID, at string)
 
 	// Residency and LocalResidencyChoiceAt are the upward half of model
 	// residency (waired#1232): the setting this host actually has, and
@@ -243,8 +246,13 @@ type inferenceProbeDeps struct {
 	// which every consumer must already handle. Note that a vLLM host is
 	// NOT such a case: it holds the model until the engine exits, so it
 	// reports "0s" (waired-agent#943).
+	//
+	// LocalResidencyChoiceAt returns the value the person chose with the
+	// time, and the time is published only while Residency reports that
+	// value (residencyChoiceInForce) — the model field's rule, for the same
+	// reason.
 	Residency              func() string
-	LocalResidencyChoiceAt func() string
+	LocalResidencyChoiceAt func() (value, at string)
 
 	// ResidencyUnsupported reports whether this host's engine has a
 	// keep-alive axis at all (waired-agent#1030). Residency above cannot
@@ -649,8 +657,13 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		// that just demoted away from the model it was told to run is
 		// mid-switch, which is exactly when Models is empty and exactly
 		// the case the control plane needs to hear about.
+		//
+		// Paired with the ActiveModel set above, in this push, so the two
+		// can never come from different moments (waired-ai/waired#1454).
 		if deps.LocalModelChoiceAt != nil {
-			s.LocalModelChoiceAt = deps.LocalModelChoiceAt()
+			if modelID, at := deps.LocalModelChoiceAt(); localModelChoiceInForce(modelID, s.ActiveModel) {
+				s.LocalModelChoiceAt = at
+			}
 		}
 		// waired#1232: what this host's residency actually is, and when a
 		// person here last set one. Ungated for the same reason as the
@@ -660,7 +673,9 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 			s.ResidencyIdleTimeout = deps.Residency()
 		}
 		if deps.LocalResidencyChoiceAt != nil {
-			s.LocalResidencyChoiceAt = deps.LocalResidencyChoiceAt()
+			if value, at := deps.LocalResidencyChoiceAt(); residencyChoiceInForce(value, s.ResidencyIdleTimeout) {
+				s.LocalResidencyChoiceAt = at
+			}
 		}
 		if deps.ResidencyUnsupported != nil {
 			s.ResidencyUnsupported = deps.ResidencyUnsupported()
@@ -1181,4 +1196,56 @@ func narrowPublishedModels(s *signer.InferenceState, advertise, serving string, 
 	// of what else the engine returned. Defensive for the misconfigured
 	// case; canonical for the derived-batch-model case.
 	s.Models = []string{advertise}
+}
+
+// localModelChoiceInForce reports whether a person's model choice is what
+// this push reports as served, which is when its time may go on the wire.
+//
+// The control plane moves its desired-model instruction onto ActiveModel
+// when LocalModelChoiceAt is newer than the instruction (#647). While the
+// chosen model is still downloading — or cannot be served here at all —
+// ActiveModel names the model the person is leaving, and publishing the
+// time then moved the instruction onto THAT model. The device, which
+// cannot tell a realignment from a person's write, then applied it over
+// the choice (waired-ai/waired#1454). Withheld until the two agree, the
+// time can only ever license a move onto the model the person chose.
+//
+// Both empty is in force too: "run without a local model" while nothing
+// is served, the other answer the wire field's doc names.
+//
+// This narrows the wire field's doc (proto/signer, LocalModelChoiceAt):
+// "" there now also means "chosen, not yet in force". Consumers already
+// read "" as no claim, so none of them changes.
+func localModelChoiceInForce(chosen, active string) bool {
+	return chosen == active
+}
+
+// residencyChoiceInForce is localModelChoiceInForce for model residency
+// (waired#1232): the choice's time is published only while the reported
+// residency is the value the person chose.
+//
+// The two differ on a vLLM host, which reports "0s" whatever was chosen
+// (waired-agent#943), after a restart whose IDLE_TIMEOUT or
+// --inference-idle-timeout overrides the saved setting, and for a push
+// read between the two halves of a change. In each of them the control
+// plane would move its instruction onto the reported value — a value the
+// person did not choose — and the device applies a new instruction once
+// per value, over the person's setting.
+//
+// Compared as durations, not strings, so two spellings of one value
+// agree. A choice with no recorded value is not in force: nothing says
+// what it was.
+func residencyChoiceInForce(chosen, reported string) bool {
+	if chosen == "" || reported == "" {
+		return false
+	}
+	c, err := time.ParseDuration(chosen)
+	if err != nil {
+		return false
+	}
+	r, err := time.ParseDuration(reported)
+	if err != nil {
+		return false
+	}
+	return c == r
 }

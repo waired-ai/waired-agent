@@ -3321,24 +3321,29 @@ func (p *agentInferenceProvider) ActiveModelID() (string, bool) {
 
 // LocalModelChoiceAt reports when a person at THIS machine last answered
 // the model question, formatted for signer.InferenceState's field of the
-// same name. It reads the preference file live rather than a cached copy:
-// the answer can arrive at any time through the loopback management API,
-// and the control plane's use for it is an ordering against its own
-// instruction, so a stale reading is worse than none.
+// same name, and the canonical id of the model they chose ("" for "run
+// without a local model"). It reads the preference file live rather than
+// a cached copy: the answer can arrive at any time through the loopback
+// management API, and the control plane's use for it is an ordering
+// against its own instruction, so a stale reading is worse than none.
 //
-// "" whenever the file says anything else — no file, an abandoned
+// The model id never goes on the wire. The probe uses it to publish the
+// time only once the choice is the model the same push reports as served
+// (localModelChoiceInForce).
+//
+// at is "" whenever the file says anything else — no file, an abandoned
 // question, an instruction the setup reconciler applied, or a record
 // written before provenance existed. Every one of those is "no claim",
 // and the consumer's own doc comment says what it must do with that.
-func (p *agentInferenceProvider) LocalModelChoiceAt() string {
+func (p *agentInferenceProvider) LocalModelChoiceAt() (modelID, at string) {
 	if p.preferencePath == "" {
-		return ""
+		return "", ""
 	}
 	pref, ok, err := agentconfig.LoadPreference(p.preferencePath)
 	if err != nil || !ok || !pref.ChosenHere() || pref.SetAt.IsZero() {
-		return ""
+		return "", ""
 	}
-	return pref.SetAt.UTC().Format(time.RFC3339Nano)
+	return canonicalSetupModelID(pref.ModelID, p.manifests), pref.SetAt.UTC().Format(time.RFC3339Nano)
 }
 
 // ContextWindowFor reports the effective input-token window the given model
