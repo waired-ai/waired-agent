@@ -2,6 +2,8 @@
 status: accepted
 supersedes:
   - docs/decisions/20260804/1937-capacity-computation-and-window-recommendation.md
+superseded_by:
+  - docs/decisions/20260920/1800-windows-budget-stops-at-a-measured-load.md
 ---
 
 # Windows の APU カーブアウトは加算されない — 実測で分かれた出どころの解釈 (20260820 00:05)
@@ -13,6 +15,11 @@ Accepted。`docs/decisions/20260804/1937-capacity-computation-and-window-recomme
 (`HardwareInformation.qwMemorySize`) を「OS が RAM から除外した、モデルが
 追加で占有できるメモリ」に分類していた点**だけを取り消す。同決定の 1
 (容量 = 計算式)・3 (推奨 = 200k 宣言) は不変。
+
+`docs/decisions/20260920/1800-windows-budget-stops-at-a-measured-load.md`
+(waired-ai/waired-agent#1443 の計測、2026-09-20) が決定 3 を狭める。予算は
+「RAM − OS 取り分」のままで、さらに参照機で読み込めた最大の負荷
+(80 GiB、`windowsUMALoadableCapMB`) でも止める。
 
 private 側の `waired` `docs/decisions/20260803/1332-hard-vs-soft-model-limits.md`
 Context §1 は「Strix Halo は報告 RAM がカーブアウト控除後なので合算が

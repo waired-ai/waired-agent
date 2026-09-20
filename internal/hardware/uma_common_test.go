@@ -158,10 +158,21 @@ func TestStrixHaloUMA(t *testing.T) {
 		},
 		{
 			// The measured working configuration: carve-out shrunk to
-			// 512 MB, so the OS sees the whole 128 GB machine.
-			name: "windows: tiny carve-out does not shrink the budget",
+			// 512 MB, so the OS sees the whole 128 GB machine. The RAM
+			// left to the OS (128,000 MB) and the BIOS ceiling (98,304)
+			// both stay above what a load on this host was measured to
+			// reach, so the loadable cap is the answer (#1443).
+			name: "windows: the budget stops at what a load was measured to reach",
 			goos: "windows", amdVRAMMB: 512, ramTotalGB: 127,
-			want: capMB, wantCarveOut: 0,
+			want: windowsUMALoadableCapMB, wantCarveOut: 0,
+		},
+		{
+			// And it binds only there: a host whose OS was left little
+			// RAM is still held to that, which is the configuration
+			// #863 measured a 22.6 GB model running on.
+			name: "windows: a small OS share still decides on a big carve-out host",
+			goos: "windows", amdVRAMMB: 96 * 1024, ramTotalGB: 64,
+			want: 62 * 1024, wantCarveOut: 0,
 		},
 		{
 			name: "windows: carve-out reading is ignored in both positions",

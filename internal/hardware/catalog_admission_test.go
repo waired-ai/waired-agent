@@ -37,9 +37,9 @@ var admissionExemptions = map[string]string{}
 func TestBundledCatalog_EveryBuildFitsTheReferenceHost(t *testing.T) {
 	h := windowsStrixHalo(127, 0, 512)
 	budget := h.OllamaVRAMBudgetMB()
-	if budget != 96*1024 {
+	if budget != windowsUMALoadableCapMB {
 		t.Fatalf("reference host budget = %d MB, want %d: the Strix Halo rule moved, "+
-			"so this test no longer describes the reference host", budget, 96*1024)
+			"so this test no longer describes the reference host", budget, windowsUMALoadableCapMB)
 	}
 
 	manifests, err := catalog.BundledManifests()

@@ -5,6 +5,7 @@ supersedes:
 superseded_by:
   - docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md
   - docs/decisions/20260920/0300-catalog-admits-what-was-run-on-the-reference-host.md
+  - docs/decisions/20260920/1800-windows-budget-stops-at-a-measured-load.md
 ---
 
 # qwen3.8 を 35B-A3B の上に置き、段下げの行き先は参照機での実測で選び、カタログは参照機に載るものに限る (20260916 03:40)
@@ -13,6 +14,8 @@ superseded_by:
 Accepted。オーナー判断 2026-09-16（waired-ai/waired#1357 の L107、comment 5686058325）。`docs/decisions/20260913/2355-catalog-variant-kv-and-residency-rulings.md` の裁定 13（「tier の順序は dense と MoE のどちらを上にするか、L107 が決める」）への答え。実装は waired-ai/waired-agent#1400。同日（2026-09-16）、#1400 の実装計画を確認する場でオーナーが 4 点に答え、決定 2・3 を詰め、決定 4・5 を足した。
 
 `docs/decisions/20260920/0300-catalog-admits-what-was-run-on-the-reference-host.md`(オーナー判断 2026-09-19〜20、waired-ai/waired#1427)が、決定 3 を狭め、例外を 1 つ足す。入れるのは参照機で実際に動かした variant で、量子化していない variant は参照機に載らなくても推測の秒数で入れる。
+
+`docs/decisions/20260920/1800-windows-budget-stops-at-a-measured-load.md`(waired-ai/waired-agent#1443 の計測、2026-09-20)が、決定 3 の参照機のアクセラレータメモリの予算を改める。`OllamaVRAMBudgetMB` は 98,304 MB ではなく 81,920 MB(参照機で読み込めた最大の負荷、80 GiB)。
 
 次の記録を**部分的に狭める（覆さない）**。記録の `## Status` に鏡の一文を置いた。
 
