@@ -168,11 +168,11 @@ func ollamaWindowRequestFor(cfg agentconfig.InferenceConfig, m catalog.Manifest,
 	if !ok {
 		// Nothing readable to check. Asking anyway would risk declaring a
 		// window the runner does not hold, so it does not ask.
-		return 0, "the long context window is selected, but this computer could not read the stored model to confirm it can serve it, so it is serving the ~200k window"
+		return 0, "the 1M context window is selected, but this computer could not read its stored copy of the model to confirm it can serve 1M, so it is serving the ~200k window"
 	}
 	if stored < hostfit.ServingWindow1M {
 		return 0, fmt.Sprintf(
-			"the long context window is selected, but the stored model still declares %d tokens and the engine will not serve past that, so it is serving the ~200k window; download the model again to pick the choice up",
+			"the 1M context window is selected, but this computer's stored copy of the model still declares %d tokens and the engine serves no more than the file declares, so it is serving the ~200k window; download the model again to update the stored copy",
 			stored)
 	}
 	return hostfit.ServingWindow1M, ""

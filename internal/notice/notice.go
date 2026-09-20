@@ -89,6 +89,12 @@ const (
 	// KindEngineNotAnswering is the engine this computer serves with
 	// running, and not answering.
 	KindEngineNotAnswering Kind = "engine_not_answering"
+	// KindLongContextWindow is this computer serving the 1M context window
+	// (waired-ai/waired#1456). Standing rather than an event: it is true
+	// for as long as the choice is in force, and it is Info rather than
+	// Warn because the person chose it after being told the cost — doctor
+	// reports defects, and a choice honoured is not one.
+	KindLongContextWindow Kind = "long_context_window"
 )
 
 // Severity says how a surface should mark a notice, and whether a
@@ -158,6 +164,25 @@ type Notice struct {
 	// policy.
 	FirstSeen time.Time `json:"-"`
 	ExpiresAt time.Time `json:"-"`
+}
+
+// LongContextWindow is the standing line for a computer serving the 1M
+// context window: it runs the model past the length it was trained for, and
+// that applies to every request rather than only long ones.
+//
+// The text is the lasting cost only. The time a long session takes to fill,
+// and the hours a re-read costs when a conversation branches, belong to the
+// moment of choosing rather than to a line a person reads every day — they
+// are in the confirmation the choice goes through (owner-approved copy,
+// 2026-09-21).
+func LongContextWindow() Notice {
+	return Notice{
+		Kind:     KindLongContextWindow,
+		Severity: SeverityInfo,
+		Subject:  "context window",
+		Title:    sanitise("Context window: 1M, extended past the model's trained length"),
+		Text:     sanitise("Short prompts may be affected."),
+	}
 }
 
 // LighterModel is the #133 suggestion to switch to a faster model (the

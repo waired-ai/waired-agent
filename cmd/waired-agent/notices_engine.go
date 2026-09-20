@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/waired-ai/waired-agent/internal/notice"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // engineNoticePublisher is the "engine" producer: what the engine that
@@ -54,6 +55,13 @@ func engineNotices(p engineProvenance, live, latchedReady, known bool) []notice.
 	}
 	if engineNotAnswering(live, latchedReady, known) {
 		out = append(out, notice.EngineNotAnswering(p.Engine))
+	}
+	// Standing, and beside the others rather than instead of one: a
+	// computer serving the long window can also be running an engine at
+	// the wrong version, and #1229's lesson was that two facts about the
+	// engine are two notices.
+	if p.ServedWindow == hostfit.ServingWindow1M {
+		out = append(out, notice.LongContextWindow())
 	}
 	return out
 }

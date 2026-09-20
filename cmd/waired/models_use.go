@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // newModelsUseCmd sets the model this computer runs.
@@ -38,12 +43,17 @@ func newModelsUseCmd() *cobra.Command {
 	var assumeYes bool
 	var force bool
 	var wait bool
+	var window string
 	cmd := &cobra.Command{
 		Use:   "use <model_id|alias>",
 		Short: "Set the model this computer runs",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			model := args[0]
+			win, err := parseWindowFlag(window)
+			if err != nil {
+				return err
+			}
 			// #61/#583: warn-then-honour, the same gate `models pull`
 			// applies. Switching to a model this host cannot hold is the
 			// same mistake as downloading one, one step further along.
@@ -55,9 +65,22 @@ func newModelsUseCmd() *cobra.Command {
 				fmt.Fprintln(stdout, "switch cancelled.")
 				return nil
 			}
+			// The long window is its own question, asked after the fit one
+			// and with the same default: No. It is not a capacity matter —
+			// a computer that can hold it is still being told what the
+			// extension costs (owner ruling 2026-09-20,
+			// waired-ai/waired#1456).
+			if win == hostfit.ServingWindow1M && !assumeYes {
+				warnLongContextWindow(stdout, model)
+				if ynAsk(stdout, bufio.NewScanner(os.Stdin),
+					"Use the 1M context window on this computer?", false) != ynYes {
+					fmt.Fprintln(stdout, "switch cancelled.")
+					return nil
+				}
+			}
 
 			body, err := httpPost(mgmt+"/waired/v1/inference/preferred-model",
-				mustMarshalPreferredModel(model))
+				mustMarshalPreferredModel(model, win))
 			if err != nil {
 				if msg, handled := formatModelsUseError(mgmt, model, err); handled {
 					fmt.Fprintln(stdout, msg)
@@ -94,6 +117,8 @@ func newModelsUseCmd() *cobra.Command {
 	// on here — and a provisioning script that ran this would otherwise
 	// sit for tens of minutes it never asked for.
 	cmd.Flags().BoolVar(&wait, "wait", false, "poll until the new model is ready to serve")
+	cmd.Flags().StringVar(&window, "window", "200k",
+		"context window to serve: 200k, or 1m where the model documents a way past its trained length")
 	return cmd
 }
 
@@ -103,11 +128,51 @@ func newModelsUseCmd() *cobra.Command {
 // the one the operator is meant to read.
 var errModelsUseRefused = errors.New("")
 
-func mustMarshalPreferredModel(modelID string) []byte {
+func mustMarshalPreferredModel(modelID string, contextWindow int) []byte {
 	b, _ := json.Marshal(struct {
-		ModelID string `json:"model_id"`
-	}{modelID})
+		ModelID       string `json:"model_id"`
+		ContextWindow int    `json:"context_window,omitempty"`
+	}{modelID, contextWindow})
 	return b
+}
+
+// parseWindowFlag turns --window into a serving window. The two spellings are
+// the two the product uses in its own copy.
+//
+// The coding window is 0 and not ServingWindow200k, because 0 is what the
+// coding window is called everywhere this value travels — the preference
+// file, the wire field, the sizing input — and because an omitted field
+// leaves the request byte-identical to the one a daemon that predates the
+// choice has always received.
+//
+// An unknown spelling is an error rather than a fall back to the coding
+// window: someone who typed a window meant one, and serving the other without
+// saying so is the failure the window contract exists to remove.
+func parseWindowFlag(v string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "200k":
+		return 0, nil
+	case "1m":
+		return hostfit.ServingWindow1M, nil
+	}
+	return 0, fmt.Errorf("--window must be 200k or 1m, got %q", v)
+}
+
+// warnLongContextWindow is the warn half of the warn-and-ask a person goes
+// through to pick the long window. Owner-approved copy, 2026-09-21.
+//
+// It states the two costs and says plainly which parts are unmeasured. The
+// order is deliberate: what the long window DOES to the model first, then
+// what it costs in time, then the question — the shape every other prompt in
+// this file takes.
+func warnLongContextWindow(out io.Writer, name string) {
+	writePromptf(out, "\n%s 1M runs %s past the 262,144 tokens it was trained for.\n",
+		emo("⚠", "!"), name)
+	writePromptf(out, "  The extension applies to every request, so short prompts may be\n")
+	writePromptf(out, "  affected. Neither that nor how well it recalls text past 262,144\n")
+	writePromptf(out, "  tokens has been measured.\n")
+	writePromptf(out, "  Re-reading a long session can take hours, which is what happens when\n")
+	writePromptf(out, "  a conversation branches.\n")
 }
 
 // formatModelsUse renders the daemon's answer. Pure, so the wording is
@@ -124,13 +189,13 @@ func formatModelsUse(modelID string, willRestart, downloading bool) string {
 	}
 }
 
-// formatModelsUseError turns the two refusals this endpoint has words for
+// formatModelsUseError turns the refusals this endpoint has words for
 // into the sentence the operator needs, and reports whether it did.
 // Anything else is returned to the caller unchanged: an error this build
 // has no reading of is better shown raw than paraphrased.
 //
-// Both refusals are 409, so the machine-readable code — not the status —
-// is what tells them apart.
+// All three refusals are 409, so the machine-readable code — not the
+// status — is what tells them apart.
 func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 	var me *mgmtStatusError
 	if !errors.As(err, &me) {
@@ -145,6 +210,13 @@ func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 		// knows it. Its sentence verbatim rather than a rewrite that
 		// could name a different model than the one it resolved (#200).
 		return parsed.Message, true
+	case parsed.Code == "window_not_reachable":
+		// The daemon's sentence names the model's own length, which is the
+		// fact the person needs and the only party holding the manifest
+		// knows. Printed verbatim for the same reason model_retired is:
+		// a rewrite here could name a different number than the one the
+		// handler checked.
+		return parsed.Message + "\nPick a model that documents a longer window, or drop --window.", true
 	case parsed.Code == "model_switch_unavailable":
 		// The choice is KEPT on the daemon side and applies by itself
 		// once pulls work again, so this is not "nothing happened" — and

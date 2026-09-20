@@ -3,10 +3,12 @@ package management
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // PreferredModelRequest is the body of POST /waired/v1/inference/preferred-model.
@@ -17,6 +19,19 @@ import (
 type PreferredModelRequest struct {
 	ModelID string `json:"model_id"`
 	None    bool   `json:"none,omitempty"`
+
+	// ContextWindow is the serving window chosen with the model:
+	// hostfit.ServingWindow1M for the long one, 0 or
+	// hostfit.ServingWindow200k for the coding window
+	// (waired-ai/waired#1456). Absent means the coding window, which is
+	// what every caller sent before the choice existed.
+	//
+	// Asking for the long window on a model whose publisher documents no
+	// way past its own length is refused, because there is nothing to
+	// honour — unlike a model this computer cannot hold, which is served
+	// with a warning (owner ruling 2026-09-20; waired's
+	// docs/decisions/20260808/2325).
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // PreferredModelResponse is the 202-Accepted body. WillRestart is false
@@ -87,13 +102,26 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// A window this model cannot reach is refused rather than recorded and
+	// quietly ignored: there is no honouring it, and a stored choice that
+	// never takes effect is the shape waired#1297 exists to remove. This is
+	// not the capacity case — a model this COMPUTER cannot hold at the
+	// window is still served, with a warning.
+	if req.ContextWindow != 0 && !hostfit.ReachesWindow(manifest, req.ContextWindow) {
+		writeJSON(w, http.StatusConflict, errorBody("window_not_reachable",
+			fmt.Sprintf("%s serves up to %d tokens; it documents no way past that",
+				req.ModelID, manifest.ContextLength)))
+		return
+	}
+
 	// Source operator: every caller of this endpoint is a person at this
 	// machine — the install picker, the slow-host demotion prompt, the
 	// tray. A control-plane instruction does not arrive here; the setup
 	// reconciler writes the file directly and marks itself.
 	if err := agentconfig.SavePreference(s.catalog.PreferencePath, agentconfig.Preference{
-		ModelID: req.ModelID,
-		Source:  agentconfig.PreferenceSourceOperator,
+		ModelID:       req.ModelID,
+		ContextWindow: req.ContextWindow,
+		Source:        agentconfig.PreferenceSourceOperator,
 	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("preference_save_failed", err.Error()))
 		return

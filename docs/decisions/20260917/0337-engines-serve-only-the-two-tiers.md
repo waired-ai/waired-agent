@@ -5,13 +5,17 @@ supersedes:
   - docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md
   - docs/decisions/20260808/1907-price-capacity-at-the-served-window.md
   - docs/decisions/20260804/1937-capacity-computation-and-window-recommendation.md
+superseded_by:
+  - docs/decisions/20260920/2345-an-explicit-choice-below-the-coding-window-is-warned-not-refused.md
 ---
 
 # エンジンは 200,704 か 1,048,576 のコンテキストウィンドウだけを配信し、宣言する (20260917 03:37)
 
 ## Status
 
-Accepted。オーナー決定(2026-09-16、waired-ai/waired-agent#1396 に記録)。エンジン(ollama と vLLM)が配信し宣言するコンテキストウィンドウは 200,704 か 1,048,576 だけで、200,704 を保てないホストやモデルは配信しない。例外は CI 専用の `internal_only` のモデル(granite4-350m、ネイティブ 32k)で、自身のコンテキストウィンドウで配信してよく、一覧・推奨・ピッカーには出さない(同日のオーナー回答)。実装は waired-ai/waired-agent#1434。
+Accepted。オーナー決定(2026-09-16、waired-ai/waired-agent#1396 に記録)。
+
+`docs/decisions/20260920/2345-an-explicit-choice-below-the-coding-window-is-warned-not-refused.md`(オーナー裁定 2026-09-20)が、**「明示的に選ばれたビルドを起動前に断る」の 2 か所だけを置き換える**(決定 1 の最後の文と、「まだ入っていないもの」の 1 つ目)。断らずに警告と既定 No の確認にする。エンジンが 200,704 か 1,048,576 だけを配信・宣言することは変わらない。エンジン(ollama と vLLM)が配信し宣言するコンテキストウィンドウは 200,704 か 1,048,576 だけで、200,704 を保てないホストやモデルは配信しない。例外は CI 専用の `internal_only` のモデル(granite4-350m、ネイティブ 32k)で、自身のコンテキストウィンドウで配信してよく、一覧・推奨・ピッカーには出さない(同日のオーナー回答)。実装は waired-ai/waired-agent#1434。
 
 行の側(Waired の行はどれも 200,704 か 1,048,576 のセッション)は `docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md`。この記録はエンジンの側。
 

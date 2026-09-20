@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,7 +43,8 @@ import (
 // distinction that failed.
 type fakeSetupProvider struct {
 	mu sync.Mutex
-	// buildApplies records every setupApplyModel call as model|variant|kv.
+	// buildApplies records every setupApplyModel call as
+	// model|variant|kv|window.
 	buildApplies []string
 	// chosenVariant / chosenKV are the build choice the last apply
 	// published; buildNotServing scripts a switch still in flight
@@ -411,11 +413,11 @@ func (f *fakeSetupProvider) setupCanonicalModelID(name string) string {
 // split SwapPreferredModel makes. A fake that always pulled would hide
 // the "already on disk, so nothing happened" half of #230; one that
 // never pulled would hide the wizard's progress bar.
-func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model, variantID, kvType string) (bool, error) {
+func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model, variantID, kvType string, contextWindow int) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applies = append(f.applies, model)
-	f.buildApplies = append(f.buildApplies, model+"|"+variantID+"|"+kvType)
+	f.buildApplies = append(f.buildApplies, model+"|"+variantID+"|"+kvType+"|"+strconv.Itoa(contextWindow))
 	if f.applyErr != nil {
 		if !errors.Is(f.applyErr, errSwapNeedsRestart) {
 			return false, f.applyErr
@@ -1421,7 +1423,7 @@ func TestSetupApplyModel_RealAdapterPinsAndActivates(t *testing.T) {
 		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	if _, err := p.setupApplyModel(context.Background(), "light", "", ""); err != nil {
+	if _, err := p.setupApplyModel(context.Background(), "light", "", "", 0); err != nil {
 		t.Fatalf("setupApplyModel: %v", err)
 	}
 

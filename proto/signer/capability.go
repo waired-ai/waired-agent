@@ -281,4 +281,18 @@ const (
 	// switch the user did not get. The control plane therefore injects
 	// them only for pollers that declare this.
 	CapabilityVariantChoiceV1 = "variant-choice-v1"
+
+	// CapabilityWindowChoiceV1 gates InferenceState.DesiredContextWindow:
+	// the serving window a person chose for this computer
+	// (waired-ai/waired#1456, waired-ai/waired#1359). Same series and same
+	// structural reason as CapabilityVariantChoiceV1 above — the field
+	// rides the SIGNED map, so an agent that does not know it drops it on
+	// canonical re-marshal and fails verification of the whole map — plus
+	// the same semantic one: an agent that parsed the window but served
+	// the coding one anyway would report a choice the person did not get.
+	//
+	// Distinct from CapabilityContextWindowV1, which gates the window a
+	// device REPORTS. This one gates the window it is ASKED for, and a
+	// device may well know one and not the other.
+	CapabilityWindowChoiceV1 = "window-choice-v1"
 )

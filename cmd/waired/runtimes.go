@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 func newRuntimesCmd() *cobra.Command {
@@ -685,6 +687,27 @@ func isatty(f *os.File) bool {
 //
 // Fits the %-10s column, which is why it is not a sentence; the reason is
 // on the ⚠ line and the remediation is in `waired inference engine status`.
+// servingWindowLabel names a served context window the way the rest of the
+// product names it. An engine serves one of exactly two
+// (docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md), and
+// neither divides into a round number of binary thousands: dividing by 1024
+// printed the coding window as "196k", and would have printed the long one as
+// "1024k".
+//
+// A window that is neither rung is printed as it is rather than rounded. That
+// is a fact about an engine not doing what it was asked, and rounding it away
+// would hide it.
+func servingWindowLabel(tokens int) string {
+	switch tokens {
+	case hostfit.ServingWindow200k:
+		return "200k"
+	case hostfit.ServingWindow1M:
+		return "1M"
+	default:
+		return strconv.Itoa(tokens)
+	}
+}
+
 func runtimeStateWord(state string, latched bool) string {
 	if latched {
 		return "gave up"
