@@ -85,6 +85,14 @@ func ServedMaxParallelIn(manifests []Manifest, engineType, modelID, variantID st
 	return protocatalog.ServedMaxParallelIn(manifests, engineType, modelID, variantID)
 }
 
+// ExtendedContextLength is the context window a model reaches with the rope
+// scaling its publisher documents, or 0 for one that documents none. See the
+// proto function: it is a fact about the model, and says nothing about what
+// any computer will be asked to serve.
+func ExtendedContextLength(m Manifest) int {
+	return protocatalog.ExtendedContextLength(m)
+}
+
 // contains is a small helper used by tests.
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {

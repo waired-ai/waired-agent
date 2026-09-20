@@ -184,6 +184,27 @@ type engineProvenance struct {
 // give-up sentence, the raw failure and up to 4 KiB of engine log; the
 // first line is the part that names the cause, which is the whole point
 // of waired-agent#1069.
+// ollamaStoredContextLength is the context_length a pulled build's GGUF must
+// claim, so that this computer CAN serve the long window if someone asks for
+// it. 0 for a model that documents no way past its own window.
+//
+// ollama clamps num_ctx to the file's own value and passes -c on the command
+// line, so a build whose file says 262,144 cannot be asked for more however
+// the product is configured (waired-ai/waired#1456). Raising it is therefore
+// a precondition of the choice, not the choice: the window actually served
+// is whatever the serve tuning exports, and the rope scaling is passed only
+// for the long one.
+//
+// It is the model's reach and not the person's choice on purpose. Editing the
+// file when the choice is made would mean editing it underneath a running
+// engine, and a switch to the long window would then depend on a file write
+// succeeding at the worst moment. The cost is that a stored file stops
+// matching the publisher's bytes for someone who never picks the long window;
+// the decision log carries that trade.
+func ollamaStoredContextLength(m catalog.Manifest) int {
+	return catalog.ExtendedContextLength(m)
+}
+
 func (p *agentInferenceProvider) servingFailureReason(ctx context.Context) string {
 	if p == nil {
 		return ""
@@ -2769,6 +2790,13 @@ func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant, dra
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// No ContextLength here, and it is not an omission. This is a re-pull of
+	// a tag that is already present, which rewrites the manifest and leaves
+	// the weights blob alone — so a ceiling raised by the download path is
+	// still raised. A blob that predates waired-ai/waired#1456 is not
+	// raised by this either, and must not be: the serve path checks the
+	// file before it asks for the long window, which is the only place that
+	// knows the window is about to change.
 	want := download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: draft}
 	p.logger.Info("the model runner's MTP draft is not the one this computer should run; pulling the tag again",
 		"tag", tag, "variant_id", v.VariantID, "draft_num_predict", draft)
@@ -4878,7 +4906,8 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		var want download.Rendering
 		if v, ok := variantByID(manifest, variantID); ok {
 			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser,
-				DraftNumPredict: p.ollamaDraftToWrite(dlCtx, manifest, v)}
+				DraftNumPredict: p.ollamaDraftToWrite(dlCtx, manifest, v),
+				ContextLength:   ollamaStoredContextLength(manifest)}
 		}
 		// Give the bar its whole total before the first byte moves. Once
 		// per tag: a retry of the same tag already has the figure, and the
