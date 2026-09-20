@@ -326,9 +326,49 @@ func formatSpillGB(mb int) string {
 
 // warnModelNotRecommended prints the runs-but-demoted warning
 // (waired-agent#321), shared with the picker for the same reason.
+//
+// ReasonWindowExceedsMemory takes a shape of its own, because "isn't
+// recommended here" understates it to the point of being wrong. The other
+// demotions mean the model runs and something about it is worse; this one
+// means Waired sends nothing here at all, so a person reading "not
+// recommended" would reasonably pick it anyway and then find their coding
+// agent never uses the computer. Owner ruling 2026-09-20 on
+// waired-ai/waired-agent#1435 (docs/decisions/20260920/2345-…, decision 3):
+// say what will not happen, and do not say "cannot run" — the engine does
+// start.
 func warnModelNotRecommended(out io.Writer, name, reason string) {
+	if reason == hostfit.ReasonWindowExceedsMemory {
+		warnModelTakesNoCodingAgent(out, name)
+		return
+	}
 	writePromptf(out, "\n%s %s runs on this computer, but isn't recommended here%s.\n",
 		emo("ℹ", "i"), name, notRecommendedBecause(reason))
+}
+
+// warnModelTakesNoCodingAgent words the one demotion whose consequence is
+// that the computer stops being used.
+//
+// ⚠ rather than ℹ, unlike its siblings: the outcome is that nothing arrives,
+// which is closer to a warning than to a note. It is still not a refusal —
+// the choice is honoured, and capacity remains the only rule allowed to
+// refuse (waired's docs/decisions/20260808/2325).
+//
+// "coding-agent requests" and not "requests": a host that declares no window
+// keeps receiving requests that name a model directly, because the router's
+// window filter only runs when the request carries a floor
+// (internal/router/endpoint_router.go, `if req.MinContextWindow > 0`), and
+// only a Waired row carries one. Saying Waired sends it nothing would be the
+// easier sentence and a false one.
+//
+// "Waired row" is this project's own name for an entry in a coding tool's
+// model list, and it stays in comments like this one. It meant nothing to a
+// reader who had not been shown that list, so it is not in the copy (owner,
+// 2026-09-21).
+func warnModelTakesNoCodingAgent(out io.Writer, name string) {
+	writePromptf(out, "\n%s %s runs here, but this computer can't hold the 200,704-token\n",
+		emo("⚠", "!"), name)
+	writePrompt(out, "  window with it, so Waired won't send coding-agent requests to this computer.")
+	writePrompt(out, "  Pick a smaller model to have Waired use it again.")
 }
 
 // pullFitAction is what the does-not-fit branch does for one flag/tty
@@ -368,9 +408,12 @@ func notRecommendedBecause(reason string) string {
 		return ": it doesn't fit entirely in VRAM, and every reply pays for that"
 	case hostfit.ReasonTooSlow:
 		return ": replies would be slow"
-	case hostfit.ReasonWindowExceedsMemory:
-		return ": this computer can't hold a long coding session with it, though it answers well otherwise"
 	}
+	// ReasonWindowExceedsMemory is deliberately absent: it no longer
+	// completes "isn't recommended here" at all — warnModelNotRecommended
+	// sends it to its own sentence. Leaving a clause here would be a second,
+	// softer wording of the same verdict, reachable by whichever caller
+	// happened to use this function directly.
 	return ""
 }
 

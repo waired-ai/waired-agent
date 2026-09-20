@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -24,17 +26,31 @@ import (
 // ships below the ~200k window, and window_too_small has no producer. The
 // other reasons still need their clause.
 func TestNotRecommendedBecause_CoversEveryReasonTheFitRulesProduce(t *testing.T) {
-	// Every reason hostfit can put on Presentation.NotRecommendedReason.
-	// A new one added without copy here would print nothing, which is how
-	// this gap arrived — so the list is exhaustive on purpose.
+	// Asserted through the rendered warning, not through
+	// notRecommendedBecause, since waired-ai/waired-agent#1435: one reason
+	// no longer completes "isn't recommended here" and gets a sentence of
+	// its own instead. The contract was never about that helper — it is
+	// that a person is told WHY — so it is now checked where a person
+	// reads it.
+	bare := "runs on this computer, but isn't recommended here."
 	for _, reason := range []string{
 		hostfit.ReasonWeightsSpill,
 		hostfit.ReasonTooSlow,
 		hostfit.ReasonWindowExceedsMemory,
 	} {
-		if got := notRecommendedBecause(reason); got == "" {
-			t.Errorf("reason %q renders no clause — the warning would say only "+
-				"that Waired disagrees, never why", reason)
+		var b bytes.Buffer
+		warnModelNotRecommended(&b, "qwen3.5-9b", reason)
+		got := b.String()
+		if got == "" {
+			t.Errorf("reason %q printed nothing", reason)
+			continue
+		}
+		if strings.Contains(got, bare) {
+			t.Errorf("reason %q rendered the reasonless sentence — the warning says "+
+				"only that Waired disagrees, never why:\n%s", reason, got)
+		}
+		if !strings.Contains(got, "qwen3.5-9b") {
+			t.Errorf("reason %q did not name the model:\n%s", reason, got)
 		}
 	}
 
@@ -43,5 +59,39 @@ func TestNotRecommendedBecause_CoversEveryReasonTheFitRulesProduce(t *testing.T)
 	// allowed to grow ahead of this CLI.
 	if got := notRecommendedBecause("something_new"); got != "" {
 		t.Errorf("unknown reason = %q, want no clause", got)
+	}
+}
+
+// PRODUCT CONTRACT (owner ruling 2026-09-20 on waired-ai/waired-agent#1435,
+// recorded in docs/decisions/20260920/2345-…, decision 3): the picker says
+// that no coding-agent request will come, NOT that the model cannot run.
+// The engine does start, so "cannot run" would be false.
+func TestWindowExceedsMemory_SaysWhatStopsAndDoesNotSayCannotRun(t *testing.T) {
+	var b bytes.Buffer
+	warnModelNotRecommended(&b, "qwen3.8-27b", hostfit.ReasonWindowExceedsMemory)
+	got := b.String()
+
+	for _, want := range []string{
+		"200,704-token",
+		"won't send coding-agent requests",
+		"Pick a smaller model",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The two readings the ruling rules out.
+	for _, forbidden := range []string{
+		"cannot run",
+		"can't run",
+		"isn't recommended",
+		// The internal name for a row in a coding tool's model list. It
+		// reads as house vocabulary and means nothing to a person who has
+		// not been shown the picker (owner, 2026-09-21).
+		"Waired row",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("says %q, which the ruling rules out:\n%s", forbidden, got)
+		}
 	}
 }

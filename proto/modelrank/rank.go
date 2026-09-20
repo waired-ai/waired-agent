@@ -629,8 +629,13 @@ func notRecommendedReason(v hostfit.Verdict) string {
 			"not preselected here: needs ~%d MB in the shared memory pool, which offers %d MB",
 			v.NeedMB, v.HaveMB)
 	case hostfit.ReasonWindowExceedsMemory:
-		return "not preselected here: this host would serve it below the ~200k coding-agent " +
-			"target (runs, but long sessions truncate or compact)"
+		// "truncate or compact" described what happened before the two-rung
+		// contract: the engine served a smaller window and a long session
+		// paid for it. Since waired-ai/waired-agent#1396 a host that cannot
+		// hold the rung declares nothing instead, so what actually happens
+		// is that the request never arrives.
+		return "not preselected here: this computer can't hold the 200,704-token window " +
+			"with it, so Waired wouldn't send coding-agent requests to it"
 	default:
 		return "not preselected here"
 	}
