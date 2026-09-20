@@ -152,7 +152,18 @@ func TestProfile_NoDetectorLeavesUnknown(t *testing.T) {
 // rule travels with the class, and knowing a part is integrated does not
 // supply one. If a later change wires the report into the policy, this
 // test is where it announces itself.
+//
+// The UMA hook is stubbed out rather than left to the real one, and that
+// is the subject here rather than a convenience: what is under test is
+// whether the INTEGRATED READING reaches UnifiedMemory, and the real
+// hook would answer from the host the test happens to run on. It did
+// exactly that on the first attempt — the darwin runner is arm64, so
+// defaultUMA set UnifiedMemory true and UsableVRAMMB to 75 % of the
+// faked RAM, and the test failed in CI while passing on Linux where
+// IsStrixHaloAPU simply said no. A test that reads the host cannot tell
+// the two switches apart.
 func TestIntegratedReportDoesNotSetUnifiedMemory(t *testing.T) {
+	umaRan := false
 	prof := NewProfiler(t.TempDir(),
 		WithOSArch(func() (string, string) { return "linux", "x86_64" }),
 		WithCPU(func(context.Context) CPUInfo { return CPUInfo{Model: "not a strix halo", Cores: 8} }),
@@ -161,8 +172,15 @@ func TestIntegratedReportDoesNotSetUnifiedMemory(t *testing.T) {
 		WithGPU(func(context.Context) ([]GPU, Accelerators, error) {
 			return []GPU{{Vendor: "amd", Model: "an integrated part", VRAMTotalMB: 2048}}, Accelerators{}, nil
 		}),
+		// A hook that runs and settles nothing: the only way UnifiedMemory
+		// can be true below is if the reading put it there.
+		WithUMA(func(context.Context, *Profile) { umaRan = true }),
 		WithIntegratedDetector(func(*Profile, int) integration { return integratedKnown(true) }),
 	).Profile(context.Background())
+
+	if !umaRan {
+		t.Fatal("the UMA hook did not run; this test would pass for the wrong reason")
+	}
 
 	if !prof.GPUs[0].IntegratedKnown || !prof.GPUs[0].Integrated {
 		t.Fatalf("precondition: the device should be reported integrated, got %+v", prof.GPUs[0])
