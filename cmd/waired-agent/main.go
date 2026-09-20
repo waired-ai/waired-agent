@@ -1359,6 +1359,7 @@ func run(ctx context.Context, args []string) error {
 					// published and the notice lapses
 					// (waired-agent#1205).
 					go runNoticeLoop(ctx, noticeRepublish, prov.publishRecommendationNotices)
+					go runNoticeLoop(ctx, noticeRepublish, prov.publishLoadFailureNotices)
 					// And what the serving engine has to say about
 					// itself. Its own producer, so a version warning and
 					// a tuning note are two facts rather than a chain

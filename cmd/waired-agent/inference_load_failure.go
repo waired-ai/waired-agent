@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -135,4 +136,76 @@ func (p *agentInferenceProvider) loadIsBlocked() (catalog.VariantLoadFailure, bo
 		return catalog.VariantLoadFailure{}, false
 	}
 	return rec, true
+}
+
+// smallerAlternative names a model this computer could run instead of the
+// one that did not load, or "" when the catalog has nothing to offer.
+//
+// "Smaller" is by estimated weight, because weight is what ran out. The
+// step-down that already exists (router.FasterCandidate, #1400) answers a
+// different question — which model is FASTER inside a time budget — and a
+// host that cannot load the weights at all has no measurement to be fast or
+// slow about. So this walks the same ranking, which is already restricted to
+// what fits here, and takes the first lighter thing.
+//
+// Three exclusions, each for a reason the product has already learned:
+//
+//   - another build of the same model, because the failure was about these
+//     weights and a sibling build is the tuning ladder's job, not this one;
+//   - anything at least as heavy, which would be offering the same problem
+//     under a different name;
+//   - anything this host has ALREADY recorded as not loading, so a machine
+//     cannot be walked down a list of models it has each tried once.
+func (p *agentInferenceProvider) smallerAlternative(ctx context.Context, failed catalog.VariantLoadFailure) string {
+	if p == nil || p.profiler == nil || p.store == nil {
+		return ""
+	}
+	st, err := p.store.Load()
+	if err != nil {
+		return ""
+	}
+	ranked, err := router.RankModels(router.PickInput{
+		Catalog:       p.manifests,
+		Hardware:      p.profiler.Profile(ctx),
+		Engine:        failed.Context.EngineKind,
+		EngineVersion: failed.Context.EngineVersion,
+		Measured:      measuredRatesFrom(st),
+	})
+	if err != nil {
+		return ""
+	}
+	failedWeight := variantWeightGB(p.manifests, failed.ModelID, failed.VariantID)
+	here, shape := p.loadContextNow(ctx), p.loadShapeNow()
+	for _, c := range ranked {
+		if c.Manifest.ModelID == failed.ModelID {
+			continue
+		}
+		if failedWeight > 0 && c.Variant.EstimatedWeightGB >= failedWeight {
+			continue
+		}
+		if sha := activeVariantSHA(p.manifests, c.Manifest.ModelID, c.Variant.VariantID); sha != "" {
+			if rec, ok := st.FailedLoads[sha]; ok && rec.Blocks(here, shape) {
+				continue
+			}
+		}
+		return c.Manifest.ModelID
+	}
+	return ""
+}
+
+// variantWeightGB is the catalog's estimate of what a build weighs. 0 when
+// the build is not in this catalog, which disables the size comparison
+// rather than guessing at it.
+func variantWeightGB(manifests []catalog.Manifest, modelID, variantID string) float64 {
+	for _, m := range manifests {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			if v.VariantID == variantID {
+				return v.EstimatedWeightGB
+			}
+		}
+	}
+	return 0
 }

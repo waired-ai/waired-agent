@@ -81,6 +81,11 @@ const (
 	// a warning when this computer could not hold what was asked of it,
 	// and otherwise a record of the trade that was made deliberately.
 	KindEngineTuning Kind = "engine_tuning"
+	// KindModelDidNotLoad is a model this computer could not put in
+	// memory. Distinct from KindEngineTuning, which is a model that IS
+	// serving under a configuration smaller than the one asked for: this
+	// one never loaded at all (waired-agent#1453).
+	KindModelDidNotLoad Kind = "model_did_not_load"
 	// KindEngineNotAnswering is the engine this computer serves with
 	// running, and not answering.
 	KindEngineNotAnswering Kind = "engine_not_answering"
@@ -172,6 +177,39 @@ func LighterModel(from, to string, turnSeconds, turnFloorSeconds, budget float64
 		Action: ActionModelSuggestion,
 		Target: sanitise(to),
 	}
+}
+
+// ModelDidNotLoad is a model this computer ran out of memory loading.
+//
+// A warning rather than a fault, and the distinction is the point. Nothing
+// is broken: the engine is fine, the weights are fine, and they are fine
+// together on a bigger machine. What is wrong is the choice, and the person
+// is the only one who can change it — so the notice names the model that did
+// not fit and, when there is one, the smaller model to move to.
+//
+// alternative is empty when the catalog has nothing smaller that fits here.
+// The notice is still worth showing: "this will not load on this computer"
+// is the thing the operator did not know, and leaving it unsaid is how the
+// product came to retry the same load forever (waired-agent#1453).
+func ModelDidNotLoad(model, alternative, reason string) Notice {
+	n := Notice{
+		Kind:     KindModelDidNotLoad,
+		Severity: SeverityWarn,
+		Subject:  "model suggestion",
+		Title:    sanitise(model + " did not fit in this computer's memory"),
+		Text: sanitiseText("Waired stopped loading " + model +
+			" because this computer ran out of memory, and will not load it again by itself. " +
+			reason + "."),
+	}
+	if alternative != "" {
+		n.Title = sanitise(model + " did not fit in this computer's memory — switch to " + alternative)
+		n.Text = sanitiseText("Waired stopped loading " + model +
+			" because this computer ran out of memory, and will not load it again by itself. " +
+			reason + ". " + alternative + " is small enough to run here.")
+		n.Action = ActionModelSuggestion
+		n.Target = sanitise(alternative)
+	}
+	return n
 }
 
 // UpdateAvailable is a newer release than the one this computer runs.
