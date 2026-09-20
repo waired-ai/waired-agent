@@ -150,6 +150,8 @@ var receiveOnly = []exemption{
 		"CP-injected retry generation for the model download; the agent reads it to re-admit the pull"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredInference",
 		"CP-injected explicit local-AI answer (on/off); the agent reads it to apply the soft toggle (#597)"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredInferenceSetAt",
+		"CP-injected time the answer beside it was recorded; the agent reads it to apply that answer once per ask rather than once per value (#1446, #1459)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredIdleTimeout",
 		"CP-injected model-residency setting; the agent reads it to set how long the engine holds a model (#861)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredShare",

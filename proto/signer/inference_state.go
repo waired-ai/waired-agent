@@ -223,6 +223,41 @@ type InferenceState struct {
 	// verification outright.
 	DesiredInference string `json:"desired_inference,omitempty"`
 
+	// DesiredInferenceSetAt is WHEN the control plane recorded the answer
+	// above, RFC3339Nano, and it is what makes the answer re-assertable.
+	//
+	// The applier acts once per persisted VALUE and keeps a durable record
+	// of the one it acted on, because the CP never clears a desired value
+	// and re-sends it on every map frame: without the record, every daemon
+	// restart would re-apply a weeks-old wizard answer over whatever a
+	// person has chosen locally since, which is the silent revert
+	// waired-agent#465 forbids. The cost of that record is that the SAME
+	// word cannot be said twice. A person who turns local inference off at
+	// the machine leaves the record still naming the wizard's earlier
+	// "on", so the browser's "turn local AI back on" writes a value the
+	// agent correctly reads as already acted on, and the button does
+	// nothing (waired-agent#1459).
+	//
+	// A time separates the two: the instruction is new when the WORD is
+	// new or the TIME is, so pressing the button again is a new ask while
+	// a replayed frame is not. It is the desired-side counterpart of
+	// LocalModelChoiceAt, and the same shape as the control plane's own
+	// desired_model_set_at.
+	//
+	// "" means NO TIME AVAILABLE, never "never asked": a control plane
+	// that predates the field, or a stored answer written before it
+	// existed. A consumer must fall back to the value-only rule it used
+	// before rather than treating an untimed instruction as fresh — that
+	// reading is the #465 revert, once per restart.
+	//
+	// Gated on CapabilityOnboardingV5 for the same non-cosmetic reason as
+	// V3 and V4: it rides the SIGNED map, so an agent that does not know
+	// the field drops it on canonical re-marshal and fails verification
+	// outright. A separate constant rather than a wider reading of V4,
+	// for the reason RAMAvailableV2 states: an agent declaring V4 knows
+	// DesiredInference and nothing else.
+	DesiredInferenceSetAt string `json:"desired_inference_set_at,omitempty"`
+
 	// DesiredIdleTimeout is how long the CP asks this device's engine to
 	// keep a model in memory after the last request, as a Go duration
 	// string — the spelling agent.json's idle_timeout,
