@@ -62,8 +62,8 @@ func TestFormatModelsUse(t *testing.T) {
 // itself once pulls work again, so "nothing happened" would be wrong in
 // the one way that costs the operator the most.
 //
-// Both refusals are 409, so the code is what separates them. A raw HTTP
-// error here would destroy the only information the operator needs.
+// All three refusals are 409, so the code is what separates them. A raw
+// HTTP error here would destroy the only information the operator needs.
 func TestFormatModelsUseError(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -86,6 +86,20 @@ func TestFormatModelsUseError(t *testing.T) {
 			status:      http.StatusConflict,
 			body:        `{"error_code":"model_retired","message":"\"qwen3.5-4b\" was retired; use \"qwen3.6-27b\" instead"}`,
 			want:        `"qwen3.5-4b" was retired; use "qwen3.6-27b" instead`,
+			wantHandled: true,
+		},
+		{
+			// waired-ai/waired#1456: --window 1m on a model whose publisher
+			// documents no way past its own length. The daemon's sentence
+			// carries the model's length, so it is reported rather than
+			// rewritten, and the remedy names BOTH ways out — a different
+			// model, or the coding window on this one.
+			name:   "an unreachable window names the length and both ways out",
+			status: http.StatusConflict,
+			body: `{"error_code":"window_not_reachable",` +
+				`"message":"qwen3.5-0.8b serves up to 262144 tokens; it documents no way past that"}`,
+			want: "qwen3.5-0.8b serves up to 262144 tokens; it documents no way past that\n" +
+				"Pick a model that documents a longer window, or drop --window.",
 			wantHandled: true,
 		},
 		{

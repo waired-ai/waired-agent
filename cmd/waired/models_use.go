@@ -189,13 +189,13 @@ func formatModelsUse(modelID string, willRestart, downloading bool) string {
 	}
 }
 
-// formatModelsUseError turns the two refusals this endpoint has words for
+// formatModelsUseError turns the refusals this endpoint has words for
 // into the sentence the operator needs, and reports whether it did.
 // Anything else is returned to the caller unchanged: an error this build
 // has no reading of is better shown raw than paraphrased.
 //
-// Both refusals are 409, so the machine-readable code — not the status —
-// is what tells them apart.
+// All three refusals are 409, so the machine-readable code — not the
+// status — is what tells them apart.
 func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 	var me *mgmtStatusError
 	if !errors.As(err, &me) {
@@ -210,6 +210,13 @@ func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 		// knows it. Its sentence verbatim rather than a rewrite that
 		// could name a different model than the one it resolved (#200).
 		return parsed.Message, true
+	case parsed.Code == "window_not_reachable":
+		// The daemon's sentence names the model's own length, which is the
+		// fact the person needs and the only party holding the manifest
+		// knows. Printed verbatim for the same reason model_retired is:
+		// a rewrite here could name a different number than the one the
+		// handler checked.
+		return parsed.Message + "\nPick a model that documents a longer window, or drop --window.", true
 	case parsed.Code == "model_switch_unavailable":
 		// The choice is KEPT on the daemon side and applies by itself
 		// once pulls work again, so this is not "nothing happened" — and
