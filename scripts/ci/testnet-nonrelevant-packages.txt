@@ -35,6 +35,7 @@ internal/platform/appcontrol/   # reads the Windows CodeIntegrity log to report 
 internal/platform/autostart/    # desktop login-item registration
 internal/platform/browser/      # open-URL helper for login flows
 internal/platform/console/      # sets the Windows console output code page to CP_UTF8 so printed text is not mojibake; terminal rendering only, no mesh/enrollment surface
+internal/platform/detach/     # starts a child that outlives its parent (POSIX process group / Windows DETACHED_PROCESS) for the /model rows' second write; local process spawning, no mesh/enrollment surface
 internal/platform/elevation/    # process elevation predicate (root / elevated token); local privilege check, no mesh/enrollment surface
 internal/platform/localipc/     # local management-API write socket / named pipe listener; loopback IPC only, no mesh/enrollment surface
 internal/platform/logdump/      # collects journald/log-show/Get-WinEvent + the agent/engine log files into one file for bug reports; read-only log gather, no mesh/enrollment surface

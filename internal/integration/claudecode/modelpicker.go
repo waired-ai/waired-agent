@@ -37,12 +37,17 @@ package claudecode
 // WHEN THE ROWS ARRIVE. Claude Code reads settings at startup and only then
 // starts watching the file, so a write from a SessionStart hook lands before
 // the watch is armed and is lost for that session (measured on 2.1.261,
-// 2026-09-06: a synchronous hook write and writes at 1 s, 2 s and 3 s are all
-// missed; writes at 6 s and 15 s are picked up — a race, not a contract). The
-// rows a session sees are therefore the ones written before it started, and
-// the hook is what makes that true of the NEXT session. Only the per-peer
-// rows and the presence of the public row change with the mesh, so this
-// costs one relaunch after a peer appears, and the docs say so.
+// 2026-09-06, and again on 2.1.278, 2026-09-20: a synchronous hook write and
+// writes at 1 s, 2 s, 3 s and 4 s are all missed; writes at 5 s and later are
+// picked up).
+//
+// So the rows are written twice, and the two writes promise different things.
+// The write at session start is the guarantee: it is what makes the rows
+// right for the NEXT session, whatever else happens. RepublishPickerLineup a
+// few seconds later is what usually reaches the session in progress, because
+// by then the watch is armed — and it is best effort, since when the watch
+// arms later than measured the rows still arrive next launch, which is the
+// behaviour without it (waired-agent#1454).
 
 import (
 	"encoding/json"
@@ -161,6 +166,43 @@ func WritePickerLineup(path string, rows []PickerRow) (changed bool, err error) 
 	}
 	m[modelPickerKey] = encoded
 	return true, writeSettings(path, m)
+}
+
+// RepublishPickerLineup writes the lineup that is already in the file back,
+// unchanged, so a settings watch that was not yet armed when the rows were
+// first written sees them (waired-agent#1454). The bytes are identical and
+// the write is still a temp-and-rename, which is what the watch reacts to —
+// measured on 2.1.278, 2026-09-20: a rewrite of identical bytes at 8 s
+// reached the running session in three runs out of three, including after
+// the picker had already been opened once on the stale rows.
+//
+// It republishes WHAT IS ON DISK rather than rows a caller remembers, and
+// that is the whole reason it takes no rows. Running seconds after the write
+// it follows, it must not resurrect a lineup `waired logout` or `waired
+// claude disable` took away in between, and it must not undo a different
+// lineup a second launch wrote in between. Reading the file each time makes
+// both impossible rather than merely unlikely.
+//
+// rewritten is false and the file is left byte for byte alone for every
+// state but ours: absent, foreign, unreadable.
+func RepublishPickerLineup(path string) (rewritten bool, err error) {
+	kind, current := DetectPickerLineup(path)
+	if kind != PickerLineupOurs {
+		return false, nil
+	}
+	m, err := readSettings(path)
+	if err != nil {
+		return false, err
+	}
+	encoded, err := json.Marshal(pickerLineup{Options: current})
+	if err != nil {
+		return false, fmt.Errorf("claudecode: encode %s: %w", modelPickerKey, err)
+	}
+	m[modelPickerKey] = encoded
+	if err := writeSettings(path, m); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RemovePickerLineup drops a lineup waired owns and reports whether it did.

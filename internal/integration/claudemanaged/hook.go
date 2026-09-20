@@ -44,17 +44,24 @@ const (
 	sessionStartHookEvent = "SessionStart"
 
 	// refreshHookMarker identifies waired's SessionStart hook, which rewrites
-	// this user's /model picker cache so the entries reflect the mesh as it is
-	// now rather than as it was at `waired claude enable` time
-	// (waired-agent#830).
+	// this user's /model picker rows so they reflect the mesh as it is now
+	// rather than as it was at `waired claude enable` time (waired-agent#830).
 	//
-	// SessionStart, and only SessionStart, because of two facts measured on a
-	// real host (docs/knowledges/20260820/0300-model-picker-measured-on-device.md):
-	// Claude Code reads the picker cache once per process — re-opening /model
-	// does not re-read it — and a SessionStart hook runs BEFORE that read, so
-	// its write lands in the same session rather than the next one. A Stop hook
-	// would rewrite the file after every assistant turn, for a value nothing
-	// reads again until the next launch.
+	// SessionStart, and only SessionStart, because it is the one event that
+	// fires before anybody reads the rows. A Stop hook would rewrite the file
+	// after every assistant turn, and the rows are read at startup.
+	//
+	// It used to say here that a SessionStart hook's write lands in the same
+	// session. That was true of the private cache the rows went into before
+	// waired-agent#1185, which Claude Code read AFTER hooks ran. Settings are
+	// read BEFORE the watch that would notice a write is armed, so this hook's
+	// own write reaches the NEXT session
+	// (docs/knowledges/20260906/0340-the-model-picker-measured-again.md §5,
+	// re-measured on 2.1.278 in 2026-09-20's note). The write that reaches the
+	// running session is the second one, from the detached child
+	// cmd/waired/claude_picker_republish.go starts — which is why this command
+	// string is unchanged by waired-agent#1454 and every host that already
+	// carries it gets the fix on a binary update alone.
 	refreshHookMarker = "waired claude _picker write --from-managed"
 
 	// retiredRefreshHookMarker is the SessionStart command waired wrote before
@@ -74,6 +81,12 @@ const (
 	// refreshHookTimeout bounds the refresh (seconds). It is the same backstop
 	// fallbackHookTimeout is, against a bounded-but-slow mesh read delaying
 	// session start; the write itself skips when nothing changed.
+	//
+	// waired-agent#1454's second write does not need this raised. It happens
+	// in a child the hook starts and does not wait for, so the hook still
+	// returns in about a second — which is the point: raising this would make
+	// every launch that changed the rows pause for the seconds Claude Code
+	// takes to arm its settings watch.
 	refreshHookTimeout = 5
 )
 
