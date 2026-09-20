@@ -580,6 +580,35 @@ type InferenceState struct {
 	// open to whatever they decided before.
 	SubsystemState string `json:"subsystem_state,omitempty"`
 
+	// EngineStoppedCause says WHY this device's engine is not running,
+	// when it is not running because something decided it should not be.
+	//
+	// SubsystemState above cannot carry this. `engine_failed` is returned
+	// for four different situations — a load that ran the computer out of
+	// memory, a runner that crashed, a recovery budget that ran out, and an
+	// engine that never came up — and a reader that wanted to name the
+	// remedy would be right about one of them and wrong about three
+	// (waired-agent#1480). A computer that stopped loading a model is
+	// unstuck by choosing a different one; a computer whose engine crashed
+	// is not.
+	//
+	// A CODE, never a sentence. The device already has an
+	// operator-facing sentence for its own surfaces
+	// (management.InferenceStatus.EngineStoppedReason); this field exists
+	// so the control plane can write its OWN words, in its own language and
+	// for a reader looking at a fleet rather than at the machine in front
+	// of them. Same division as SubsystemState.
+	//
+	// Push-only: the device sends it, effectiveInferenceState strips it
+	// from the served NetworkMap, and it therefore needs no capability
+	// gate — as ModelMeasurements, HostSpeed and LoadFailures need none.
+	//
+	// A value a reader does not know is "a cause I have not heard of",
+	// never an error: fall back to whatever SubsystemState alone would have
+	// said. New causes are expected, and a consumer that rejected them
+	// would make a newer device unreadable by an older control plane.
+	EngineStoppedCause string `json:"engine_stopped_cause,omitempty"`
+
 	// HostSpeed is what one coding-agent turn costs on this machine,
 	// measured once per engine build on a fixed ~1 GB probe model
 	// (waired-ai/waired-agent#496). See the type for what the numbers are.
@@ -1382,6 +1411,42 @@ const (
 	// SubsystemStateDisabled means the operator paused inference.
 	SubsystemStateDisabled = "disabled"
 )
+
+// Accepted values for InferenceState.EngineStoppedCause.
+//
+// Deliberately few. This axis answers "who decided" and nothing else; what
+// went wrong belongs in SubsystemState, and what to do about it belongs to
+// whoever is writing for the reader.
+const (
+	// EngineStoppedCauseOperator is a person stopping the engine on
+	// purpose. It travels with SubsystemStateStopped.
+	EngineStoppedCauseOperator = "operator"
+	// EngineStoppedCauseOutOfMemory is the product stopping a load that was
+	// running the computer out of memory, or a load that failed for want of
+	// it (waired-agent#1453). It travels with SubsystemStateEngineFailed,
+	// and it is the one situation of that state's four where a remedy can
+	// be named: a different model, a smaller setting, a changed computer,
+	// or someone asking for inference back.
+	EngineStoppedCauseOutOfMemory = "out_of_memory"
+)
+
+// IsValidEngineStoppedCause reports whether s is one of the accepted
+// InferenceState.EngineStoppedCause values.
+//
+// For the API validator at the boundary, NOT for a renderer. A renderer that
+// rejected an unknown cause would break the moment a newer device learned a
+// new one; the documented reading of an unknown value is "a cause I have not
+// heard of", falling back to SubsystemState alone. The empty string is not
+// accepted here for the same reason it is not accepted by
+// IsValidSubsystemState: it means "declares nothing", which every consumer
+// already handles separately.
+func IsValidEngineStoppedCause(s string) bool {
+	switch s {
+	case EngineStoppedCauseOperator, EngineStoppedCauseOutOfMemory:
+		return true
+	}
+	return false
+}
 
 // IsValidSubsystemState reports whether s is one of the accepted
 // InferenceState.SubsystemState values. The empty string is NOT accepted

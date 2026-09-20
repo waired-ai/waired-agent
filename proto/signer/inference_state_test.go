@@ -1167,3 +1167,86 @@ func TestInferenceState_LoadFailures_CanonicalJSON(t *testing.T) {
 		t.Errorf("LoadFailures = %v on a pre-addition payload, want nil", pre.LoadFailures)
 	}
 }
+
+// waired-agent#1480 added EngineStoppedCause: why the engine is not running,
+// as a code rather than a sentence. Push-only, so it never rides the signed
+// map on a peer entry — but the byte-identity rule applies for the reason it
+// always does, that a device declaring nothing has to encode exactly as it
+// did before the field existed.
+func TestInferenceState_EngineStoppedCause_CanonicalJSON(t *testing.T) {
+	none := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"qwen3:8b-q4_K_M"},
+		LastCheck: "2026-08-02T12:00:00Z",
+	}
+	const wantNone = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z"}`
+	data, err := json.Marshal(&none)
+	if err != nil {
+		t.Fatalf("marshal without a cause: %v", err)
+	}
+	if got := string(data); got != wantNone {
+		t.Errorf("a device naming no cause changed the encoding:\n got %s\nwant %s", got, wantNone)
+	}
+
+	stopped := none
+	stopped.Reachable = false
+	stopped.SubsystemState = SubsystemStateEngineFailed
+	stopped.EngineStoppedCause = EngineStoppedCauseOutOfMemory
+	const wantStopped = `{"reachable":false,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"subsystem_state":"engine_failed","engine_stopped_cause":"out_of_memory"}`
+	data, err = json.Marshal(&stopped)
+	if err != nil {
+		t.Fatalf("marshal with a cause: %v", err)
+	}
+	if got := string(data); got != wantStopped {
+		t.Errorf("cause encoding drifted:\n got %s\nwant %s", got, wantStopped)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&stopped, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", stopped, out)
+	}
+
+	// A payload from an agent that predates the field leaves it empty, and
+	// empty has to mean "this device has not said", never "nobody stopped
+	// it" — the second would let a reader tell someone their engine failed
+	// on its own when a person had switched it off.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantNone), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.EngineStoppedCause != "" {
+		t.Errorf("EngineStoppedCause = %q on a pre-addition payload, want empty", pre.EngineStoppedCause)
+	}
+}
+
+// TestIsValidEngineStoppedCause covers the boundary validator, and the one
+// thing about it that is easy to get wrong.
+func TestIsValidEngineStoppedCause(t *testing.T) {
+	for _, s := range []string{EngineStoppedCauseOperator, EngineStoppedCauseOutOfMemory} {
+		if !IsValidEngineStoppedCause(s) {
+			t.Errorf("IsValidEngineStoppedCause(%q) = false, want true", s)
+		}
+	}
+	// "declares nothing" is handled separately by every consumer, exactly
+	// as it is for SubsystemState.
+	if IsValidEngineStoppedCause("") {
+		t.Error(`IsValidEngineStoppedCause("") = true; the empty string means "declares nothing"`)
+	}
+	// A cause this build has not heard of is not valid HERE — the
+	// validator guards the API boundary. A RENDERER must not use this
+	// function to decide whether to show something: the documented reading
+	// of an unknown cause is to fall back to SubsystemState alone, because
+	// a newer device will name causes an older control plane has never
+	// seen.
+	if IsValidEngineStoppedCause("thermal_shutdown") {
+		t.Error("an unrecognised cause passed the boundary validator")
+	}
+}
