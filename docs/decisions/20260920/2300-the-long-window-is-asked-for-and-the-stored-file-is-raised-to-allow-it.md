@@ -112,8 +112,13 @@ waired-ai/waired-agent#1443)の十分内側。
 - **`ReasonWindowTooSmall` が復活する。** waired-ai/waired-agent#1400 で「誰も produce しない」
   と deprecated になっていたが、1M では問いが再び成立し、カタログの大半が「届かない」と
   答える。長い窓を選んだときに行を伏せる理由はこれで、述語は `hostfit.ReachesWindow`。
-- **カタログの 1M の価格付けに項が足りない。** 実測は事前計算より 4.3% 大きく、差は
-  MTP draft の KV が f16 のまま窓に比例して増える分(392 → 2,048 MiB)。`hostfit` に足す。
+- **1M の価格付けは正しい。** `hostfit` の見積りは、主 KV も MTP draft の KV も、
+  200,704 でも 1,048,576 でもエンジン自身の確保とバイト単位で一致した(数字は
+  `docs/knowledges/20260920/2300-serving-past-the-trained-window-on-ollama.md`)。
+  **この一致を 1M で確かめたのは今回が初めて。** なおこの記録の最初の版は「1M の
+  価格付けに項が足りない」と書いていたが、誤りだった —
+  ollama の経路は `Variant.MTPKVBytesPerTokenFP16` を読まず層数から導くので、その欄が
+  空なのは欠落ではない。
 - 1M を一度に埋める時間の実測は、この製品が「1M の窓」として売るものが
   「一度に埋める入力」ではなく「少しずつ育つセッション」であることを意味する。
   プレフィックスが外れたときの代償が、その前提の弱いところ。

@@ -48,8 +48,23 @@ hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL  -> hf.co/unsloth/Qwen3.8-27B-GGUF/UD-
 | 200,704 | 1,102.50 MiB | 392.00 MiB | 188.44 MiB | 23,638 MB | 19.5 s |
 | 1,048,576 | 5,760.00 MiB | 2,048.00 MiB | 188.44 MiB | 29,560 MB | 24.1 s |
 
-- **カタログの見積りは 1M で 4.3% 低い。** 差は **MTP draft の KV が f16 のまま窓に比例して
-  増える**分(392 → 2,048 MiB)。`hostfit` の 1M の価格付けにこの項が要る。
+- **`hostfit` の見積りは、エンジン自身の確保とバイト単位で一致した。** 200,704 でも
+  1,048,576 でも、主 KV も MTP draft の KV も、llama.cpp のログの値そのものになる:
+
+  | 窓 | `hostfit` の主 KV | エンジン | `hostfit` の draft KV | エンジン |
+  |---|---|---|---|---|
+  | 200,704 | 1,102.50 MiB | 1,102.50 | 392.00 MiB | 392.00 |
+  | 1,048,576 | 5,760.00 MiB | 5,760.00 | 2,048.00 MiB | 2,048.00 |
+
+  主 KV は `KVBytesPerTokenFP16 × OllamaKVBlockFactorQ4_0`(= 18/64。ggml の q4_0 は 32 個の
+  値を 18 バイトに入れるので、単純な 1/4 ではない)。draft KV は
+  `KVBytesPerTokenFP16 / GGUF.FullAttentionLayers` — draft head は 1 層ぶんで、`--cache-type-k`
+  に関わらず f16(`proto/hostfit/estimate.go`)。qwen3.6-35b-a3b では 20,480 / 10 = 2,048 B/token。
+
+  **この一致は 1M では誰も確かめていなかった。** ollama の経路は
+  `Variant.MTPKVBytesPerTokenFP16` を**読まない**(あれは vLLM 用で、ollama 側は層数から
+  導く)ので、その欄が空なのを見て「1M の価格付けに項が足りない」と読むのは誤り — この
+  記録の最初の版がその誤りを書いていた。
 - 8 タグはすべて model blob が別だった(共有は license blob だけ)。alias タグがある家族では
   共有し得るので、書き換える前に**同じ blob を指すタグを数える**こと。
 
