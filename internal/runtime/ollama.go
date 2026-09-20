@@ -114,6 +114,12 @@ type OllamaConfig struct {
 	// StopTimeout is how long Stop waits after SIGTERM before
 	// SIGKILL (default 5s).
 	StopTimeout time.Duration
+	// PendingExits is the host-wide record of retired engines whose
+	// processes — ollama's runners — may still be running. A start waits
+	// for it to drain before it spawns. Share one instance between every
+	// engine on the host; nil gives this adapter a private one
+	// (waired-ai/waired-agent#1443).
+	PendingExits *PendingExits
 	// OnUnhealthy, when set, is called once per detected engine death with
 	// the reason (including a tail of engine.log). The adapter has already
 	// moved to StateFailed by then; the callback owns the recovery policy
@@ -659,6 +665,9 @@ func NewOllamaAdapter(cfg OllamaConfig) *OllamaAdapter {
 	if cfg.StopTimeout <= 0 {
 		cfg.StopTimeout = DefaultOllamaStopTimeout
 	}
+	if cfg.PendingExits == nil {
+		cfg.PendingExits = NewPendingExits(0, 0)
+	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 3 * time.Second}
 	}
@@ -854,6 +863,18 @@ func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context) error {
 	binary, err := a.resolveBinary()
 	if err != nil {
 		a.setState(Health{State: StateFailed, LastErr: err.Error()})
+		return err
+	}
+	// Never spawn beside a previous engine's runners. The new engine loads
+	// a model straight away (the warm-up, the request that started it), and
+	// on a unified-memory host two copies of a large model do not fit
+	// (waired-ai/waired-agent#1443). After resolveBinary so a missing
+	// install still fails at once; before openEngineLog so the log of the
+	// engine being waited on is not rotated away.
+	if err := a.cfg.PendingExits.Wait(ctx); err != nil {
+		if ctx.Err() == nil {
+			a.setState(Health{State: StateFailed, LastErr: err.Error()})
+		}
 		return err
 	}
 
@@ -1721,6 +1742,10 @@ func (a *OllamaAdapter) stopProcess(ctx context.Context) error {
 	a.procGen++
 	a.markNothingResidentLocked()
 	a.mu.Unlock()
+	// The next start, of either engine, waits for this child's whole
+	// tree; the wait below covers the child alone, and only for
+	// StopTimeout.
+	a.cfg.PendingExits.Add("ollama", proc)
 	if proc == nil {
 		return nil
 	}

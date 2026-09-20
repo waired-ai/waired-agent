@@ -36,6 +36,18 @@ type fakeProcess struct {
 	// killNoExit makes Kill report success while the process stays
 	// alive, modelling a child the OS refuses to reap (#316).
 	killNoExit bool
+	// holdTree keeps the process tree alive after the process itself has
+	// exited: a runner still inside a driver call after its server was
+	// killed (waired-ai/waired-agent#1443). treeProbes counts TreeAlive calls.
+	holdTree   atomic.Bool
+	treeProbes atomic.Int32
+}
+
+// TreeAlive reports the tree the test holds open, independent of Done:
+// the process tree outliving its leader is exactly the case it exists for.
+func (p *fakeProcess) TreeAlive() (bool, error) {
+	p.treeProbes.Add(1)
+	return p.holdTree.Load(), nil
 }
 
 func newFakeProcess() *fakeProcess {

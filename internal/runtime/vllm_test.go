@@ -907,3 +907,60 @@ func TestVLLMAdapter_EngineLog_RotatesAtCap(t *testing.T) {
 		t.Errorf("engine.log = %d bytes after rotation, want a fresh small file", fi.Size())
 	}
 }
+
+// PRODUCT CONTRACT (waired-ai/waired-agent#1443): a vLLM start waits for
+// the processes of an engine retired before it — here an ollama engine
+// whose runner is still exiting, recorded in the host-wide PendingExits a
+// fresh VLLMAdapter is handed on every bootstrap.
+func TestVLLMAdapter_EnsureRunning_WaitsForAnotherEnginesTree(t *testing.T) {
+	exits := NewPendingExits(time.Minute, time.Millisecond)
+	ollama, ollamaSpawner := treeWaitAdapter(t, exits)
+	old := startAndRetireHeld(t, ollama, ollamaSpawner)
+
+	server := newVLLMFakeServer("qwen3-32b-instruct")
+	defer server.srv.Close()
+	server.healthy.Store(true)
+	host, port := server.hostPort(t)
+	spawner := &fakeSpawner{}
+	a := NewVLLMAdapter(VLLMConfig{
+		Python:          "/venv/bin/python",
+		Host:            host,
+		Port:            port,
+		Model:           "/models/qwen3-32b/awq",
+		ServedModelName: "qwen3-32b-instruct",
+		MaxModelLen:     8192,
+		Spawner:         spawner,
+		HTTPClient:      vllmHTTPClient(),
+		HealthInterval:  10 * time.Millisecond,
+		HealthSuccess:   1,
+		StopTimeout:     50 * time.Millisecond,
+		PendingExits:    exits,
+	})
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+
+	done := make(chan error, 1)
+	go func() { done <- a.EnsureRunning(context.Background()) }()
+	time.Sleep(50 * time.Millisecond)
+	if n := spawner.spawnCount(); n != 0 {
+		t.Fatalf("vLLM spawned %d times beside ollama's stuck runner, want 0", n)
+	}
+	old.holdTree.Store(false)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("EnsureRunning: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("vLLM did not start after the runner exited")
+	}
+	// And a retired vLLM child is recorded for the next start.
+	retired := spawner.lastProcess()
+	retired.holdTree.Store(true)
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if n := exits.pending(); n != 1 {
+		t.Errorf("recorded = %d after stopping vLLM, want 1", n)
+	}
+	retired.holdTree.Store(false)
+}

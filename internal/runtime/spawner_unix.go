@@ -4,10 +4,13 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -55,6 +58,10 @@ type osProcess struct {
 	cmd      *exec.Cmd
 	done     chan struct{}
 	errStore atomicErr
+	// treeGone latches the first observation that the process group is
+	// empty. After that the group id is free, and a later probe could find
+	// an unrelated group that happens to have been given the same id.
+	treeGone atomic.Bool
 }
 
 type atomicErr struct {
@@ -84,7 +91,9 @@ func (p *osProcess) Err() error            { return p.errStore.Load() }
 // Falls back to per-process signal if the syscall fails (e.g. process
 // already exited and pgid is reaped).
 func (p *osProcess) Signal(s os.Signal) error {
-	if sig, ok := s.(syscall.Signal); ok {
+	// Once TreeAlive has seen the group empty its id is free for reuse,
+	// and a broadcast could reach an unrelated group.
+	if sig, ok := s.(syscall.Signal); ok && !p.treeGone.Load() {
 		if err := syscall.Kill(-p.cmd.Process.Pid, sig); err == nil {
 			return nil
 		}
@@ -96,8 +105,39 @@ func (p *osProcess) Signal(s os.Signal) error {
 // Signal does — orphan vLLM workers otherwise survive the leader's
 // death and keep VRAM pinned.
 func (p *osProcess) Kill() error {
+	if p.treeGone.Load() {
+		return nil // nothing left, and the group id may belong to someone else
+	}
 	if err := syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL); err == nil {
 		return nil
 	}
 	return p.cmd.Process.Kill()
+}
+
+// TreeAlive reports whether any member of the child's process group is
+// still running. DefaultSpawner sets Setpgid, so the group id is the
+// child's pid, and ollama's runners and vLLM's workers join it — neither
+// engine moves its children to a group of their own (ollama v0.34.0
+// llm/llm_linux.go and llm_darwin.go set no Setpgid; vLLM's
+// multiprocessing workers inherit the group).
+//
+// Signal 0 probes without delivering anything: ESRCH means no process is
+// left in the group, and EPERM means one exists that this process may not
+// signal. When the probe finds members, the group is listed to discount
+// the ones that have exited but were never reaped (see processTreeFacts);
+// treeAliveFrom makes the call.
+func (p *osProcess) TreeAlive() (bool, error) {
+	if p.treeGone.Load() {
+		return false, nil
+	}
+	pgid := p.cmd.Process.Pid
+	f := processTreeFacts{GroupProbeErr: syscall.Kill(-pgid, 0)}
+	if f.GroupProbeErr == nil || errors.Is(f.GroupProbeErr, syscall.EPERM) {
+		f.Members, f.MembersErr = groupMembers(pgid)
+	}
+	alive, err := treeAliveFrom(runtime.GOOS, f)
+	if err == nil && !alive {
+		p.treeGone.Store(true)
+	}
+	return alive, err
 }

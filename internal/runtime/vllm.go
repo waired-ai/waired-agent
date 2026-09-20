@@ -209,6 +209,12 @@ type VLLMConfig struct {
 	// StopTimeout defaults to 10s (process-group SIGTERM gives vLLM
 	// a chance to release CUDA contexts before SIGKILL).
 	StopTimeout time.Duration
+	// PendingExits: as OllamaConfig. A start waits for a retired engine's
+	// processes — vLLM's EngineCore and workers, or ollama's runners — to
+	// exit before it spawns (waired-ai/waired-agent#1443). This adapter is
+	// rebuilt on every bootstrap, so the provider's shared instance must be
+	// passed in; nil gives a private one.
+	PendingExits *PendingExits
 }
 
 // VLLMAdapter is a single-subprocess vLLM engine that exposes vLLM's
@@ -307,6 +313,9 @@ func NewVLLMAdapter(cfg VLLMConfig) *VLLMAdapter {
 	}
 	if cfg.StopTimeout <= 0 {
 		cfg.StopTimeout = DefaultVLLMStopTimeout
+	}
+	if cfg.PendingExits == nil {
+		cfg.PendingExits = NewPendingExits(0, 0)
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: 3 * time.Second}
@@ -424,6 +433,15 @@ func (a *VLLMAdapter) runStart(ctx context.Context, cancel context.CancelFunc, d
 func (a *VLLMAdapter) ensureRunningLeader(ctx context.Context) error {
 	// A Stop that landed while this start was being set up (#947).
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Never spawn beside a previous engine's processes: vLLM claims its
+	// share of the GPU at startup, and old workers or runners still hold
+	// theirs (waired-ai/waired-agent#1443).
+	if err := a.cfg.PendingExits.Wait(ctx); err != nil {
+		if ctx.Err() == nil {
+			a.setState(Health{State: StateFailed, LastErr: err.Error()})
+		}
 		return err
 	}
 	args := a.commandArgs()
@@ -883,6 +901,7 @@ func (a *VLLMAdapter) stopProcess(ctx context.Context) error {
 	// deliberate stop too, and superviseChild must not report that as a crash.
 	a.procGen++
 	a.mu.Unlock()
+	a.cfg.PendingExits.Add("vllm", proc)
 	if proc == nil {
 		return nil
 	}

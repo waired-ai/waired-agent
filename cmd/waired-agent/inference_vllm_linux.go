@@ -596,6 +596,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		KVOffloadingGiB:           kvOffloadGiB,
 		LogDir:                    logDir,
 		Spawner:                   infruntime.DefaultSpawner{},
+		PendingExits:              p.engineExits,
 		// The operator's hard stop (#881). Read live, and read by the
 		// adapter itself, so request traffic through the gateway cannot
 		// revive an engine that was stopped to free VRAM — and so a park

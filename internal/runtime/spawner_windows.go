@@ -4,12 +4,12 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,11 +17,19 @@ import (
 
 // DefaultSpawner runs commands via os/exec and assigns each child to a
 // Windows Job Object configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
-// Closing the job handle (on Kill or process exit) terminates every
-// process descended from the child — Windows' only reliable equivalent
-// of "signal the process group". The kernel reaps grandchildren even
-// if the immediate child was killed first, which is what we need for
-// Ollama (it spawns model-runner subprocesses that hold GPU memory).
+// Kill terminates every process in the job — Windows' only reliable
+// equivalent of "signal the process group". The kernel reaches
+// grandchildren even if the immediate child was killed first, which is
+// what we need for Ollama (it spawns model-runner subprocesses that hold
+// GPU memory).
+//
+// The job is NOT ended by the child exiting on its own. If ollama serve
+// crashes, its runners stay alive in the job until something calls Kill,
+// which the adapter does when it reaps the dead child before a respawn.
+// The handle stays open after Kill until TreeAlive has seen the job
+// empty, because the handle is the only way to ask
+// (waired-ai/waired-agent#1443). If waired-agent itself exits, the OS
+// closes the handle and KILL_ON_JOB_CLOSE ends whatever is left.
 //
 // The child inherits waired-agent's cwd. The working-directory override
 // went with the bundled coding agent (waired-agent#333); every engine
@@ -53,8 +61,8 @@ func (s DefaultSpawner) Spawn(ctx context.Context, binary string, args, env []st
 	// The context bounds only the START, never the child's lifetime (#947).
 	// exec.CommandContext would bind the two: its cancel is Process.Kill(),
 	// which terminates the immediate child only — the Job Object below is
-	// what reaps the descendants holding GPU memory, and it is closed by
-	// Kill or by the process exiting, not by a caller's context.
+	// what reaps the descendants holding GPU memory, and it is terminated
+	// by Kill, not by a caller's context.
 	_ = ctx
 	cmd := exec.Command(binary, args...)
 	cmd.Env = env
@@ -97,12 +105,38 @@ func (s DefaultSpawner) Spawn(ctx context.Context, binary string, args, env []st
 }
 
 type osProcess struct {
-	cmd       *exec.Cmd
+	cmd      *exec.Cmd
+	done     chan struct{}
+	errStore atomicErr
+
+	// jobMu guards the three fields below. The handle is closed exactly
+	// once: by TreeAlive when it sees the job empty, or by Kill when
+	// terminating the job failed and closing the handle is the fallback.
+	jobMu     sync.Mutex
 	job       windows.Handle
-	jobClosed atomic.Bool
-	done      chan struct{}
-	errStore  atomicErr
+	jobClosed bool
+	// treeGone records that TreeAlive saw the job empty. Only then is a
+	// closed handle an answer rather than a lost question.
+	treeGone bool
 }
+
+// jobBasicAccounting is JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, which
+// golang.org/x/sys/windows does not define. The four times are
+// LARGE_INTEGERs.
+type jobBasicAccounting struct {
+	TotalUserTime             int64
+	TotalKernelTime           int64
+	ThisPeriodTotalUserTime   int64
+	ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount       uint32
+	TotalProcesses            uint32
+	ActiveProcesses           uint32
+	TotalTerminatedProcesses  uint32
+}
+
+// errJobHandleClosed is TreeAlive's answer when the handle was closed by
+// Kill's fallback before anything saw the job empty.
+var errJobHandleClosed = errors.New("runtime: job handle already closed; the process tree cannot be observed")
 
 type atomicErr struct {
 	mu  sync.Mutex
@@ -131,8 +165,8 @@ func (p *osProcess) Err() error            { return p.errStore.Load() }
 // that could never come, and the tray's shorter budget always won that
 // race — the stop was cancelled before it ever reached the Kill
 // escalation, so the engine kept its VRAM while status reported it
-// stopped. With the sentinel, Stop escalates immediately and Kill closes
-// the Job Object, reaping the whole tree.
+// stopped. With the sentinel, Stop escalates immediately and Kill
+// terminates the Job Object, reaching the whole tree.
 //
 // Engine-specific graceful shutdown (e.g. Ollama's POST /api/shutdown)
 // remains the adapter's responsibility on Windows, not the spawner's; see
@@ -143,17 +177,64 @@ func (p *osProcess) Signal(_ os.Signal) error {
 	return ErrSignalUnsupported
 }
 
-// Kill terminates the entire job (child + every descendant) by closing
-// the Job Object handle. Idempotent — repeated calls after the first
-// CloseHandle no-op.
+// Kill terminates every process in the job (child + every descendant)
+// with TerminateJobObject. The handle stays open so TreeAlive can tell
+// when the processes are actually gone: TerminateJobObject only starts the
+// termination, and a process whose thread is inside a driver call does not
+// finish exiting until the call returns (waired-ai/waired-agent#1443).
+// Idempotent, and a no-op once the tree is gone.
 func (p *osProcess) Kill() error {
-	if p.jobClosed.CompareAndSwap(false, true) {
-		if err := windows.CloseHandle(p.job); err != nil {
-			// Fall back to a direct TerminateProcess on the leader
-			// only — orphaned grandchildren are accepted as a
-			// pathological case (Job handle close should never fail).
-			return p.cmd.Process.Kill()
+	p.jobMu.Lock()
+	defer p.jobMu.Unlock()
+	if p.jobClosed {
+		return nil
+	}
+	if err := windows.TerminateJobObject(p.job, 1); err != nil {
+		// Closing the handle ends the job too (KILL_ON_JOB_CLOSE), but
+		// leaves nothing to ask afterwards; TreeAlive then reports an
+		// error, which callers treat as "nothing left to wait for". The
+		// leader is killed directly as well, as before this change.
+		p.closeJobLocked()
+		if kerr := p.cmd.Process.Kill(); kerr != nil && !errors.Is(kerr, os.ErrProcessDone) {
+			return fmt.Errorf("runtime: TerminateJobObject: %w; TerminateProcess: %v", err, kerr)
 		}
 	}
 	return nil
+}
+
+// TreeAlive reports whether any process is still in the job. The first
+// time it sees the job empty it closes the handle, so a job whose
+// processes have all exited does not hold a handle for the rest of the
+// agent's life.
+func (p *osProcess) TreeAlive() (bool, error) {
+	p.jobMu.Lock()
+	defer p.jobMu.Unlock()
+	if p.treeGone {
+		return false, nil
+	}
+	if p.jobClosed {
+		return false, errJobHandleClosed
+	}
+	var info jobBasicAccounting
+	f := processTreeFacts{}
+	if err := windows.QueryInformationJobObject(p.job,
+		windows.JobObjectBasicAccountingInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil); err != nil {
+		f.JobQueryErr = fmt.Errorf("runtime: QueryInformationJobObject: %w", err)
+	}
+	f.JobActive = info.ActiveProcesses
+	alive, err := treeAliveFrom("windows", f)
+	if err != nil || alive {
+		return alive, err
+	}
+	p.treeGone = true
+	p.closeJobLocked()
+	return false, nil
+}
+
+func (p *osProcess) closeJobLocked() {
+	if !p.jobClosed {
+		_ = windows.CloseHandle(p.job)
+		p.jobClosed = true
+	}
 }
