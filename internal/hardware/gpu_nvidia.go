@@ -105,7 +105,7 @@ type nvidiaFallbackResult struct {
 func detectNvidia(ctx context.Context) ([]GPU, Accelerators, error) {
 	smi := nvidiaSMIProbe(ctx)
 	if smi.Ran {
-		return smi.GPUs, Accelerators{CUDA: len(smi.GPUs) > 0}, nil
+		return nvidiaFromSMI(smi.GPUs)
 	}
 	return classifyNvidia(smi, nvidiaFallback(ctx))
 }
@@ -119,7 +119,7 @@ func detectNvidia(ctx context.Context) ([]GPU, Accelerators, error) {
 // without a GPU, which is what no test could reach before (#67).
 func classifyNvidia(smi nvidiaSMIResult, fb nvidiaFallbackResult) ([]GPU, Accelerators, error) {
 	if smi.Ran {
-		return smi.GPUs, Accelerators{CUDA: len(smi.GPUs) > 0}, nil
+		return nvidiaFromSMI(smi.GPUs)
 	}
 	switch {
 	case len(fb.GPUs) > 0:
@@ -328,29 +328,36 @@ func parseNvidiaSMICSV(s string, want int) ([]GPU, error) {
 		for j := range fields {
 			fields[j] = strings.TrimSpace(fields[j])
 		}
-		mb, err := strconv.Atoi(fields[1])
-		if err != nil {
-			return nil, fmt.Errorf("line %d: memory.total = %q: %w", i+1, fields[1], err)
+		// memory.total, MiB under `nounits`. A device that will not
+		// report it keeps its entry with 0, which reads downstream as
+		// "no VRAM budget"; losing the DEVICE over a figure it declined
+		// to give is the #67 direction, and it is not hypothetical —
+		// see nvidiaSMIUnavailable.
+		mb := 0
+		if !nvidiaSMIUnavailable(fields[1]) {
+			parsed, err := strconv.Atoi(fields[1])
+			if err != nil {
+				return nil, fmt.Errorf("line %d: memory.total = %q: %w", i+1, fields[1], err)
+			}
+			mb = parsed
 		}
 		gpu := GPU{
 			Vendor:        "nvidia",
-			Model:         fields[0],
+			Model:         nvidiaSMIString(fields[0]),
 			VRAMTotalMB:   mb,
-			DriverVersion: fields[2],
+			DriverVersion: nvidiaSMIString(fields[2]),
 		}
 		if want >= 5 {
-			gpu.ComputeCap = fields[3]
-			gpu.UUID = fields[4]
+			gpu.ComputeCap = nvidiaSMIString(fields[3])
+			gpu.UUID = nvidiaSMIString(fields[4])
 		}
 		if want >= 6 {
-			// memory.free, MiB under `nounits` like memory.total. A
-			// value that will not parse leaves the field 0 rather than
-			// failing the whole query: an unreadable free figure means
-			// "budget unknown" downstream, which falls back to the
-			// total, and losing the DEVICE over it would be the #67
-			// direction (waired-agent#69).
-			if free, err := strconv.Atoi(fields[5]); err == nil {
-				gpu.VRAMFreeMB = free
+			// memory.free, MiB like memory.total. Tolerated the same
+			// way, and for the same reason (waired-agent#69).
+			if !nvidiaSMIUnavailable(fields[5]) {
+				if free, err := strconv.Atoi(fields[5]); err == nil {
+					gpu.VRAMFreeMB = free
+				}
 			}
 		}
 		out = append(out, gpu)
@@ -369,4 +376,62 @@ func parseNvidiaSMICSV(s string, want int) ([]GPU, error) {
 func NVIDIADriverPresent(ctx context.Context) bool {
 	gpus, accel, _ := detectNvidia(ctx)
 	return accel.CUDA || len(gpus) > 0
+}
+
+// nvidiaSMIUnavailable reports whether a CSV field is nvidia-smi saying
+// it would not answer, rather than a value.
+//
+// WHY THIS IS NOT A PARSE FAILURE. The manual says "some devices and/or
+// environments don't support all possible information, and any
+// unsupported data is indicated by a N/A in the output" — so an
+// unanswerable field is part of the format, not a malformed line. Under
+// --format=csv the sentinel is bracketed ("[N/A]", "[Not Supported]",
+// "[Insufficient Permissions]"), which is a SHAPE rather than a list,
+// and matching the shape avoids guessing an exhaustive set of wordings.
+// Anything else non-numeric is still an error: a garbled figure is not
+// the driver declining to give one.
+//
+// THE CASE THAT FORCED IT. On a unified-memory NVIDIA part the memory
+// columns have nothing to report, because there is no separate
+// framebuffer: a GB10 (DGX Spark) answers "[N/A]" to both memory.total
+// and memory.free. Treating that as a parse failure took down the whole
+// query — including the retry, which asks for memory.total too — so the
+// host fell through to the /proc/driver/nvidia/gpus fallback, which can
+// only say that a driver is loaded. The result was a 128 GB machine
+// reporting no VRAM figure, no compute capability, no driver version
+// and no device name (waired-agent#459).
+func nvidiaSMIUnavailable(field string) bool {
+	if strings.EqualFold(field, "N/A") {
+		return true
+	}
+	return len(field) >= 2 && strings.HasPrefix(field, "[") && strings.HasSuffix(field, "]")
+}
+
+// nvidiaSMIString blanks a text field the driver would not answer, so
+// "[N/A]" never reaches a consumer as if it were a device name or a
+// compute capability.
+func nvidiaSMIString(field string) string {
+	if nvidiaSMIUnavailable(field) {
+		return ""
+	}
+	return field
+}
+
+// nvidiaFromSMI is the answer when nvidia-smi ran.
+//
+// It carries a soft warning when a device answered without a memory
+// total, on the same "data + warning" contract the fallback path uses:
+// the device is real and worth keeping, and something downstream is
+// about to size a budget from a figure that is missing. Before this,
+// that case could not arise — a missing figure failed the parse — and
+// the silence would now be the wrong answer.
+func nvidiaFromSMI(gpus []GPU) ([]GPU, Accelerators, error) {
+	accel := Accelerators{CUDA: len(gpus) > 0}
+	w := nvidiaVRAMWarning(gpus)
+	if w == "" {
+		return gpus, accel, nil
+	}
+	return gpus, accel, fmt.Errorf(
+		"gpu(nvidia): nvidia-smi answered but reported no memory total for some device(s) — "+
+			"a unified-memory part (GB10 / Grace / Jetson) has no separate framebuffer to report%s", w)
 }
