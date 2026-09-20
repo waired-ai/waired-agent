@@ -178,3 +178,66 @@ func TestProjectModelFrom_PricesTheChosenWindow(t *testing.T) {
 		t.Errorf("model with no scaling, asked for 1M: PricedWindow = %d, want %d", got.PricedWindow, hostfit.ServingWindow200k)
 	}
 }
+
+// TestReachesWindow is the grey-out predicate. The owner's ruling of
+// 2026-09-20 on waired-ai/waired#1359 is that picking the long window must
+// leave the models that cannot serve it visible but unselectable, with the
+// reason — so every surface has to grey the same rows, which means one
+// predicate and not four.
+func TestReachesWindow(t *testing.T) {
+	scaled := catalog.Manifest{ContextLength: 262144,
+		RopeScaling: &catalog.RopeScaling{Type: catalog.RopeScalingYaRN, Factor: 4, OriginalContextLength: 262144}}
+	plain := catalog.Manifest{ContextLength: 262144}
+	small := catalog.Manifest{ContextLength: 32768}
+
+	for _, tc := range []struct {
+		name   string
+		m      catalog.Manifest
+		window int
+		want   bool
+	}{
+		{"no window asked", plain, 0, true},
+		{"coding window, plain model", plain, hostfit.ServingWindow200k, true},
+		{"coding window, scaled model", scaled, hostfit.ServingWindow200k, true},
+		{"long window, plain model", plain, hostfit.ServingWindow1M, false},
+		{"long window, scaled model", scaled, hostfit.ServingWindow1M, true},
+		{"coding window, internal 32k model", small, hostfit.ServingWindow200k, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hostfit.ReachesWindow(tc.m, tc.window); got != tc.want {
+				t.Errorf("ReachesWindow(%d) = %v, want %v", tc.window, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReachesWindow_Catalog counts what a person sees when they pick the long
+// window: the shipped models divide, and that division is the point of the
+// ruling. Nine reach it through their publishers' scaling; the two small Qwens
+// and the CI-only model do not.
+func TestReachesWindow_Catalog(t *testing.T) {
+	manifests, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reach, greyed []string
+	for _, m := range manifests {
+		if hostfit.ReachesWindow(m, hostfit.ServingWindow1M) {
+			reach = append(reach, m.ModelID)
+		} else {
+			greyed = append(greyed, m.ModelID)
+		}
+		// Every shipped model still reaches the coding window; that is the
+		// catalog admission rule (#1400) and the long window must not have
+		// disturbed it.
+		if !hostfit.ReachesWindow(m, hostfit.ServingWindow200k) && m.InternalOnly == "" {
+			t.Errorf("%s no longer reaches the coding window", m.ModelID)
+		}
+	}
+	if len(reach) != 9 {
+		t.Errorf("%d models reach the long window, want 9: %v", len(reach), reach)
+	}
+	if len(greyed) != 3 {
+		t.Errorf("%d models are greyed at the long window, want 3: %v", len(greyed), greyed)
+	}
+}

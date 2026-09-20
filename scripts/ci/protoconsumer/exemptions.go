@@ -382,6 +382,8 @@ var producerPending = []exemption{
 		"the serving window a person chose; the serve tuning writes it with the agent half of waired-ai/waired#1456"},
 	{reflect.TypeFor[hostfit.ModelProjection](), "Window",
 		"the window a catalog row is priced at; the pickers write it with the agent half of waired-ai/waired#1456"},
+	{reflect.TypeFor[modelrank.PickInput](), "Window",
+		"the window a ranking is for; the pickers write it once the two windows are ranked separately (owner ruling 2026-09-20 on waired-ai/waired#1359)"},
 	// waired-agent#69. The contract had to land alone
 	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2),
 	// and there is nothing to publish from yet: hardware.GPU has no
