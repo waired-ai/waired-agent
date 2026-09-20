@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // PRODUCT CONTRACT (waired-agent#753): the three answers are three
@@ -166,12 +168,60 @@ func TestFormatModelsUseErrorWithoutAServingModel(t *testing.T) {
 // rather than as an error.
 func TestModelsUseRequestBody(t *testing.T) {
 	var req struct {
-		ModelID string `json:"model_id"`
+		ModelID       string `json:"model_id"`
+		ContextWindow int    `json:"context_window"`
 	}
-	if err := json.Unmarshal(mustMarshalPreferredModel("qwen3.5-4b"), &req); err != nil {
+	if err := json.Unmarshal(mustMarshalPreferredModel("qwen3.5-4b", 0), &req); err != nil {
 		t.Fatalf("the daemon could not parse what we send: %v", err)
 	}
 	if req.ModelID != "qwen3.5-4b" {
 		t.Errorf("model_id = %q, want the model asked for", req.ModelID)
+	}
+	// The coding window is omitted rather than sent as a number, so a daemon
+	// that predates the field reads exactly the body it always read.
+	if req.ContextWindow != 0 {
+		t.Errorf("context_window = %d, want it absent for the coding window", req.ContextWindow)
+	}
+
+	if err := json.Unmarshal(mustMarshalPreferredModel("qwen3.5-4b", hostfit.ServingWindow1M), &req); err != nil {
+		t.Fatalf("the long window body does not parse: %v", err)
+	}
+	if req.ContextWindow != hostfit.ServingWindow1M {
+		t.Errorf("context_window = %d, want %d", req.ContextWindow, hostfit.ServingWindow1M)
+	}
+}
+
+func TestParseWindowFlag(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want int
+		ok   bool
+	}{
+		// 0, not 200704: the coding window is 0 wherever this value goes,
+		// and an omitted field keeps the request byte-identical for a daemon
+		// that predates the choice.
+		{"", 0, true},
+		{"200k", 0, true},
+		{"200K", 0, true},
+		{"1m", hostfit.ServingWindow1M, true},
+		{"1M", hostfit.ServingWindow1M, true},
+		{" 1m ", hostfit.ServingWindow1M, true},
+		// Not a silent fall back to the coding window: someone who typed a
+		// window meant one, and serving the other without saying so is the
+		// failure the window contract exists to remove.
+		{"1000000", 0, false},
+		{"200704", 0, false},
+		{"big", 0, false},
+	} {
+		got, err := parseWindowFlag(tc.in)
+		if tc.ok && err != nil {
+			t.Errorf("parseWindowFlag(%q): %v", tc.in, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("parseWindowFlag(%q) accepted it", tc.in)
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("parseWindowFlag(%q) = %d, want %d", tc.in, got, tc.want)
+		}
 	}
 }
