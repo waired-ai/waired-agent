@@ -27,6 +27,7 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 | **⚠ Ollama is not running the version Waired pins** | ここでリクエストに答えている推論エンジンが、このビルドのWairedが想定するバージョンではありません。自分でインストールしたものか、古いWairedが残したものであることが普通です。 | 本文に、戻すためのコマンドが示されます。 |
 | **⬆ Ollama sized this model for this computer** | 問題ではありません。推論エンジンが意図的に調整を行いました。たとえば、速度を少し犠牲にして長いコンテキストウィンドウを保つ、といった調整です。 | 何もしません。調整が見えるようにするための行です。 |
 | **⚠ Ollama is serving a configuration this computer could not hold** | 推論エンジンはこのパソコンに合わせて調整されましたが、それを維持できませんでした。モデルがシステムRAMにあふれたか、GPUの容量が足りなくなったか、推論エンジンがGPUをまったく使いませんでした。答えが遅くなるか、リクエストが失敗することがあります。 | 本文にどちらかが示されます。通常は小さいモデルに切り替えます。[モデルを変更する](/ja/guides/choose-a-model/)を参照してください。 |
+| **⬆ Context window: 1M, extended past the model's trained length** | 問題ではありません。このパソコンは1Mのコンテキストウィンドウで配信しており、モデルを学習時の長さより先まで広げて動かしています。この拡張はすべてのリクエストにかかるため、短い入力の応答にも影響する可能性があります。 | 何もしません。この調整が見えるようにするための行です。戻すには、モデルを選んだ場所で200Kのコンテキストウィンドウを選びます。 |
 | **⚠ Ollama is running but not answering** | 推論エンジンのプロセスは動いていますが、自身のヘルスチェックに答えていません。自分のほかのパソコンはこれに気づき、ここへ処理を送るのをやめています。 | 推論エンジンを再起動します。`waired inference engine stop`のあと`start`を実行します。 |
 
 上の行の推論エンジンの名前は、このパソコンが動かしているものです。vLLMを使うLinuxのパソコンでは、行に**vLLM**と表示されます。

@@ -116,6 +116,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Mode = string(s.ollama.Mode())
 		tuning := s.ollama.AppliedTuning()
 		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
+		out.ServedWindow = tuning.ContextLength
 		return out
 	}
 	out.Engine = s.provider.servingEngine()
@@ -127,6 +128,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		}); ok {
 			tuning := tuner.AppliedTuning()
 			out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
+			out.ServedWindow = tuning.ContextLength
 		}
 		// nil in unit tests that build a bare provider; production always
 		// has one. An unknown version reports none rather than ollama's.
@@ -143,6 +145,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Mode = string(s.ollama.Mode())
 		tuning := s.ollama.AppliedTuning()
 		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
+		out.ServedWindow = tuning.ContextLength
 	}
 	return out
 }
@@ -169,6 +172,11 @@ type engineProvenance struct {
 	// FailureReason is the first line of why the serving engine is not
 	// running, empty when it is. See servingFailureReason.
 	FailureReason string
+	// ServedWindow is the context window the engine was tuned for. It is
+	// here so a surface can say a computer is serving the long one, which
+	// is a standing fact about it rather than an event
+	// (waired-ai/waired#1456). 0 when nothing has been tuned.
+	ServedWindow int
 }
 
 // servingFailureReason is why the engine this host serves with is not
