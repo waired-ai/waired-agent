@@ -56,18 +56,25 @@ import (
 //   - NVIDIA does not. CPU.Model is EMPTY on aarch64 Linux — /proc/cpuinfo
 //     has no "model name" line there at all, which is exactly the case a
 //     Grace or GB10 host is — so the identity has to come from the GPU
-//     side, and the only structured field there is ComputeCap. That is
-//     an ARCHITECTURE, not a part: an RTX PRO 4000 Blackwell and an RTX
-//     5090 both report 12.0 while their memory bandwidth differs by
-//     nearly 3x.
-//
-// GPU.Model would name the NVIDIA part, and is deliberately not used:
-// its own doc says "free-form; do not parse", and #251 recorded choosing
-// CPU.Model over it for this exact class of decision. Encoding capacity
-// in the name to compensate would reintroduce what this key exists to
-// remove. The cover for the gap belongs at import instead, where the
-// record's own numbers — VRAM, bandwidth — can be held against the ones
-// already in the store; a label cannot check itself.
+//     side. For a DISCRETE part the only structured field there is
+//     ComputeCap, and that is an ARCHITECTURE rather than a part: an RTX
+//     PRO 4000 Blackwell and an RTX 5090 both report 12.0 while their
+//     memory bandwidth differs by nearly 3x. That coarseness is known
+//     and accepted; the cover for it belongs at import, where the
+//     record's own numbers — VRAM, bandwidth — can be held against the
+//     ones already in the store, because a label cannot check itself.
+//   - NVIDIA's SINGLE-POOL parts are named from the device string
+//     instead, through the table in nvidia_unified.go. This reverses,
+//     for those parts only, the "GPU.Model is deliberately not used"
+//     position this comment used to hold outright. Compute capability
+//     genuinely cannot separate them — 12.1 is both the GB10 (128 GB at
+//     273 GB/s) and the RTX Spark N1X (~45 GiB) — so keying on it would
+//     reintroduce for NVIDIA exactly the two-machines-one-name defect
+//     the L4 example above exists to condemn. The "free-form; do not
+//     parse" rule binds consumers of the published summary; this is the
+//     producer turning a string into the facts it publishes, which is
+//     the carve-out #251 already relied on to key the bandwidth table
+//     off CPU.Model.
 
 // HostTopology values. Three, closed, and derived — never typed.
 const (
@@ -110,9 +117,12 @@ var amdGraphicsSuffix = regexp.MustCompile(`\s+w/\s+.*$`)
 // structured facts support. Empty is never returned; see
 // chipSlugUnknown.
 //
-// vendor is the lowercase GPU vendor token (hardware.GPU.Vendor).
-func ChipSlug(vendor, cpuModel, computeCap string) string {
-	switch strings.ToLower(strings.TrimSpace(vendor)) {
+// It takes the device rather than three loose strings because it now
+// reads three of its fields, and four positional strings of the same
+// type is an argument order waiting to be transposed silently.
+func ChipSlug(gpu GPU, cpuModel string) string {
+	computeCap, gpuModel := gpu.ComputeCap, gpu.Model
+	switch strings.ToLower(strings.TrimSpace(gpu.Vendor)) {
 	case "apple":
 		// "Apple M4 Max" -> "m4-max". The vendor is already the second
 		// component of the key, so repeating it in the third would spell
@@ -125,9 +135,24 @@ func ChipSlug(vendor, cpuModel, computeCap string) string {
 		m := amdGraphicsSuffix.ReplaceAllString(normalizeChipName(cpuModel), "")
 		return slugOrUnknown(strings.TrimPrefix(m, "amd "))
 	case "nvidia":
+		// A named single-pool part first. Compute capability is an
+		// ARCHITECTURE, not a part, and for these it is not even one
+		// part per capability: 12.1 covers both the GB10 (DGX Spark,
+		// 128 GB at 273 GB/s) and the RTX Spark N1X (a ~45 GiB pool).
+		// Folding two machines under one provenance key is the defect
+		// waired-agent#1455 removed for the discrete parts — an L4 and
+		// an RTX PRO 4000 Blackwell were both "nvidia-24gb-discrete",
+		// 2.24x apart on bandwidth — and it must not be reintroduced
+		// here. nvidia_unified.go says why the name is the only thing
+		// that separates them.
+		if p, ok := nvidiaUnifiedPartFor(gpuModel); ok {
+			return p.slug
+		}
 		// "12.1" -> "sm121". The "sm_" prefix is NVIDIA's own spelling
 		// for a compute capability as a target (sm_121), which is what
 		// makes it readable as an architecture rather than a version.
+		// It remains the answer for discrete parts, where the same
+		// coarseness is a known and accepted limitation (#1455).
 		if digits := nonSlugChars.ReplaceAllString(computeCap, ""); digits != "" {
 			return "sm" + digits
 		}
@@ -193,7 +218,7 @@ func HostKey(prof *Profile) string {
 	}
 	vendor := slugOrUnknown(normalizeChipName(prof.GPUs[0].Vendor))
 	return topology + "-" + vendor + "-" +
-		ChipSlug(prof.GPUs[0].Vendor, prof.CPU.Model, prof.GPUs[0].ComputeCap)
+		ChipSlug(prof.GPUs[0], prof.CPU.Model)
 }
 
 // hostKeyGrammar is what a derived key looks like: three or more

@@ -130,24 +130,38 @@ func TestUnifiedBandwidthFor(t *testing.T) {
 		name     string
 		unified  bool
 		cpuModel string
+		gpuModel string
 		want     float64
 	}{
-		{"unified apple part", true, "Apple M4 Max", 546},
-		{"unified strix halo", true, "AMD Ryzen AI Max 395", 256},
-		{"unified but unknown part", true, "Apple M9 Ultra", 0},
+		{"unified apple part", true, "Apple M4 Max", "", 546},
+		{"unified strix halo", true, "AMD Ryzen AI Max 395", "", 256},
+		{"unified but unknown part", true, "Apple M9 Ultra", "", 0},
+
+		// NVIDIA is named by the DEVICE, because CPU.Model is empty on
+		// these machines: they are aarch64, and aarch64 Linux has no
+		// "model name" line in /proc/cpuinfo (see nvidia_unified.go).
+		{"GB10 on a host with no CPU string at all", true, "", "NVIDIA GB10", 273},
+		{"a unified NVIDIA part with no published figure", true, "", "NVIDIA N1X", 0},
+		// Substring matching would give a B200 the GB10 figure.
+		{"GB100 is not GB10", true, "", "NVIDIA GB100", 0},
 
 		// The case that matters: a Strix Halo whose iGPU was never
 		// enumerated (Linux without rocm-smi) leaves UnifiedMemory false
 		// and is judged CPU-only. Publishing a 256 GB/s unified figure
 		// there would describe memory the fit rule is not using.
-		{"strix halo whose igpu was not detected", false, "AMD Ryzen AI Max 395", 0},
-		{"discrete host", false, "AMD Ryzen 9 9950X 16-Core Processor", 0},
-		{"apple string on a non-unified host", false, "Apple M4", 0},
+		{"strix halo whose igpu was not detected", false, "AMD Ryzen AI Max 395", "", 0},
+		{"discrete host", false, "AMD Ryzen 9 9950X 16-Core Processor", "", 0},
+		{"apple string on a non-unified host", false, "Apple M4", "", 0},
+		{"a GB10 the UMA hook did not classify", false, "", "NVIDIA GB10", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := unifiedBandwidthFor(tc.unified, tc.cpuModel); got != tc.want {
-				t.Errorf("unifiedBandwidthFor(%v, %q) = %v, want %v",
-					tc.unified, tc.cpuModel, got, tc.want)
+			prof := &Profile{UnifiedMemory: tc.unified, CPU: CPUInfo{Model: tc.cpuModel}}
+			if tc.gpuModel != "" {
+				prof.GPUs = []GPU{{Vendor: "nvidia", Model: tc.gpuModel}}
+			}
+			if got := unifiedBandwidthFor(prof); got != tc.want {
+				t.Errorf("unifiedBandwidthFor(unified=%v cpu=%q gpu=%q) = %v, want %v",
+					tc.unified, tc.cpuModel, tc.gpuModel, got, tc.want)
 			}
 		})
 	}

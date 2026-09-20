@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -110,48 +109,16 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 	return int64(freeBytesAvailable), nil
 }
 
-// defaultUMA on Windows recognises AMD Strix Halo (Ryzen AI Max series)
-// by CPU model substring match and sizes the GPU budget from the
-// OS-visible system RAM, not from the BIOS/VGM carve-out the AMD
-// driver publishes as HardwareInformation.qwMemorySize.
-//
-// The carve-out reading is still collected upstream by
-// gpu_amd_windows.go's readAdapterVRAMMB and still lands on
-// GPUs[0].VRAMTotalMB, because it is the fact that explains this host's
-// behaviour to an operator. It is passed to strixHaloUMA, which ignores
-// it on Windows: a graphics allocation there carries a system-memory
-// backing store of equal size, so a large carve-out does not add memory
-// a model can occupy — it subtracts it. strixHaloUMA's doc carries the
-// measurement (waired-ai/waired-agent#863).
-//
-// The picker treats UnifiedMemory + UsableVRAMMB as a single VRAM
-// budget the GPU can wire down, so a Strix Halo machine without this
-// detector falls back to GPUs[0].VRAMTotalMB — which can be 0 on driver
-// builds that don't expose qwMemorySize — resulting in EffectiveVRAMMB()
-// = 0 and the user being shown "CPU only" despite owning a UMA inference
-// machine. That is why UnifiedMemory is flipped off the CPU model alone
-// here, unlike on Linux where a real GPU reading is required.
+// defaultUMA settles the UMA POLICY for this host. The rule is
+// unifiedBudgetFor, untagged and shared with Linux — including the
+// Windows-specific part, that the firmware carve-out reading is neither
+// the budget nor an addend here (waired-agent#863, decision
+// 20260820/0005). See that function.
 func defaultUMA(_ context.Context, p *Profile) {
-	if !IsStrixHaloAPU(p.CPU.Model) {
+	usable, carveOut, ok := unifiedBudgetFor(runtime.GOOS, p)
+	if !ok {
 		return
 	}
-	var amdVRAMMB int
-	for _, g := range p.GPUs {
-		if strings.EqualFold(g.Vendor, "amd") && g.VRAMTotalMB > 0 {
-			amdVRAMMB = g.VRAMTotalMB
-			break
-		}
-	}
 	p.UnifiedMemory = true
-	// The carve-out comes back 0 on Windows whether or not the registry
-	// read succeeded, and that 0 is load-bearing: hostfit.TotalMemoryMB
-	// adds the carve-out to RAM, and on this platform the carve-out is
-	// not memory a model may occupy in addition to RAM.
-	//
-	// RAMAvailableAtInstallGB is the persisted measurement hostfit reads
-	// as Host.RAMAvailableGB (profiler.go's HostFit does the same), so
-	// the OS deduction strixHaloUMA applies is the one the capacity gate
-	// will apply, not a second opinion.
-	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(
-		runtime.GOOS, amdVRAMMB, p.RAMTotalGB, p.RAMAvailableAtInstallGB)
+	p.UsableVRAMMB, p.CarveOutVRAMMB = usable, carveOut
 }

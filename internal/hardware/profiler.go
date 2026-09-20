@@ -638,8 +638,14 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 	// recorded even on the hosts where the hook declines to act on it,
 	// which is most of them (waired-agent#459).
 	//
-	// Persisted first, live second, so a live reading overrides an old
-	// one rather than the other way round.
+	// Persisted, then the vendor axis, then the live per-OS reading —
+	// oldest evidence first, so each later source may override an
+	// earlier one rather than the other way round. The vendor axis sits
+	// in the middle because what the VENDOR published about a part is
+	// true wherever that part is plugged in, but a reading taken on THIS
+	// machine is better still. It is not injectable: it is untagged and
+	// pure, so a test drives it by naming a device rather than by
+	// swapping it out.
 	for i := range prof.GPUs {
 		got := integration{
 			integrated: prof.GPUs[i].Integrated,
@@ -650,6 +656,7 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 				got = got.merge(integratedKnown(yes))
 			}
 		}
+		got = got.merge(integratedFromVendor(&prof, i))
 		if p.integratedFn != nil {
 			got = got.merge(p.integratedFn(&prof, i))
 		}
@@ -661,13 +668,13 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 	if p.umaFn != nil {
 		p.umaFn(ctx, &prof)
 	}
-	// Then the pool's peak bandwidth, which is a pure function of the two
+	// Then the pool's peak bandwidth, which is a pure function of the
 	// facts the hook just settled. Deliberately here rather than inside
 	// each per-OS hook: the lookup is identical on all three, and three
 	// copies of an identical rule is how the OSes drift apart
 	// (CLAUDE.md §Cross-OS parity). Untagged, so it is reachable from a
 	// test on any host.
-	prof.MemoryBandwidthSpecGBs = unifiedBandwidthFor(prof.UnifiedMemory, prof.CPU.Model)
+	prof.MemoryBandwidthSpecGBs = unifiedBandwidthFor(&prof)
 
 	p.cached = &prof
 	p.cachedAt = now

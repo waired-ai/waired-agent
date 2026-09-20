@@ -12,6 +12,7 @@ func TestChipSlug(t *testing.T) {
 	for _, tc := range []struct {
 		name                         string
 		vendor, cpuModel, computeCap string
+		gpuModel                     string
 		want                         string
 	}{
 		{
@@ -54,6 +55,31 @@ func TestChipSlug(t *testing.T) {
 			want: "unknown",
 		},
 		{
+			name:   "a GB10 names the part, not its architecture",
+			vendor: "nvidia", cpuModel: "", computeCap: "12.1",
+			gpuModel: "NVIDIA GB10",
+			want:     "gb10",
+		},
+		{
+			// The whole reason the device name beats ComputeCap here:
+			// the RTX Spark N1X also reports 12.1 but is a different
+			// machine with a different pool. Until its name is known it
+			// keeps the architecture slug — coarse, but not WRONG the
+			// way sharing "sm121" with a GB10 would be.
+			name:   "a discrete Blackwell keeps the architecture slug",
+			vendor: "nvidia", cpuModel: "", computeCap: "12.0",
+			gpuModel: "NVIDIA GeForce RTX 5090",
+			want:     "sm120",
+		},
+		{
+			// Substring matching would slug a B200 as a GB10. pci.ids:
+			// "2901 GB100 [B200]".
+			name:   "GB100 is not GB10",
+			vendor: "nvidia", cpuModel: "", computeCap: "10.0",
+			gpuModel: "NVIDIA GB100",
+			want:     "sm100",
+		},
+		{
 			name:   "an Intel part falls back to the CPU string",
 			vendor: "intel", cpuModel: "Intel(R) Core(TM) Ultra 9 285H",
 			want: "intel-r-core-tm-ultra-9-285h",
@@ -64,9 +90,10 @@ func TestChipSlug(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ChipSlug(tc.vendor, tc.cpuModel, tc.computeCap); got != tc.want {
-				t.Errorf("ChipSlug(%q, %q, %q) = %q, want %q",
-					tc.vendor, tc.cpuModel, tc.computeCap, got, tc.want)
+			gpu := GPU{Vendor: tc.vendor, Model: tc.gpuModel, ComputeCap: tc.computeCap}
+			if got := ChipSlug(gpu, tc.cpuModel); got != tc.want {
+				t.Errorf("ChipSlug(%+v, %q) = %q, want %q",
+					gpu, tc.cpuModel, got, tc.want)
 			}
 		})
 	}
@@ -129,7 +156,13 @@ func TestHostKey(t *testing.T) {
 			want: "discrete-nvidia-sm120",
 		},
 		{
-			name: "a GB10, which today would need a new row in the old vocabulary",
+			// Inverted from "unified-nvidia-sm121" (the answer when this
+			// test was written, before the part was named): compute
+			// capability 12.1 is NOT one machine. It is both this and
+			// the RTX Spark N1X, whose pool is ~45 GiB rather than
+			// 128 GB, so sm121 would fold two machines under one
+			// provenance key — the defect the two rows above condemn.
+			name: "a GB10, named by the part rather than its architecture",
 			prof: Profile{
 				CPU: CPUInfo{Model: ""}, // aarch64: /proc/cpuinfo has no model name
 				GPUs: []GPU{{
@@ -137,7 +170,7 @@ func TestHostKey(t *testing.T) {
 					Integrated: true, IntegratedKnown: true,
 				}},
 			},
-			want: "unified-nvidia-sm121",
+			want: "unified-nvidia-gb10",
 		},
 		{
 			name: "an Apple Silicon host",

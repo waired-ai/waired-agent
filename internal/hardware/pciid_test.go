@@ -55,8 +55,10 @@ func TestPCIIDFromSysfs(t *testing.T) {
 // the pair rides beside it (waired-agent#1455).
 func TestPCIIDSeparatesPartsTheChipSlugFolds(t *testing.T) {
 	const cap = "12.0"
-	rtxPro4000 := ChipSlug("nvidia", "", cap)
-	rtx5090 := ChipSlug("nvidia", "", cap)
+	rtxPro4000 := ChipSlug(GPU{Vendor: "nvidia",
+		Model: "NVIDIA RTX PRO 4000 Blackwell", ComputeCap: cap}, "")
+	rtx5090 := ChipSlug(GPU{Vendor: "nvidia",
+		Model: "NVIDIA GeForce RTX 5090", ComputeCap: cap}, "")
 	if rtxPro4000 != rtx5090 {
 		t.Fatalf("precondition: both parts report compute capability %s, "+
 			"so the chip slug should fold them together", cap)
