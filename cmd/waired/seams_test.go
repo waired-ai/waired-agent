@@ -75,6 +75,12 @@ func runTests(m *testing.M) int {
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	os.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
+	// CLAUDE_CONFIG_DIR relocates the whole Claude Code config directory, and
+	// since waired-agent#1457 claudecode.SettingsPath honours it. A developer
+	// who has it set in their shell would otherwise run these tests against a
+	// different file than CI does — #386's shape again, and this time against
+	// a directory they use for real work.
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
 	// Under the sealed home, so a test that writes one gets a fresh tree and
 	// nothing lands in the real machine-wide location.
 	restorePath := claudemanaged.SwapPathForTest(

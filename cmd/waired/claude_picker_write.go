@@ -269,6 +269,20 @@ func removeRetiredUserLeftovers(home string) {
 	if _, err := claudecode.RemoveRetiredCacheOwned(claudecode.ClaudeConfigDir(), home); err != nil {
 		fmt.Fprintf(stderr, "Warning: %v\n", err)
 	}
+	// waired-agent#1457: and waired's keys in the settings file this run is
+	// NOT writing. CLAUDE_CONFIG_DIR relocates the config directory, so a
+	// person who sets it after `waired claude enable` leaves rows, a status
+	// line and a default model behind in ~/.claude/settings.json — inert
+	// while the variable is set, and live again the moment they unset it,
+	// pointing at a gateway that is gone.
+	//
+	// Only this direction can be swept: when the variable is unset there is
+	// nowhere to read the directory it used to name.
+	if twin := claudecode.SettingsPathFor("", home); twin != claudecode.SettingsPath(home) {
+		if _, err := claudecode.RemoveWairedSettingsAt(twin); err != nil {
+			fmt.Fprintf(stderr, "Warning: %v\n", err)
+		}
+	}
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return
