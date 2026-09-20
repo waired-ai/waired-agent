@@ -2620,13 +2620,16 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// (waired-ai/waired-agent#846). grantedFor drops it when the target
 		// or the window moved, so an operator switch starts from the
 		// arithmetic again.
-		tune := computeOllamaTuningOpts(tm, tv, hw, kvType, 0, want,
-			ollamaObservedServe{
+		tune := computeOllamaTuningOpts(tm, tv, hw, ollamaTuningOpts{
+			KVCacheType:      kvType,
+			OperatorParallel: want,
+			Observed: ollamaObservedServe{
 				ModelID:       cur.ModelID,
 				VariantID:     cur.VariantID,
 				ContextLength: cur.ContextLength,
 				NumParallel:   cur.ObservedNumParallel,
-			})
+			},
+		})
 		// The third caller of the decision reasons, and until now the one
 		// that had none: a model switched in process (#812) served with no
 		// decision warning at all — including the below-context-floor one —

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -154,6 +155,13 @@ type ollamaTuning struct {
 	// kvBytesPerTokFP16 carries the variant's per-token KV figure so the
 	// verify pass can build size expectations without a catalog re-lookup.
 	kvBytesPerTokFP16 int
+	// ropeScaling is the model's published rope scaling, carried only when
+	// the ContextLength above is a window the model reaches THROUGH it. It
+	// is what Env turns into llama.cpp's own arguments, and it is nil
+	// whenever the served window is one the model was trained for — which
+	// is what keeps static scaling off every short prompt on a host that
+	// serves the coding window (waired-ai/waired#1456).
+	ropeScaling *catalog.RopeScaling
 	// ExpectedSpillFraction is non-zero when the ContextLength was set
 	// to the #624 coding floor DELIBERATELY overshooting the no-spill
 	// window (bounded-spill gate passed): the predicted share of the
@@ -197,7 +205,7 @@ func kvFactorFor(kvType string) float64 {
 // then NOT exported and the engine keeps its own default, which is
 // exactly the pre-#621 behavior. We never guess a window we can't size.
 func computeOllamaTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, observed ollamaObservedServe) ollamaTuning {
-	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0, observed)
+	return computeOllamaTuningOpts(m, v, hw, ollamaTuningOpts{KVCacheType: kvType, Observed: observed})
 }
 
 // recommendedParallel is the VRAM-safe engine-parallelism ceiling: how many
@@ -318,7 +326,33 @@ func finalizeParallel(t *ollamaTuning, operatorParallel, limit int) {
 //
 // The build's own limit (catalog Variant.MaxParallel) bounds all three: the
 // auto-sized count, the recommendation, and the override.
-func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, ceilingCtx, operatorParallel int, observed ollamaObservedServe) (t ollamaTuning) {
+// ollamaTuningOpts carries the inputs beyond the model, the variant and the
+// host. It is a struct because the newest of them is not a fact about the
+// machine but a person's choice, and threading that through a positional
+// list is how the two get confused — the same reason proto/hostfit took
+// OllamaWindowRequest.
+type ollamaTuningOpts struct {
+	// KVCacheType is the OLLAMA_KV_CACHE_TYPE to assume.
+	KVCacheType string
+	// CeilingCtx drops every rung above it: how the verify pass steps a
+	// host DOWN after a window failed to apply. 0 means no cap.
+	CeilingCtx int
+	// ChosenWindow opens a rung instead of closing one:
+	// hostfit.ServingWindow1M when a person asked this computer for the
+	// long window. 0 means nobody asked, which is what every caller
+	// passed before waired-ai/waired#1456.
+	//
+	// It is deliberately not the same field as CeilingCtx. They point
+	// opposite ways, and one number would let a degrade that lowered the
+	// ceiling read as a choice that re-opened the window.
+	ChosenWindow int
+	// OperatorParallel is an admin's requested slot count. 0 = unset.
+	OperatorParallel int
+	Observed         ollamaObservedServe
+}
+
+func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, opts ollamaTuningOpts) (t ollamaTuning) {
+	kvType, ceilingCtx, operatorParallel, observed := opts.KVCacheType, opts.CeilingCtx, opts.OperatorParallel, opts.Observed
 	// The build limit and the operator override are applied at every exit
 	// (named return + defer) so each sizing branch just records its
 	// RecommendedMaxParallel and returns.
@@ -349,7 +383,10 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// engine-facing consequences: which ubatch, how many slots, and what
 	// to tell the user.
 	hf := hw.HostFit()
-	plan := hostfit.OllamaPlannedRungFor(m, v, hf, kv.Type, ceilingCtx)
+	plan := hostfit.OllamaPlannedRungFrom(hostfit.OllamaWindowRequest{
+		Manifest: m, Variant: v, Host: hf, KVCacheType: kv.Type,
+		Ceiling: ceilingCtx, ChosenWindow: opts.ChosenWindow,
+	})
 	if plan.ContextLength <= 0 {
 		// Unknown sizing: recommend a single slot (we cannot prove more fit).
 		t.RecommendedMaxParallel = 1
@@ -368,6 +405,13 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	}
 	maxCtx, ctx := plan.NoSpillCapacityTokens, plan.ContextLength
 	t.ContextLength = ctx
+	// Carry the scaling only when the rung the planner landed on is one the
+	// model reaches THROUGH it. A rung the model was trained for is served
+	// exactly as it always was, which is what keeps static scaling — and its
+	// cost to every short prompt — off a host serving the coding window.
+	if ctx > m.ContextLength && catalog.ExtendedContextLength(m) >= ctx {
+		t.ropeScaling = m.RopeScaling
+	}
 	t.WindowFits = plan.Fits
 	t.ExpectedSpillFraction = plan.ExpectedSpillFraction
 	if hf.HasGPU() && hf.OllamaVRAMBudgetMB() > 0 {
@@ -459,7 +503,10 @@ func plannedSpillAmount(t ollamaTuning) string {
 	return fmt.Sprintf("about %.0f%% of the model", t.ExpectedSpillFraction*100)
 }
 
-// Env renders the OLLAMA_* variables for OllamaAdapter.SetModelEnv.
+// Env renders the engine variables for OllamaAdapter.SetModelEnv: the
+// OLLAMA_* the engine reads itself, and — only for a window the model
+// reaches through its published rope scaling — the LLAMA_ARG_* that the
+// llama-server ollama spawns reads (waired-ai/waired#1456).
 // ContextLength 0 (unknown sizing) omits the context var so the engine
 // keeps its own default. There is deliberately no generation-batch var:
 // the engine sizes that itself from the window and its own memory
@@ -473,6 +520,22 @@ func (t ollamaTuning) Env() []string {
 		"OLLAMA_KV_CACHE_TYPE="+t.KVCacheType,
 		fmt.Sprintf("OLLAMA_NUM_PARALLEL=%d", t.NumParallel),
 	)
+	if r := t.ropeScaling; r != nil {
+		// llama.cpp's own arguments, read from the environment by the
+		// llama-server ollama spawns (v0.34.0 hands it os.Environ()). They
+		// are what lets the engine serve past the length the model was
+		// trained for; OLLAMA_CONTEXT_LENGTH above only asks for the window.
+		//
+		// attn_factor is deliberately NOT among them. The engine derives it
+		// from the factor and cancels its own kernel term
+		// (llama.cpp b10760 llama-context.cpp), so a value passed here would
+		// be applied twice — the bug the poolside GGUFs carry.
+		env = append(env,
+			"LLAMA_ARG_ROPE_SCALING_TYPE="+r.Type,
+			"LLAMA_ARG_ROPE_SCALE="+strconv.FormatFloat(r.Factor, 'f', -1, 64),
+			fmt.Sprintf("LLAMA_ARG_YARN_ORIG_CTX=%d", r.OriginalContextLength),
+		)
+	}
 	if t.FlashAttention {
 		// KV-cache quantization silently degrades to f16 without flash
 		// attention; the engine still auto-disables FA per-model where

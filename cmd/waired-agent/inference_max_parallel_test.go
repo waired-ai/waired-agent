@@ -29,7 +29,7 @@ func TestComputeOllamaTuning_BuildLimit(t *testing.T) {
 	free := m.Variants[0]
 	capped := limited(free, 1)
 
-	control := computeOllamaTuningOpts(m, free, hw, "q8_0", 0, 0, ollamaObservedServe{})
+	control := computeOllamaTuningOpts(m, free, hw, ollamaTuningOpts{KVCacheType: "q8_0"})
 	if control.NumParallel != 2 || control.RecommendedMaxParallel < 2 {
 		t.Fatalf("precondition: a build without a limit gets NumParallel %d, recommended %d on this host; "+
 			"want 2 and at least 2, or the cases below assert a clamp nothing needed",
@@ -37,7 +37,7 @@ func TestComputeOllamaTuning_BuildLimit(t *testing.T) {
 	}
 
 	t.Run("the request and the recommendation stop at the limit", func(t *testing.T) {
-		got := computeOllamaTuningOpts(m, capped, hw, "q8_0", 0, 0, ollamaObservedServe{})
+		got := computeOllamaTuningOpts(m, capped, hw, ollamaTuningOpts{KVCacheType: "q8_0"})
 		if got.NumParallel != 1 {
 			t.Errorf("NumParallel = %d, want 1", got.NumParallel)
 		}
@@ -56,7 +56,7 @@ func TestComputeOllamaTuning_BuildLimit(t *testing.T) {
 	})
 
 	t.Run("an admin override stops at the limit without a warning", func(t *testing.T) {
-		got := computeOllamaTuningOpts(m, capped, hw, "q8_0", 0, 4, ollamaObservedServe{})
+		got := computeOllamaTuningOpts(m, capped, hw, ollamaTuningOpts{KVCacheType: "q8_0", OperatorParallel: 4})
 		if got.NumParallel != 1 {
 			t.Errorf("NumParallel = %d, want 1", got.NumParallel)
 		}
@@ -64,13 +64,13 @@ func TestComputeOllamaTuning_BuildLimit(t *testing.T) {
 			t.Errorf("Warning = %q: holding an override to the build's limit trades nothing away", got.Warning)
 		}
 		// Control: the same override on a build without a limit is honoured.
-		if got := computeOllamaTuningOpts(m, free, hw, "q8_0", 0, 4, ollamaObservedServe{}); got.NumParallel != 4 {
+		if got := computeOllamaTuningOpts(m, free, hw, ollamaTuningOpts{KVCacheType: "q8_0", OperatorParallel: 4}); got.NumParallel != 4 {
 			t.Errorf("unlimited build: NumParallel = %d, want the override 4", got.NumParallel)
 		}
 	})
 
 	t.Run("an override at or under the limit is untouched", func(t *testing.T) {
-		got := computeOllamaTuningOpts(m, limited(free, 3), hw, "q8_0", 0, 2, ollamaObservedServe{})
+		got := computeOllamaTuningOpts(m, limited(free, 3), hw, ollamaTuningOpts{KVCacheType: "q8_0", OperatorParallel: 2})
 		if got.NumParallel != 2 {
 			t.Errorf("NumParallel = %d, want the override 2 under a limit of 3", got.NumParallel)
 		}
@@ -78,11 +78,11 @@ func TestComputeOllamaTuning_BuildLimit(t *testing.T) {
 
 	t.Run("the spill branch and a degrade recompute stay under it", func(t *testing.T) {
 		spill := tuningTestManifest()
-		got := computeOllamaTuningOpts(spill, limited(spill.Variants[0], 1), discrete24GB(), "q8_0", 0, 4, ollamaObservedServe{})
+		got := computeOllamaTuningOpts(spill, limited(spill.Variants[0], 1), discrete24GB(), ollamaTuningOpts{KVCacheType: "q8_0", OperatorParallel: 4})
 		if got.NumParallel != 1 {
 			t.Errorf("spill branch with override 4: NumParallel = %d, want 1", got.NumParallel)
 		}
-		down := computeOllamaTuningOpts(m, capped, hw, "q8_0", control.ContextLength-1, 0, ollamaObservedServe{})
+		down := computeOllamaTuningOpts(m, capped, hw, ollamaTuningOpts{KVCacheType: "q8_0", CeilingCtx: control.ContextLength - 1})
 		if down.NumParallel != 1 {
 			t.Errorf("degrade recompute: NumParallel = %d, want 1", down.NumParallel)
 		}
@@ -104,7 +104,7 @@ func TestComputeOllamaTuning_BundledLimitsHold(t *testing.T) {
 				continue
 			}
 			checked++
-			got := computeOllamaTuningOpts(m, v, umaTwoSlotHost(), ollamaKVAuto, 0, 8, ollamaObservedServe{})
+			got := computeOllamaTuningOpts(m, v, umaTwoSlotHost(), ollamaTuningOpts{KVCacheType: ollamaKVAuto, OperatorParallel: 8})
 			if got.NumParallel > v.MaxParallel || got.RecommendedMaxParallel > v.MaxParallel {
 				t.Errorf("%s/%s: NumParallel %d, recommended %d, want at most the build's %d",
 					m.ModelID, v.VariantID, got.NumParallel, got.RecommendedMaxParallel, v.MaxParallel)
