@@ -1172,7 +1172,16 @@ func run(ctx context.Context, args []string) error {
 			// below the recommended spec — which is what #465 fixed — and
 			// then stall at the engine step, because off means the engine
 			// stands down.
-			sub.provider.enableInference = func() error { return infCtl.Enable(ctx) }
+			sub.provider.enableInference = func() error {
+				if err := infCtl.Enable(ctx); err != nil {
+					return err
+				}
+				// Turning inference on is a person asking for it back, so
+				// it releases an engine held off for memory
+				// (waired-agent#1464). Their own hard stop is untouched.
+				sub.provider.resumeAfterOutOfMemory("inference was turned on")
+				return nil
+			}
 			// And the direction the #496 host cutoff needs: a host whose
 			// measured turn exceeds the budget gets local inference off as
 			// its install-time default, persisted through the same
@@ -1365,6 +1374,7 @@ func run(ctx context.Context, args []string) error {
 					// (waired-agent#1205).
 					go runNoticeLoop(ctx, noticeRepublish, prov.publishRecommendationNotices)
 					go runNoticeLoop(ctx, noticeRepublish, prov.publishLoadFailureNotices)
+					go runNoticeLoop(ctx, noticeRepublish, prov.reviewOutOfMemoryPark)
 					// And what the serving engine has to say about
 					// itself. Its own producer, so a version warning and
 					// a tuning note are two facts rather than a chain

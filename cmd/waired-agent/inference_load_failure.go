@@ -105,6 +105,11 @@ func (p *agentInferenceProvider) onLoadMemoryFailure(f infruntime.LoadMemoryFail
 		}
 		return
 	}
+	// Hold the engine off (waired-agent#1464). A request arriving now would
+	// start the same load again, take minutes over it, and put the machine
+	// back under the pressure it just came out of. Held off, the gateway
+	// answers at once and peers stop choosing this host.
+	p.parkForOutOfMemory(ctx, f.Reason)
 	if p.logger != nil {
 		p.logger.Warn("this computer could not load this model; it will not be loaded again automatically",
 			"model_id", modelID, "variant_id", variantID,
@@ -259,4 +264,27 @@ func (p *agentInferenceProvider) PublishedLoadFailures() []signer.ModelLoadFailu
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].VariantSHA < out[j].VariantSHA })
 	return out
+}
+
+// reviewOutOfMemoryPark releases an engine held off for memory once the
+// record that held it off no longer applies (waired-agent#1464).
+//
+// The record expires on facts about the machine — a new engine build, a new
+// driver, a different GPU, more memory — and an engine that stayed off after
+// its reason expired would be a stop nobody could explain and nobody asked
+// for. Derived on a tick rather than latched, exactly like the notice: when
+// the condition stops being true, the consequence stops with it.
+//
+// Not a retry timer. Nothing here fires because time passed; it fires
+// because a fact changed. A load that failed does not become loadable by
+// waiting, and retrying on a schedule is what put the reference host under
+// the same memory pressure twice (#1443, #1450).
+func (p *agentInferenceProvider) reviewOutOfMemoryPark(context.Context) {
+	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
+		return
+	}
+	if _, blocked := p.loadIsBlocked(); blocked {
+		return
+	}
+	p.resumeAfterOutOfMemory("this computer changed, so what it could not load before no longer applies")
 }

@@ -1995,6 +1995,11 @@ type agentInferenceProvider struct {
 	// atomics. Same reason residencyController takes applierFn.
 	askReconcileFn func(swap bool)
 	// crashMu guards the crash bookkeeping below.
+	// parkedFor is WHY the engine is held off (waired-agent#1464). The
+	// latch itself stays on the adapter; this is the policy half, and it
+	// is only ever read together with the latch — see parkedBecause.
+	parkedFor parkState
+
 	crashMu sync.Mutex
 	// crashStrikes counts engine deaths inside engineRecoveryStableFor. A
 	// start that never came up counts too (#310): both mean "the engine is
@@ -3084,6 +3089,11 @@ type inferenceSubsystemFacts struct {
 	// engine exists and is intentionally down.
 	Disabled bool
 	Parked   bool
+	// ParkedByError distinguishes the two reasons an engine is held off
+	// (waired-agent#1464). The operator's hard stop is "stopped"; a load
+	// that ran this computer out of memory is an engine failure, because
+	// nothing is serving and nobody asked for that.
+	ParkedByError bool
 	// UsableEngine is hasUsableEngine — is there an engine at all.
 	UsableEngine bool
 	// EngineState is an infruntime.State* reading, empty when there is
@@ -3128,6 +3138,15 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// send someone looking for a fault that is a setting.
 		return signer.SubsystemStateDisabled
 	case f.Parked:
+		// Two reasons, two answers. `stopped` says a person hard-stopped a
+		// usable engine on purpose — its own doc says "operator" — and
+		// reporting that for a computer that ran out of memory would send
+		// someone looking for a setting nobody changed. An engine this
+		// product stopped is an engine that failed, which is what NAVI and
+		// every other surface already render as a fault.
+		if f.ParkedByError {
+			return signer.SubsystemStateEngineFailed
+		}
 		return signer.SubsystemStateStopped
 	case !f.UsableEngine && f.EngineUnavailable == "" && !f.EngineInstalledNoAdapter:
 		// No engine on this host — unless one recorded a reason it could
@@ -3246,6 +3265,7 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 	// which is pushed to the mesh, so peers stopped routing to a host that
 	// was still answering.
 	f.Parked = p.engineIsParked()
+	f.ParkedByError = p.parkedBecause() == parkCauseOutOfMemory
 	if a := p.servingAdapter(); a != nil {
 		f.EngineState = a.Health(ctx).State
 		if fl, ok := a.(interface{ FailureLatched() bool }); ok {
@@ -5670,6 +5690,15 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 // swap a model change takes. A KV-cache type change alone is a swap too:
 // the reconcile only re-decides the type on a switch.
 func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOrAlias, variantID, kvType string) (downloading bool, err error) {
+	// Choosing a different build is the recovery a memory stop exists to
+	// cause, so it releases one (waired-agent#1464). The operator's own
+	// hard stop is untouched: a person who stopped the engine did not ask
+	// for it back because they changed model.
+	defer func() {
+		if err == nil {
+			p.resumeAfterOutOfMemory("a different model was chosen")
+		}
+	}()
 	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
 	if !ok {
 		if len(retired.Names) > 0 {
