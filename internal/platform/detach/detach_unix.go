@@ -3,6 +3,7 @@
 package detach
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -21,4 +22,4 @@ func configure(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
-func start(cmd *exec.Cmd) error { return cmd.Start() }
+func start(cmd *exec.Cmd) (*os.Process, error) { return started(cmd, cmd.Start()) }

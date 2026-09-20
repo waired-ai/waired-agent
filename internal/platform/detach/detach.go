@@ -17,11 +17,12 @@ package detach
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 )
 
 // Start runs cmd so that it survives its parent's exit, and does not wait for
-// it. The caller does not call Wait either: the child is released, so the OS
+// it. The caller does not call Wait either: the process is released, so the OS
 // reaps it.
 func Start(cmd *exec.Cmd) error {
 	if cmd.Stdin == nil || cmd.Stdout == nil || cmd.Stderr == nil {
@@ -29,11 +30,23 @@ func Start(cmd *exec.Cmd) error {
 			"(nil inherits the parent's, which is what keeps a hook's pipe open)")
 	}
 	configure(cmd)
-	if err := start(cmd); err != nil {
+	p, err := start(cmd)
+	if err != nil {
 		return err
 	}
-	if cmd.Process == nil {
+	if p == nil {
 		return nil
 	}
-	return cmd.Process.Release()
+	return p.Release()
+}
+
+// started is what a successful start hands back. It is the process rather than
+// the command because the Windows path may have to start a SECOND command to
+// get one (see detach_windows.go), and the caller only ever needs to release
+// whatever actually ran.
+func started(cmd *exec.Cmd, err error) (*os.Process, error) {
+	if err != nil {
+		return nil, err
+	}
+	return cmd.Process, nil
 }
