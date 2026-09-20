@@ -50,6 +50,14 @@ var loadMemoryAllocMarkers = []string{
 	// The host-side allocator giving up. Seen from llama.cpp when a host
 	// buffer cannot be taken.
 	"std::bad_alloc",
+	// ggml asserting on a context whose buffer could not be allocated.
+	// Observed on the reference host on 2026-09-20 while deliberately
+	// bounding the engine's committed memory with a Job Object: the
+	// allocation returns NULL and llama.cpp aborts here rather than
+	// reporting a failure, so this assert is the only thing it says about
+	// running out. Windows renders that abort as exit status 0xc0000409,
+	// which reads as a stack buffer overrun and is not one.
+	"GGML_ASSERT(ctx->mem_buffer != NULL) failed",
 }
 
 // loadMemoryResidencySteps are the runner's own words for the steps at which

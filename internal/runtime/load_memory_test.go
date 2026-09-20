@@ -69,6 +69,22 @@ func TestLoadMemoryFailure(t *testing.T) {
 			want: true,
 		},
 		{
+			// Verbatim from the reference host on 2026-09-20, bounding the
+			// engine's commit with a Job Object. llama.cpp does not report
+			// the failed allocation - it asserts and aborts - so without
+			// this marker an engine that was denied memory reads as an
+			// engine that broke, and gets restarted into the same load.
+			name: "ggml asserting on an allocation that returned NULL",
+			facts: loadMemoryFacts{
+				Body: `{"error":"llama-server process has terminated: exit status 0xc0000409: ` +
+					`The system detected an overrun of a stack-based buffer in this application."}`,
+				LogTail: "sched_reserve: reserving ...\n" +
+					"C:/a/ollama/ollama/build/llama-server-cpu/_deps/llama_cpp-src/ggml/src/ggml.c:1643: " +
+					"GGML_ASSERT(ctx->mem_buffer != NULL) failed\n",
+			},
+			want: true,
+		},
+		{
 			name: "a CUDA host out of memory",
 			facts: loadMemoryFacts{
 				Body:    deadRunnerBody,
