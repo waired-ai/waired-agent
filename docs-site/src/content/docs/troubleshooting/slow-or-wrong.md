@@ -98,6 +98,37 @@ the GPU's own memory, so a model that fits only by spilling into system RAM
 is one you have to choose deliberately. `waired models ls --detail` shows the
 verdict for every model on this computer.
 
+## This model did not fit in this computer's memory
+
+This is the case where the model never loads at all, as opposed to loading
+and then running out on a long prompt (the next section).
+
+You see it as a warning naming the model, in `waired status`, in
+`waired doctor` and on the Waired icon's menu: `... did not fit in this
+computer's memory`. When the catalog has something smaller that runs here,
+the same line offers it.
+
+Waired stops trying. It stopped the load that was running the computer out
+of memory, and it will not start that same load again by itself. That is
+deliberate: each attempt costs minutes and puts the computer back under the
+memory pressure it just came out of, and on some computers that pressure is
+enough to make the whole machine stop responding.
+
+What starts it trying again:
+
+- **choosing a different model** — the usual answer, and what the warning
+  offers. See [Change the model](/guides/choose-a-model/).
+- **a smaller setting for the same model** — a shorter conversation length
+  or a cheaper cache costs less memory, and Waired treats that as a
+  different load, so it is free to try it.
+- **the computer changing** — a new engine version, a new graphics driver, a
+  different graphics chip, or more memory. Waired keeps what it learned
+  alongside those facts, so when one of them moves the old verdict stops
+  applying and the model is fair game again.
+
+Nothing is broken here. The engine is fine and the weights are fine; they
+are fine together on a bigger computer. What does not fit is the choice.
+
 ## It says the GPU ran out of memory on a long prompt
 
 You find this out while using the computer, not during setup. A turn fails
