@@ -1,12 +1,14 @@
 package main
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
@@ -169,4 +171,55 @@ func TestOllamaTuning_LongWindowKeepsTheRestOfTheEnv(t *testing.T) {
 	}
 	slices.Sort(keys)
 	t.Logf("long-window env: %v", keys)
+}
+
+// The declaration has to be able to say 1M, or no [1m] row can ever be
+// answered — and it must still refuse to say it for a model that documents
+// no way there, which is what the clamp did before waired-ai/waired#1456
+// and still does.
+//
+// Driven through DeclaredContextWindow itself. An earlier version of this
+// test recomputed the clamp beside the production one, which would have
+// passed with the production path broken.
+func TestDeclaredContextWindow_AgainstReach(t *testing.T) {
+	manifests := []catalog.Manifest{
+		{ModelID: "plain", ContextLength: 262144},
+		{ModelID: "scaled", ContextLength: 262144, RopeScaling: &catalog.RopeScaling{
+			Type: catalog.RopeScalingYaRN, Factor: 4, OriginalContextLength: 262144}},
+	}
+	prov := func(t *testing.T, model string, applied int) *agentInferenceProvider {
+		t.Helper()
+		a := newTestAdapter(t)
+		a.SetAppliedTuning(infruntime.ModelTuning{ModelID: model, ContextLength: applied, WindowFits: true})
+		store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+		if err := store.Update(func(s *catalog.State) {
+			s.Models = map[string]catalog.ModelState{model: {State: catalog.ModelStateReady, VariantID: "v"}}
+			s.Active = &catalog.ActiveSelection{
+				Runtime: catalog.RuntimeOllama, ModelID: model, VariantID: "v", DecidedBy: "user"}
+		}); err != nil {
+			t.Fatalf("seed store: %v", err)
+		}
+		return &agentInferenceProvider{manifests: manifests, ollama: a, store: store}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		model   string
+		applied int
+		want    int
+	}{
+		{"coding window, no scaling", "plain", hostfit.ServingWindow200k, hostfit.ServingWindow200k},
+		{"coding window, scaling documented", "scaled", hostfit.ServingWindow200k, hostfit.ServingWindow200k},
+		{"long window, scaling documented", "scaled", hostfit.ServingWindow1M, hostfit.ServingWindow1M},
+		// A tuning above what the model can reach is a misconfiguration, and
+		// the clamp is what stops it reaching the mesh as a promise.
+		{"long window, no scaling", "plain", hostfit.ServingWindow1M, hostfit.ServingWindow200k},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := prov(t, tc.model, tc.applied)
+			if got := p.DeclaredContextWindow(); got != tc.want {
+				t.Errorf("DeclaredContextWindow = %d, want %d", got, tc.want)
+			}
+		})
+	}
 }

@@ -3586,10 +3586,16 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 		return 0
 	}
 	win := t.ContextLength
-	// Never claim past the model's own window, whatever the engine was
-	// told: a tuning above native is a misconfiguration, not a capability.
-	if m.ContextLength > 0 && win > m.ContextLength {
-		win = m.ContextLength
+	// Never claim past a window this model can REACH, whatever the engine
+	// was told: a tuning above that is a misconfiguration, not a capability.
+	//
+	// Reach, not the trained length, since waired-ai/waired#1456: a model
+	// whose publisher documents rope scaling serves the longer window when
+	// someone asks for it, and a host serving it has to be able to say so or
+	// no Waired [1m] row can ever be answered. A model that documents no
+	// scaling is clamped exactly as before.
+	if reach := max(m.ContextLength, catalog.ExtendedContextLength(m)); reach > 0 && win > reach {
+		win = reach
 	}
 	return declaredTier(win)
 }
