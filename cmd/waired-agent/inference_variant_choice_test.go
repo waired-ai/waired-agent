@@ -346,7 +346,9 @@ func TestSetupDesiredBuildChangeOfTheSameModelIsApplied(t *testing.T) {
 	r.Apply(ctx, frame("q3-gguf", "")) // converged on the chosen build
 	r.Apply(ctx, frame("q3-gguf", "q8_0"))
 
-	want := []string{"qwen3-8b-instruct|q3-gguf|", "qwen3-8b-instruct|q3-gguf|q8_0"}
+	// The trailing 0 is the serving window: nothing asked for the long one
+	// here, and the coding window is what 0 means (waired-ai/waired#1456).
+	want := []string{"qwen3-8b-instruct|q3-gguf||0", "qwen3-8b-instruct|q3-gguf|q8_0|0"}
 	if !slices.Equal(f.buildApplies, want) {
 		t.Errorf("applies = %v, want %v", f.buildApplies, want)
 	}

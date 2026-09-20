@@ -1478,7 +1478,7 @@ func TestSetupApplyModel_MeasuresBeforeTheDownloadStarts(t *testing.T) {
 	// The error is not the subject: SwapPreferredModel's outcome depends
 	// on engine state this test does not stand up. What matters is that
 	// the host was measured on the way through.
-	if _, err := p.setupApplyModel(context.Background(), "some-big-model", "", ""); err != nil {
+	if _, err := p.setupApplyModel(context.Background(), "some-big-model", "", "", 0); err != nil {
 		t.Logf("setupApplyModel returned %v (not the subject of this test)", err)
 	}
 	r.releaseAll()

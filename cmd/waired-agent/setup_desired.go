@@ -106,9 +106,14 @@ type setupDesired struct {
 	// variantID / kvType are the build and KV-cache type the user chose
 	// with modelID (waired-agent#1348). "" is no instruction. They ride
 	// the Self entry only for an agent that declares variant-choice-v1.
-	variantID    string
-	kvType       string
-	benchmarkGen int
+	variantID string
+	kvType    string
+	// contextWindow is the serving window chosen with modelID:
+	// hostfit.ServingWindow1M for the long window, 0 for the coding window
+	// and for every instruction written before waired-ai/waired#1456. It
+	// rides the Self entry like the two above.
+	contextWindow int
+	benchmarkGen  int
 	// modelGen is the retry generation for the model download (#136).
 	// Same contract as benchmarkGen — declarative, idempotent, and a
 	// bump is the operator saying "try that download again".
@@ -367,8 +372,10 @@ type setupProvider interface {
 	// choice and then served something else entirely (#230).
 	//
 	// variantID / kvType are the build and KV-cache type chosen with it
-	// ("" = no instruction, waired-agent#1348).
-	setupApplyModel(ctx context.Context, modelID, variantID, kvType string) (downloading bool, err error)
+	// ("" = no instruction, waired-agent#1348), and contextWindow the
+	// serving window chosen with it (0 = the coding window,
+	// waired-ai/waired#1456).
+	setupApplyModel(ctx context.Context, modelID, variantID, kvType string, contextWindow int) (downloading bool, err error)
 	// setupBuildChosen reports whether the effective preference names
 	// exactly this build and KV-cache type for modelID, and a named build
 	// is the one on the model's row. The convergence half the model id
@@ -677,13 +684,14 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		// the modelApplied / modelRejected keys, setupModelState, the
 		// convergence compare, setupApplyModel, and the SetupState echo the
 		// CLI watcher reads back. See setupCanonicalModelID.
-		modelID:      r.provider.setupCanonicalModelID(st.DesiredModelID),
-		variantID:    st.DesiredVariantID,
-		kvType:       st.DesiredKVCacheType,
-		benchmarkGen: st.DesiredBenchmarkGen,
-		modelGen:     st.DesiredModelGen,
-		integrations: flattenIntegrations(st.DesiredIntegrations),
-		inference:    st.DesiredInference,
+		modelID:       r.provider.setupCanonicalModelID(st.DesiredModelID),
+		variantID:     st.DesiredVariantID,
+		kvType:        st.DesiredKVCacheType,
+		contextWindow: st.DesiredContextWindow,
+		benchmarkGen:  st.DesiredBenchmarkGen,
+		modelGen:      st.DesiredModelGen,
+		integrations:  flattenIntegrations(st.DesiredIntegrations),
+		inference:     st.DesiredInference,
 	}
 	r.mu.Lock()
 	// The baseline is the first frame folded here, whatever it carries —
@@ -982,7 +990,7 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, d setupDesired, 
 	if converged {
 		return
 	}
-	if _, err := r.provider.setupApplyModel(ctx, modelID, d.variantID, d.kvType); err != nil {
+	if _, err := r.provider.setupApplyModel(ctx, modelID, d.variantID, d.kvType, d.contextWindow); err != nil {
 		r.mu.Lock()
 		// Classified HERE, where the error value still exists.
 		// Storing only the text and re-deriving a code from it in
@@ -3025,7 +3033,7 @@ func (p *agentInferenceProvider) setupCancelOtherBuildPull(ctx context.Context, 
 	return p.setupCancelPull(ctx, modelID)
 }
 
-func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID, variantID, kvType string) (bool, error) {
+func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID, variantID, kvType string, contextWindow int) (bool, error) {
 	if p.preferencePath != "" {
 		// Source desired: this is the control plane's instruction arriving,
 		// not an answer given here. The distinction is the whole of
@@ -3034,10 +3042,11 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID, v
 		// waired-agent#647 (an instruction must not be able to confirm
 		// itself back to the control plane as a local choice).
 		if err := agentconfig.SavePreference(p.preferencePath, agentconfig.Preference{
-			ModelID:     modelID,
-			VariantID:   variantID,
-			KVCacheType: kvType,
-			Source:      agentconfig.PreferenceSourceDesired,
+			ModelID:       modelID,
+			VariantID:     variantID,
+			KVCacheType:   kvType,
+			ContextWindow: contextWindow,
+			Source:        agentconfig.PreferenceSourceDesired,
 		}); err != nil {
 			// Not fatal: the in-process switch below still makes this the
 			// served model for the life of this process. Only the
