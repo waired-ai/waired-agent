@@ -68,7 +68,7 @@ machine-wide.
 | メッセージの冒頭 | 意味 | 対処 |
 |---|---|---|
 | `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | ここに推論エンジンがなく、自分のほかのコンピュータにも届いていません。 | このコンピュータで`waired doctor`を実行します。ここで推論エンジンを始めるか、モデルを動かすコンピュータの電源を入れます。 |
-| `The computer this turn is pinned to, <name>, is not answering.` | `waired worker`で固定したコンピュータが、オフか、スリープ中か、共有していません。 | [コンピュータを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を参照してください。 |
+| `The computer this turn is pinned to, <name>, is not answering.` | `waired worker`で固定したコンピュータが、オフか、スリープ中か、共有していません。 | [パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を参照してください。 |
 | `The peer <name> stopped answering after <time>.`または`The peer <name> stopped working on this request after <time>.` | 前者は、そのコンピュータが答えている途中で応答が途絶えました。後者は、停止を報告したか、推論エンジンは動いているのに答えなくなりました。 | `waired peers list`で確認し、そのコンピュータで`waired doctor`を実行します。 |
 | `The peer <name> was still busy with other work after <time> and had not started this turn.` | そのコンピュータが、自分のターン以外の処理（多くの場合はそのコンピュータの所有者のターン）を続けていると報告したまま、待ち時間が終わりました。不具合ではありません。 | ターンをもう一度送るか、`/model`で別のコンピュータを選びます。 |
 | ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定した最小のモデルサイズが、このコンピュータを含むすべてのコンピュータを除外しました。 | 最小値を下げるか解除します。[最小のモデルサイズを決める](/ja/guides/routing/#set-a-smallest-model)を参照してください。 |
