@@ -179,6 +179,21 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 
 	wctx, cancel := context.WithTimeout(ctx, warmBudget)
 	defer cancel()
+
+	// Watch the host while the weights load (waired-agent#1453). This is the
+	// only thing the product does that can take a computer down: on a
+	// carve-out host the weights transit the OS-visible half, free memory
+	// pins near zero, and the box starves for ten minutes with no token to
+	// show for it (waired-agent#837).
+	//
+	// Stopping means stopping the ENGINE, not just abandoning the request.
+	// Cancelling the HTTP call leaves ollama loading on the other side of
+	// it, still holding everything it has taken; only retiring the process
+	// gives the memory back, and Stop is what records the tree for the next
+	// start to wait on.
+	stopped := p.watchLoadMemory(wctx, cancel)
+	defer stopped.done()
+
 	start := time.Now()
 	// Send keep_alive explicitly rather than relying on the serve-level
 	// variable: an ADOPTED engine was spawned by a previous run and its
@@ -186,6 +201,13 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 	// would be undone minutes later on the very hosts that cannot be
 	// bounced to fix it.
 	if err := loadOllamaModel(wctx, client, baseURL, tag, p.keepAlive()); err != nil {
+		if f, ok := stopped.failure(); ok {
+			// The guard stopped this one, so the error is our own doing and
+			// says nothing about the model. Record why it was stopped.
+			p.warmFails.fail(p.warmLoadKey(tag))
+			p.onLoadMemoryFailure(f)
+			return
+		}
 		fails := p.warmFails.fail(p.warmLoadKey(tag))
 		if p.logger != nil {
 			p.logger.Info("warm-up load did not complete; the first request will pay for it",
