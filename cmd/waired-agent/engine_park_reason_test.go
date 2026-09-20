@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -167,4 +168,54 @@ func TestParkForOutOfMemory_TakesThisHostOutOfTheMesh(t *testing.T) {
 		t.Error("a host that cannot load its model still advertises capacity; " +
 			"peers would keep choosing it and every request would 503")
 	}
+}
+
+// TestEngineStoppedReason_NamesOneWayOut is the owner's ruling of
+// 2026-09-21: do not put a state on the screen with no next action beside
+// it.
+//
+// PRODUCT CONTRACT. `waired status` shows `engine_failed` for a memory stop,
+// and that word alone tells a reader nothing they can act on. It must carry
+// one remedy — and only one, because the other three would bury the one that
+// applies to almost everybody.
+func TestEngineStoppedReason_NamesOneWayOut(t *testing.T) {
+	t.Run("a memory stop says what to do", func(t *testing.T) {
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		p.parkForOutOfMemory(context.Background(), "ran out of memory")
+
+		got := p.engineStoppedReason()
+		if got == "" {
+			t.Fatal("a stopped engine reported no reason; the status line would be a dead end")
+		}
+		if !strings.Contains(got, "Choose a different model") {
+			t.Errorf("the reason names no action a reader can take: %q", got)
+		}
+		// One remedy, not the list. Naming the others here would bury it.
+		for _, tooMuch := range []string{"driver", "turn inference on", "engine start"} {
+			if strings.Contains(strings.ToLower(got), tooMuch) {
+				t.Errorf("the status line lists more than one way out (%q): %q", tooMuch, got)
+			}
+		}
+	})
+
+	t.Run("CONTRACT: an engine the operator stopped is told nothing", func(t *testing.T) {
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		p.noteParked(parkCauseOperator)
+		if err := p.ollama.Park(context.Background()); err != nil {
+			t.Fatalf("Park: %v", err)
+		}
+		if got := p.engineStoppedReason(); got != "" {
+			t.Errorf("told the operator how to undo their own stop: %q", got)
+		}
+	})
+
+	t.Run("a running engine has nothing to explain", func(t *testing.T) {
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		if got := p.engineStoppedReason(); got != "" {
+			t.Errorf("a running engine explained itself: %q", got)
+		}
+	})
 }

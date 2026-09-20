@@ -35,10 +35,32 @@ func TestModelDidNotLoad(t *testing.T) {
 		if n.Target != lighter {
 			t.Errorf("Target = %q, want the model to switch to (%q)", n.Target, lighter)
 		}
-		for _, want := range []string{model, lighter} {
-			if !strings.Contains(n.Title+" "+n.Text, want) {
-				t.Errorf("neither the title nor the text names %q:\n  %s\n  %s", want, n.Title, n.Text)
-			}
+		// The wording is ratified, not a matter of taste (owner ruling,
+		// 2026-09-21, recorded on waired-agent#1464), so it is pinned
+		// verbatim. Two things in it were decided rather than drafted:
+		//
+		//   - "did not load", never "did not fit". `Fits` is the catalog's
+		//     capacity verdict and this model PASSES it — saying it did not
+		//     fit would read as that verdict having lied.
+		//   - the alternative is "lighter and is what this computer would
+		//     use instead", NOT "small enough to run here". The build that
+		//     failed also passed the capacity check, so promising the
+		//     replacement will load would repeat the same false claim.
+		const wantTitle = "qwen3.5-122b-a10b did not load on this computer — switch to qwen3.8-flash-next"
+		const wantText = "Waired ran out of memory loading qwen3.5-122b-a10b and stopped, and will " +
+			"not load it again by itself. this computer ran out of memory putting the model in " +
+			"memory. qwen3.8-flash-next is lighter and is what this computer would use instead."
+		if n.Title != wantTitle {
+			t.Errorf("title drifted from the ratified wording:\n got %s\nwant %s", n.Title, wantTitle)
+		}
+		if n.Text != wantText {
+			t.Errorf("text drifted from the ratified wording:\n got %s\nwant %s", n.Text, wantText)
+		}
+		if strings.Contains(n.Title+" "+n.Text, "did not fit") {
+			t.Error(`"did not fit" collides with the catalog's Fits verdict, which this model passes`)
+		}
+		if strings.Contains(n.Text, "small enough to run here") {
+			t.Error("promising the alternative will load repeats the claim that just proved false")
 		}
 	})
 

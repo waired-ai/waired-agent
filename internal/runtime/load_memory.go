@@ -93,7 +93,7 @@ type loadMemoryFacts struct {
 func loadMemoryFailure(f loadMemoryFacts) (bool, string) {
 	for _, m := range loadMemoryAllocMarkers {
 		if strings.Contains(f.LogTail, m) {
-			return true, "the engine ran out of memory loading this model (" + m + ")"
+			return true, "the engine ran out of memory loading the model; it reported " + m
 		}
 	}
 	if f.TailStale {

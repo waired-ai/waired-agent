@@ -181,6 +181,13 @@ func LighterModel(from, to string, turnSeconds, turnFloorSeconds, budget float64
 
 // ModelDidNotLoad is a model this computer ran out of memory loading.
 //
+// "did not load", never "did not fit". `Fits` is the catalog's capacity
+// verdict (CatalogFamily.Fits, hostfit.Fits), and the model this was written
+// for PASSES it — the whole of waired-agent#1443 is that the budget says a
+// build fits and the build does not load. Saying it did not fit would
+// collide with that word and would read as the capacity verdict having
+// lied.
+//
 // A warning rather than a fault, and the distinction is the point. Nothing
 // is broken: the engine is fine, the weights are fine, and they are fine
 // together on a bigger machine. What is wrong is the choice, and the person
@@ -196,16 +203,15 @@ func ModelDidNotLoad(model, alternative, reason string) Notice {
 		Kind:     KindModelDidNotLoad,
 		Severity: SeverityWarn,
 		Subject:  "model suggestion",
-		Title:    sanitise(model + " did not fit in this computer's memory"),
-		Text: sanitiseText("Waired stopped loading " + model +
-			" because this computer ran out of memory, and will not load it again by itself. " +
-			reason + "."),
+		Title:    sanitise(model + " did not load on this computer"),
+		Text: sanitiseText("Waired ran out of memory loading " + model +
+			" and stopped, and will not load it again by itself. " + reason + "."),
 	}
 	if alternative != "" {
-		n.Title = sanitise(model + " did not fit in this computer's memory — switch to " + alternative)
-		n.Text = sanitiseText("Waired stopped loading " + model +
-			" because this computer ran out of memory, and will not load it again by itself. " +
-			reason + ". " + alternative + " is small enough to run here.")
+		n.Title = sanitise(model + " did not load on this computer — switch to " + alternative)
+		n.Text = sanitiseText("Waired ran out of memory loading " + model +
+			" and stopped, and will not load it again by itself. " + reason + ". " +
+			alternative + " is lighter and is what this computer would use instead.")
 		n.Action = ActionModelSuggestion
 		n.Target = sanitise(alternative)
 	}

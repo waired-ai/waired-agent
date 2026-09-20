@@ -164,3 +164,22 @@ func (p *agentInferenceProvider) resumeAfterOutOfMemory(because string) bool {
 	p.requestEngineReconcile(false)
 	return true
 }
+
+// engineStoppedReason is the one sentence `waired status` puts under the
+// engine's state, and it names ONE thing the reader can do.
+//
+// Owner ruling (2026-09-21, waired-agent#1464): do not put a state on the
+// screen with no next action beside it. One remedy rather than all four —
+// the other three (the computer changing, turning inference on, starting the
+// engine) are in the docs and on the console, and a status line that listed
+// them would bury the one that applies to almost everybody.
+//
+// Empty for an engine the operator stopped. They know how to start it; they
+// stopped it.
+func (p *agentInferenceProvider) engineStoppedReason() string {
+	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
+		return ""
+	}
+	return "Waired stopped the engine because this computer ran out of memory " +
+		"loading the model. Choose a different model to start it again."
+}

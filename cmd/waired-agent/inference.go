@@ -3020,6 +3020,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	return management.InferenceStatus{
 		Inflight:                inflight,
 		SubsystemState:          subState,
+		EngineStoppedReason:     p.engineStoppedReason(),
 		Runtimes:                rs,
 		Models:                  models,
 		ActiveEndpoints:         endpoints,
