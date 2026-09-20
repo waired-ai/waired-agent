@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"sort"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // A build that this computer could not put in memory is a fact worth
@@ -208,4 +211,52 @@ func variantWeightGB(manifests []catalog.Manifest, modelID, variantID string) fl
 		}
 	}
 	return 0
+}
+
+// PublishedLoadFailures is what this host could not put in memory, in the
+// shape the control plane reads (waired-agent#1453).
+//
+// The sibling of PublishedMeasurements, and it follows the same three rules.
+// A record it cannot key is not published — the ledger writer already
+// refuses those, and this is the second reader of that rule rather than a
+// new one. The order is stable so an unchanged set pushes the same bytes
+// every tick. And what travels is the FACTS of the attempt: neither the
+// operator-facing sentence nor the engine's own words, because the engine's
+// text names blob paths and other things particular to this machine, and a
+// consumer ranking builds has no use for prose.
+func (p *agentInferenceProvider) PublishedLoadFailures() []signer.ModelLoadFailure {
+	if p == nil || p.store == nil {
+		return nil
+	}
+	st, err := p.store.Load()
+	if err != nil || len(st.FailedLoads) == 0 {
+		return nil
+	}
+	out := make([]signer.ModelLoadFailure, 0, len(st.FailedLoads))
+	for sha, f := range st.FailedLoads {
+		if sha == "" || f.ModelID == "" || f.VariantID == "" {
+			continue
+		}
+		out = append(out, signer.ModelLoadFailure{
+			ModelID:       f.ModelID,
+			VariantID:     f.VariantID,
+			VariantSHA:    sha,
+			EngineKind:    f.Context.EngineKind,
+			EngineVersion: f.Context.EngineVersion,
+			GPUModel:      f.Context.GPUModel,
+			DriverVersion: f.Context.DriverVersion,
+			VRAMTotalMB:   f.Context.VRAMTotalMB,
+			RAMTotalMB:    f.Context.RAMTotalMB,
+			ContextLength: f.Shape.ContextLength,
+			KVCacheType:   f.Shape.KVCacheType,
+			NumParallel:   f.Shape.NumParallel,
+			Backend:       f.Shape.Backend,
+			FailedAt:      f.FailedAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].VariantSHA < out[j].VariantSHA })
+	return out
 }

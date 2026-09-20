@@ -286,6 +286,12 @@ type inferenceProbeDeps struct {
 	// install.
 	ModelMeasurements func() []signer.ModelMeasurement
 
+	// LoadFailures is what this host could not put in memory
+	// (waired-agent#1453). A live getter for the same reason
+	// ModelMeasurements is one: a load that fails between two ticks has to
+	// reach the control plane on the next one.
+	LoadFailures func() []signer.ModelLoadFailure
+
 	// ServingEngineVersion is the version of the engine this host serves
 	// with, reported whether or not it has ever benchmarked
 	// (waired-agent#970).
@@ -689,6 +695,9 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if deps.ModelMeasurements != nil {
 			s.ModelMeasurements = deps.ModelMeasurements()
 		}
+		if deps.LoadFailures != nil {
+			s.LoadFailures = deps.LoadFailures()
+		}
 		if deps.ServingEngineVersion != nil {
 			s.ServingEngineVersion = deps.ServingEngineVersion()
 		}
@@ -907,6 +916,9 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 		// answer rather than a stale one.
 		if deps.ModelMeasurements != nil {
 			st.ModelMeasurements = deps.ModelMeasurements()
+		}
+		if deps.LoadFailures != nil {
+			st.LoadFailures = deps.LoadFailures()
 		}
 		pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
 		_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, st, deps.MachineKey)
