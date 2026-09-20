@@ -152,9 +152,30 @@ type VariantMeasurement struct {
 	GPUModel      string  `json:"gpu_model,omitempty"`
 	VRAMTotalMB   int     `json:"vram_total_mb,omitempty"`
 	DriverVersion string  `json:"driver_version,omitempty"`
-	AppliedWindow int     `json:"applied_window,omitempty"`
-	KVCacheType   string  `json:"kv_cache_type,omitempty"`
-	NumParallel   int     `json:"num_parallel,omitempty"`
+	// HostKey and HostPCIID say WHAT KIND OF MACHINE took the
+	// measurement, so the catalog importer can derive the provenance of
+	// a stored figure instead of being told it
+	// (hardware.HostKey / hardware.GPU.PCIID, waired-agent#1455).
+	//
+	// This is the same move decision 20260829/1100 §1 made for
+	// engine_version: "what can be observed is derived, never typed".
+	// The host was the last hand-typed field in the provenance set, and
+	// it was typed only because nothing published it — the measuring
+	// host has known the answer all along.
+	//
+	// The key is for humans and the pair is for the check: the key folds
+	// parts together where a vendor gives no finer structured fact (an
+	// RTX PRO 4000 Blackwell and an RTX 5090 both report compute
+	// capability 12.0), and the PCI pair does not.
+	//
+	// Empty on a measurement written by an agent from before this
+	// field, which the importer reads as "the snapshot cannot say" and
+	// falls back to the flag for.
+	HostKey       string `json:"host_key,omitempty"`
+	HostPCIID     string `json:"host_pci_id,omitempty"`
+	AppliedWindow int    `json:"applied_window,omitempty"`
+	KVCacheType   string `json:"kv_cache_type,omitempty"`
+	NumParallel   int    `json:"num_parallel,omitempty"`
 	// The draft the engine ran, absent for none (waired-ai/waired#1432).
 	SpeculativeMethod string `json:"speculative_method,omitempty"`
 	SpeculativeTokens int    `json:"speculative_tokens,omitempty"`

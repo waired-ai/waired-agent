@@ -266,6 +266,8 @@ func benchMeasurement(bench BenchResult, manifests []catalog.Manifest, deps Benc
 		GPUModel:      deps.GPUModel,
 		VRAMTotalMB:   deps.VRAMTotalMB,
 		DriverVersion: deps.DriverVersion,
+		HostKey:       deps.HostKey,
+		HostPCIID:     deps.HostPCIID,
 		AppliedWindow: deps.AppliedWindow,
 		KVCacheType:   deps.KVCacheType,
 		NumParallel:   deps.NumParallel,

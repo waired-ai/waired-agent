@@ -69,10 +69,18 @@ func (p *agentInferenceProvider) currentServeTuning() infruntime.ModelTuning {
 func (p *agentInferenceProvider) speedDeps(ctx context.Context, mode string) BenchDeps {
 	kind, port := p.probeTarget(p.cfg)
 	var gpu hardware.GPU
+	var hostKey string
 	if p.profiler != nil {
-		if prof := p.profiler.Profile(ctx); len(prof.GPUs) > 0 {
+		prof := p.profiler.Profile(ctx)
+		if len(prof.GPUs) > 0 {
 			gpu = prof.GPUs[0]
 		}
+		// The measuring host is the only thing that knows what kind of
+		// machine it is, and it knows it here, at the moment the figure
+		// is taken. Recording it is what lets the catalog importer
+		// DERIVE the provenance instead of being handed it on a flag
+		// (waired-agent#1455, and decision 20260829/1100 §1).
+		hostKey = hardware.HostKey(&prof)
 	}
 	tuning := p.currentServeTuning()
 	deps := BenchDeps{
@@ -90,6 +98,8 @@ func (p *agentInferenceProvider) speedDeps(ctx context.Context, mode string) Ben
 		GPUModel:      gpu.Model,
 		VRAMTotalMB:   gpu.VRAMTotalMB,
 		DriverVersion: gpu.DriverVersion,
+		HostKey:       hostKey,
+		HostPCIID:     gpu.PCIID,
 		WarmSlots:     p.WarmConversationSlots,
 		Cache:         p.benchCache,
 		Logger:        p.logger,

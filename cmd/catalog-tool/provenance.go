@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -58,20 +59,73 @@ func checkRetrieved(cmd, v string) error {
 	return nil
 }
 
-// checkHostClass rejects a missing host, or one outside the declared
-// vocabulary. Required rather than optional: every record in both stores
-// already names one, and a record that cannot say what ran it cannot be
-// compared with the next one.
+// checkHostClass rejects a missing host, or one that is neither a
+// well-formed derived key nor a frozen legacy spelling. Required rather
+// than optional: every record in both stores already names one, and a
+// record that cannot say what ran it cannot be compared with the next
+// one.
+//
+// A legacy spelling passes here but not everywhere: see
+// checkLegacyContinuesStore, which is where "frozen" is actually
+// enforced. The split is deliberate — whether a spelling is well formed
+// is a property of the string, and whether it may START a store is a
+// property of the store.
 func checkHostClass(cmd, v string) error {
 	if v == "" {
 		return fmt.Errorf("%s: --host is required with --import; it names a hardware CLASS, "+
-			"never an identifier — one of: %s", cmd, catalog.HostClassList())
+			"never an identifier — %s", cmd, catalog.HostClassList())
 	}
 	if !catalog.ValidHostClass(v) {
-		return fmt.Errorf("%s: --host %q is not a known hardware class (one of: %s). "+
-			"If this is a new class, add it to catalog.HostClasses in the same PR — "+
-			"this repository is public, and a machine name must never reach the store",
-			cmd, v, catalog.HostClassList())
+		return fmt.Errorf("%s: --host %q is not a well-formed host key. It must be "+
+			"<topology>-<vendor>-<chip>, all lowercase, where topology is one of "+
+			"unified / discrete / cpu — e.g. unified-amd-ryzen-ai-max-395. Nothing "+
+			"should be typing this: it is derived from the measuring host's own "+
+			"hardware profile, which is what keeps a machine name out of a public "+
+			"repository", cmd, v)
 	}
 	return nil
+}
+
+// checkLegacyContinuesStore allows one of the frozen legacy spellings
+// only where the store already carries it.
+//
+// The three legacy names describe measurements taken before keys were
+// derived. Continuing a store under the name it already has is not a new
+// claim — it is the same machine, still measuring. Starting a new one
+// under a legacy name would be: it would assert a provenance nobody
+// re-measured, and it would keep the roster alive by use after it was
+// frozen by declaration (waired-agent#1455).
+//
+// The shipped stores are NOT re-spelled to derived keys in the same
+// breath, and deliberately. The reference host's key is known exactly
+// (unified-amd-ryzen-ai-max-395, read off the machine), but the GPU
+// lane's is not: its derived key depends on the compute capability its
+// card reports, which nobody has read from that runner. Re-spelling it
+// would be a guess wearing the clothes of a record. The lane will write
+// its own key the next time it imports.
+func checkLegacyContinuesStore(cmd, v string, present []string) error {
+	if !catalog.IsLegacyHostClass(v) {
+		return nil
+	}
+	if slices.Contains(present, v) {
+		return nil
+	}
+	return fmt.Errorf("%s: --host %q is a frozen legacy spelling and this store does not "+
+		"carry it, so the import would start a new one under a name that was retired. "+
+		"A new measurement names a DERIVED key — <topology>-<vendor>-<chip>, taken from "+
+		"the measuring host's own hardware profile (waired-agent#1455)", cmd, v)
+}
+
+// hostsIn collects the host classes a per-record store already carries,
+// for checkLegacyContinuesStore. Order and duplicates do not matter:
+// the caller only asks whether a spelling is present.
+func hostsIn(seq func(yield func(host string) bool)) []string {
+	var out []string
+	seq(func(h string) bool {
+		if h != "" {
+			out = append(out, h)
+		}
+		return true
+	})
+	return out
 }
