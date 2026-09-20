@@ -43,15 +43,23 @@ func KVBytesPerTokenFP16(fullAttnLayers, nKVHeads, headDim int) int {
 // index_q_proj, index_k_proj, index_q_norm and index_k_norm and nothing else
 // — and the graph issues only cpy_k/get_k on that cache.
 //
-// llama.cpp allocates a V half anyway: the indexer reuses the general
+// llama.cpp used to allocate a V half anyway: the indexer reuses the general
 // llama_kv_cache, which sets has_v = !is_mla, and the indexer is not MLA. Its
-// constructor overrides only the KEY width, so the V half is allocated at the
+// constructor overrode only the KEY width, so the V half was allocated at the
 // MODEL's head_dim rather than the indexer's — 6144 B/token on Flash-Next,
-// 1,536 MiB at a 262,144 window, never written and never read. That is
-// ggml-org/llama.cpp#28330, open at b10760 (the version 0.33.3 vendors),
-// which is why it is not modelled here: it is an upstream over-allocation
-// rather than a cost of the model, and annotating around it would bake the
-// bug into the catalog and then be wrong again when the fix lands.
+// 1,536 MiB at a 262,144 window, never written and never read. That was
+// ggml-org/llama.cpp#28330, open at b10760 (the version 0.33.3 and 0.34.0
+// vendor), which is why it is not modelled here: it was an upstream
+// over-allocation rather than a cost of the model, and annotating around it
+// would have baked the bug into the catalog and then been wrong again when
+// the fix landed.
+//
+// The fix landed, and this row did not have to move. 311d4211b is first in
+// b10889 and so in the b10969 that ollama 0.34.2 vendors; serving the model
+// there logs the indexer cache with V (f16): 0.00 MiB, and the measurement
+// now comes to the 27648 B/token this file derives. Carrying the derivable
+// number rather than the measured one is what made the annotation survive
+// both sides of an upstream bug.
 //
 // The indexer runs on the same layers as full attention, so the caller's
 // fullAttnLayers is the right multiplier (llama.cpp builds its layer filter

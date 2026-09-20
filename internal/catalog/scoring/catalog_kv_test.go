@@ -112,17 +112,28 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// cpy_k/get_k on that cache, but llama_memory_hybrid_idx reuses the
 	// general llama_kv_cache, whose has_v = !is_mla is true here, and its
 	// constructor overrides only the key width — so a V half is allocated
-	// at the MODEL's head_dim and then never written or read. That is
+	// at the MODEL's head_dim and then never written or read. That was
 	// ggml-org/llama.cpp#28330, open at b10760, the llama.cpp that ollama
-	// 0.33.3 vendors.
+	// 0.33.3 and 0.34.0 vendor. The reading above is from that engine.
 	//
-	// So the engine really does hold 33792 B/tok today while this row says
-	// 27648. That is deliberate: 6144 of the difference is an upstream
+	// So that engine really held 33792 B/tok while this row said 27648.
+	// That was deliberate: 6144 of the difference was an upstream
 	// over-allocation rather than a property of the model, and annotating
-	// around it would bake the bug in and be wrong again when #28330
-	// lands.
+	// around it would have baked the bug in and been wrong again once
+	// #28330 landed.
+	//
+	// It landed. On ollama 0.34.2 (llama.cpp b10969, which contains
+	// 311d4211b) the same model at 8192 cells logs:
+	//
+	//	llama_kv_cache: size = 192.00 MiB (8192 cells, 12 layers)  K (f16) 96.00  V (f16) 96.00
+	//	llama_memory_recurrent: size = 112.57 MiB (1 cells, 48 layers)
+	//	llama_kv_cache: size =  24.00 MiB (8192 cells, 12 layers)  K (f16) 24.00  V (f16)  0.00
+	//
+	// Divided back: attention 24576 B/tok, indexer key 3072 B/tok, total
+	// 27648 — this row, unchanged, now equal to the measurement.
 	// docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
-	// carries the measurement and what to re-read at the next pin bump.
+	// carries the b10760 measurement; the b10969 one is in
+	// docs/knowledges/20260920/1400-engine-pins-0342-and-uv-01217.md.
 	"qwen3.8-flash-next": {NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 512, NumExpertsPerTok: 10, IndexerKVHeads: 1, IndexerHeadDim: 128},
 	// qwen3-coder-next-80b-a3b-instruct sat here until #522 retired the
 	// 2025 generation. Its row is gone because this map is checked against

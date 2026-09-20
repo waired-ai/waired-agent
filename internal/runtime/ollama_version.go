@@ -323,27 +323,28 @@ package runtime
 //     total layers, device and host weight buffers, the KV type, and all
 //     three fit terms. All eight of its regexes bind.
 //
-// STILL OWED, and deliberately not done here. The QSA-indexer item the
-// previous stamp scheduled for "the next bump" is this bump:
-// ggml-org/llama.cpp#28330 (311d4211b, first in b10889) IS an ancestor of
-// b10969, so the indexer's unused V half should be gone and the catalog's
-// 27648 B/token annotation for qwen3.8-flash-next should now meet a
-// measurement. Confirming that means serving those weights and counting
-// the llama_kv_cache lines, and the fleet is under a no-downloads hold
-// (2026-09-20) with the model present nowhere. Nothing here depends on the
-// answer — the annotation already carries the derivable number and is not
-// changed by this bump — so the instruction below stands, narrowed to the
-// one thing left to do.
+// The QSA-indexer item the previous stamp scheduled for "the next bump" is
+// this bump, and it is now SETTLED. ggml-org/llama.cpp#28330 (311d4211b,
+// first in b10889) is an ancestor of b10969, and serving
+// qwen3.8-flash-next on it at 8192 cells gives:
 //
-// AT THE NEXT BUMP, or as soon as those weights are on a host that can
-// serve them: re-serve qwen3.8-flash-next, count the llama_kv_cache lines,
-// and check the second one's V half is gone and the measurement meets the
-// annotation. Then
-// docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
-// §4 can be struck. The catalog deliberately carries the derivable number
-// rather than the measured one, so an unconfirmed fix costs nothing; what
-// it costs is that nobody yet knows which of the two figures the engine
-// now holds.
+//	llama_kv_cache: size = 192.00 MiB (8192 cells, 12 layers, 1/1 seqs), K (f16): 96.00 MiB, V (f16): 96.00 MiB
+//	llama_memory_recurrent: size = 112.57 MiB (1 cells, 48 layers, 1 seqs 0 rs_seq)
+//	llama_kv_cache: size =  24.00 MiB (8192 cells, 12 layers, 1/1 seqs), K (f16): 24.00 MiB, V (f16):  0.00 MiB
+//
+// The indexer cache's V half is gone — 0.00 MiB, and the engine now prints
+// n_embd_head_k_all = 0 for it. Dividing back from (cells, layers) so the
+// figures do not depend on the window: attention 24,576 B/token, indexer
+// key 3,072 B/token, total 27,648 — which is exactly what the catalog
+// annotates for this variant. At b10760 the indexer held K 3,072 plus a V
+// half of 6,144 that the model has no projection for, and the measurement
+// came to 33,792.
+//
+// So the annotation was right to carry the derivable number rather than
+// the measured one: it needed no change when the engine was wrong, and it
+// needs none now that the engine agrees. The scheduled item is discharged,
+// and docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
+// §4 is struck in this PR.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
 const OllamaPinnedVersion = "0.34.2"
