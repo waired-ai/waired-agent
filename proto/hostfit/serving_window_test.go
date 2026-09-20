@@ -45,10 +45,12 @@ func TestDeclarableNativeWindow_CatalogClasses(t *testing.T) {
 //
 // It also pins that the 200k window is reachable by something we ship.
 // The 1M window was reachable too until waired-ai/waired#1427 retired
-// glm-5.2 and deepseek-v4-flash, the only models whose own window is 1M;
-// no shipped model declares it now. The constant stays because the wire
-// and the routing already carry it, and a build that reaches 1M through
-// YaRN is to declare it again (waired-ai/waired#1456).
+// glm-5.2 and deepseek-v4-flash, the only models whose OWN window is 1M.
+// No shipped model's own window reaches it now, and this test is still
+// about ContextLength, so 1,048,576 is not expected here. The 1M rung came
+// back through the rope scaling a publisher documents, which is a separate
+// field and a separate question — see TestDeclarableExtendedWindow_Catalog
+// in extended_window_test.go (waired-ai/waired#1456).
 func TestCatalogHasNoWindowClassBetweenTheTwo(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {

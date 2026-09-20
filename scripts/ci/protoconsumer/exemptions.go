@@ -63,6 +63,14 @@ var receiveOnly = []exemption{
 		"KV-cache types a build may be served with; authored in the manifest (#1349), read by the tuning"},
 	{reflect.TypeFor[catalog.Variant](), "MaxParallel",
 		"the most requests a build is served with at once; authored in the manifest (#1423), read by the tuning, local admission and the control plane"},
+	{reflect.TypeFor[catalog.Manifest](), "RopeScaling",
+		"the rope scaling a publisher documents for reaching past the model's own window; authored in the manifest (waired-ai/waired#1456), read by hostfit and the serve tuning"},
+	{reflect.TypeFor[catalog.RopeScaling](), "Factor",
+		"bundled catalog manifest field; transcribed from the model card, read by the serve tuning"},
+	{reflect.TypeFor[catalog.RopeScaling](), "OriginalContextLength",
+		"bundled catalog manifest field; transcribed from the model card, read by the serve tuning"},
+	{reflect.TypeFor[catalog.RopeScaling](), "PublisherMaxContextLength",
+		"bundled catalog manifest field; a sentence from the model card, quoted in docs and to a person — no code serves it"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "LlamaCPP",
 		"vendor×runtime support cell; authored in the catalog, read by the picker"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "MLX",
@@ -152,6 +160,8 @@ var receiveOnly = []exemption{
 		"CP-injected user choice of KV-cache type; the agent reads it once it declares variant-choice-v1 (#1346, #1348)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredRemoveVariants",
 		"CP-injected list of stored builds the user asked to delete; the agent reads it once it declares variant-choice-v1 (#1348)"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredContextWindow",
+		"CP-injected serving window a person chose for this computer; the agent reads it once it declares window-choice-v1 (waired-ai/waired#1456)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -160,6 +170,8 @@ var receiveOnly = []exemption{
 // its own parsed structs. guard() verifies the claim: an entry here
 // whose field nothing under proto/ writes fails.
 var producedInProto = []exemption{
+	{reflect.TypeFor[hostfit.Presentation](), "PricedWindow",
+		"the window a projected row was priced at, written by ProjectModelFrom (waired-ai/waired#1456)"},
 	{reflect.TypeFor[hostfit.Verdict](), "NeedMB",
 		"a fit result, written by the hostfit decision itself"},
 	{reflect.TypeFor[hostfit.Verdict](), "HaveMB",
@@ -355,6 +367,21 @@ var producedInProto = []exemption{
 // somewhere in this repo, and by the name-matching rule above the guard
 // would have taken one of those writes for this field's producer.
 var producerPending = []exemption{
+	// waired-ai/waired#1456. The two inputs that carry a person's chosen
+	// serving window into the pure sizing: the agent's serve tuning passes
+	// ChosenWindow, and the pickers pass Window so a row is priced at the
+	// window being looked at. Both writers land with the agent half of
+	// #1456; the contract had to go first on its own
+	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2).
+	//
+	// Until then both are 0 everywhere, which is exactly the behaviour
+	// this package had before the fields existed — the coding window for
+	// every host and every row — so the published contract is inert, not
+	// wrong. Delete these two entries in the PR that writes them.
+	{reflect.TypeFor[hostfit.OllamaWindowRequest](), "ChosenWindow",
+		"the serving window a person chose; the serve tuning writes it with the agent half of waired-ai/waired#1456"},
+	{reflect.TypeFor[hostfit.ModelProjection](), "Window",
+		"the window a catalog row is priced at; the pickers write it with the agent half of waired-ai/waired#1456"},
 	// waired-agent#69. The contract had to land alone
 	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2),
 	// and there is nothing to publish from yet: hardware.GPU has no

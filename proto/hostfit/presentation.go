@@ -168,7 +168,8 @@ type Presentation struct {
 	// coding-agent window: weights, engine overhead, and the KV cache for
 	// the whole window at the cache the tuning exports
 	// (OllamaWindowResidentMB at min(ServingWindow200k, the model's own
-	// window)).
+	// window) — or at the longer window where the caller asked for it and
+	// the model reaches it; PricedWindow says which).
 	//
 	// It exists because RequiredResidentMB answers a different and much
 	// smaller question — it reserves a fixed OllamaKVBudgetTokens of KV,
@@ -182,6 +183,16 @@ type Presentation struct {
 	// Zero for a variant with no weight annotation, and on the vLLM path,
 	// which prices its window differently and has no equivalent yet.
 	RequiredWindowResidentMB int `json:"required_window_resident_mb,omitempty"`
+
+	// PricedWindow is the window RequiredWindowResidentMB and KVCacheMB
+	// were computed for. It is the coding window unless the caller asked
+	// for the long one and this model can reach it
+	// (ModelProjection.Window), so a surface can say which window the
+	// number it is printing belongs to instead of assuming.
+	//
+	// Zero on the vLLM path and for a variant with no weight annotation,
+	// the same cases that leave RequiredWindowResidentMB zero.
+	PricedWindow int `json:"priced_window,omitempty"`
 
 	// WeightsResidentMB is the card-side term of the window figure:
 	// weights plus the engine's own overhead (OllamaWeightsResidentMB) —
@@ -413,6 +424,31 @@ type ModelProjection struct {
 	// to the default the serve tuning exports (ResolveKVCacheType), so the
 	// row always names the type it was actually priced with.
 	KVCacheType string `json:"-"`
+
+	// Window prices the row for a particular serving window:
+	// ServingWindow1M where a person is looking at the long window and
+	// this model reaches it, whether natively or through the rope scaling
+	// its publisher documents. 0 — the zero value, and what every caller
+	// passed before waired-ai/waired#1456 — prices the coding window, as
+	// this function always has.
+	//
+	// It is what lets a surface reprice a whole catalog for 1M without a
+	// second wire field: the control plane's device catalog projects every
+	// row through this one function.
+	Window int `json:"-"`
+}
+
+// pricingWindow is the window this projection prices: the caller's, where
+// they named the long one and the model reaches it, else the coding window.
+// A caller that asks for a window the model cannot reach gets the coding
+// window rather than an error — a row is a description, and refusing is
+// OllamaDeclaresWindow's job.
+func (in ModelProjection) pricingWindow() int {
+	if in.Window == ServingWindow1M &&
+		(in.Manifest.ContextLength >= ServingWindow1M || DeclarableExtendedWindow(in.Manifest) == ServingWindow1M) {
+		return ServingWindow1M
+	}
+	return OllamaEffectiveContextFloor(in.Manifest)
 }
 
 // ProjectModelFrom is ProjectModel with the per-device GPU detail in hand.
@@ -439,7 +475,8 @@ func ProjectModelFrom(in ModelProjection) Presentation {
 		// user reads as "what would this need here", and answering it with
 		// a truncated window would understate it exactly on the hosts that
 		// most need to know.
-		floor := OllamaEffectiveContextFloor(m)
+		floor := in.pricingWindow()
+		out.PricedWindow = floor
 		atFloor := OllamaEstimateMemory(v, h, kvType, floor, 1)
 		out.RequiredWindowResidentMB = atFloor.DeviceMB()
 		out.DeviceWeightsMB = atFloor.DeviceWeightsMB
