@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/binary"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -222,4 +225,127 @@ func TestDeclaredContextWindow_AgainstReach(t *testing.T) {
 			}
 		})
 	}
+}
+
+// storeWithStoredWindow lays out a model store holding one tag whose GGUF
+// claims ctx, the way ollama does.
+func storeWithStoredWindow(t *testing.T, tag string, ctx uint32) string {
+	t.Helper()
+	dir := t.TempDir()
+	const digest = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	name, tagPart, _ := strings.Cut(tag, ":")
+	mdir := filepath.Join(dir, "manifests", "registry.ollama.ai", "library", name)
+	if err := os.MkdirAll(mdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mf := `{"layers":[{"mediaType":"application/vnd.ollama.image.model","digest":"` + digest + `"}]}`
+	if err := os.WriteFile(filepath.Join(mdir, tagPart), []byte(mf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blob := filepath.Join(dir, "blobs", "sha256-4444444444444444444444444444444444444444444444444444444444444444")
+	if err := os.MkdirAll(filepath.Dir(blob), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b []byte
+	str := func(s string) {
+		b = binary.LittleEndian.AppendUint64(b, uint64(len(s)))
+		b = append(b, s...)
+	}
+	b = append(b, "GGUF"...)
+	b = binary.LittleEndian.AppendUint32(b, 3)
+	b = binary.LittleEndian.AppendUint64(b, 0)
+	b = binary.LittleEndian.AppendUint64(b, 2)
+	str("general.architecture")
+	b = binary.LittleEndian.AppendUint32(b, 8)
+	str("qwen35moe")
+	str("qwen35moe.context_length")
+	b = binary.LittleEndian.AppendUint32(b, 4)
+	b = binary.LittleEndian.AppendUint32(b, ctx)
+	if err := os.WriteFile(blob, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// The choice only becomes a request when this computer can actually serve it.
+// The case that matters is the third: ollama clamps num_ctx to the file's own
+// value, so asking against a file that claims less would leave the runner on
+// the short window while the product declared the long one — the hole
+// waired-ai/waired-agent#1436 describes, which is closed as not planned.
+func TestOllamaWindowRequestFor(t *testing.T) {
+	const tag = "qwen3.6:35b-a3b-mtp-q4_K_M"
+	scaled := scaledManifest()
+	scaled.ModelID = "scaled"
+	v := scaled.Variants[0]
+	v.Source = catalog.VariantSource{Type: catalog.SourceOllama, Tag: tag}
+	plain := tuningTestManifest()
+	plain.ModelID = "plain"
+	pv := plain.Variants[0]
+	pv.Source = v.Source
+
+	chose1M := func(model string) agentconfig.InferenceConfig {
+		return agentconfig.InferenceConfig{PreferredModelID: model,
+			PreferredContextWindow: hostfit.ServingWindow1M}
+	}
+
+	t.Run("nobody chose anything", func(t *testing.T) {
+		dir := storeWithStoredWindow(t, tag, 1048576)
+		got, warn := ollamaWindowRequestFor(agentconfig.InferenceConfig{}, scaled, v, dir)
+		if got != 0 || warn != "" {
+			t.Errorf("got (%d, %q), want (0, \"\")", got, warn)
+		}
+	})
+
+	t.Run("chosen, model reaches it, file claims it", func(t *testing.T) {
+		dir := storeWithStoredWindow(t, tag, 1048576)
+		got, warn := ollamaWindowRequestFor(chose1M("scaled"), scaled, v, dir)
+		if got != hostfit.ServingWindow1M {
+			t.Errorf("got %d, want %d", got, hostfit.ServingWindow1M)
+		}
+		if warn != "" {
+			t.Errorf("unexpected warning: %q", warn)
+		}
+	})
+
+	t.Run("chosen, but the stored file still claims the short window", func(t *testing.T) {
+		dir := storeWithStoredWindow(t, tag, 262144)
+		got, warn := ollamaWindowRequestFor(chose1M("scaled"), scaled, v, dir)
+		if got != 0 {
+			t.Errorf("got %d; asking for a window the file cannot serve is what #1436 is about", got)
+		}
+		if !strings.Contains(warn, "262144") || !strings.Contains(warn, "200k") {
+			t.Errorf("the warning does not say what happened: %q", warn)
+		}
+	})
+
+	t.Run("chosen, but nothing readable to check", func(t *testing.T) {
+		got, warn := ollamaWindowRequestFor(chose1M("scaled"), scaled, v, t.TempDir())
+		if got != 0 {
+			t.Errorf("got %d with no readable build", got)
+		}
+		if warn == "" {
+			t.Error("an unverifiable choice was taken silently")
+		}
+	})
+
+	t.Run("chosen for a model that documents no way there", func(t *testing.T) {
+		dir := storeWithStoredWindow(t, tag, 1048576)
+		got, warn := ollamaWindowRequestFor(chose1M("plain"), plain, pv, dir)
+		if got != 0 {
+			t.Errorf("got %d for a model with no rope scaling", got)
+		}
+		// A stale choice outliving a model switch is not worth a warning on
+		// the serving path; the row that offered it is what refuses it.
+		if warn != "" {
+			t.Errorf("unexpected warning: %q", warn)
+		}
+	})
+
+	t.Run("the choice belongs to another model", func(t *testing.T) {
+		dir := storeWithStoredWindow(t, tag, 1048576)
+		got, _ := ollamaWindowRequestFor(chose1M("some-other-model"), scaled, v, dir)
+		if got != 0 {
+			t.Errorf("got %d; the choice names a different model", got)
+		}
+	})
 }

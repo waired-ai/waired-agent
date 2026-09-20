@@ -31,6 +31,8 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/catalog/gguf"
+	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -132,6 +134,66 @@ func ollamaKVRequestFor(cfg agentconfig.InferenceConfig, m catalog.Manifest, v c
 		return ollamaKVAuto
 	}
 	return hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, hw.HostFit(), nil, cfg.PreferredKVCacheType)
+}
+
+// ollamaWindowRequestFor is the ChosenWindow production passes to the
+// sizing: the window a person chose for this computer, but only when this
+// computer can actually serve it.
+//
+// Impure by design — it reads the stored build's own header — so
+// computeOllamaTuning* stays pure, exactly as ollamaKVRequestFor is.
+//
+// The last check is the one that matters. ollama clamps num_ctx to the
+// GGUF's own context_length, so asking for the long window against a file
+// that claims less gets a runner serving the shorter one while the product
+// records the window it asked for and declares it to the mesh — the hole
+// waired-ai/waired-agent#1436 describes, closed as not planned. Rather than
+// reopen it, the long window never asks for what the file cannot give: a
+// build pulled before waired-ai/waired#1456, or one whose rewrite failed,
+// serves the coding window and says why.
+func ollamaWindowRequestFor(cfg agentconfig.InferenceConfig, m catalog.Manifest, v catalog.Variant, modelsDir string) (window int, warning string) {
+	if cfg.PreferredContextWindow != hostfit.ServingWindow1M || cfg.PreferredModelID == "" {
+		return 0, ""
+	}
+	if _, ok := catalog.LookupByAlias(cfg.PreferredModelID, []catalog.Manifest{m}); !ok {
+		return 0, ""
+	}
+	if hostfit.DeclarableExtendedWindow(m) != hostfit.ServingWindow1M {
+		// Chosen for a model that documents no way there. Not an error and
+		// not worth a warning here: a stale choice outlives a model switch,
+		// and the row it was made on is the surface that refuses it.
+		return 0, ""
+	}
+	stored, ok := storedContextLength(modelsDir, v)
+	if !ok {
+		// Nothing readable to check. Asking anyway would risk declaring a
+		// window the runner does not hold, so it does not ask.
+		return 0, "the long context window is selected, but this computer could not read the stored model to confirm it can serve it, so it is serving the ~200k window"
+	}
+	if stored < hostfit.ServingWindow1M {
+		return 0, fmt.Sprintf(
+			"the long context window is selected, but the stored model still declares %d tokens and the engine will not serve past that, so it is serving the ~200k window; download the model again to pick the choice up",
+			stored)
+	}
+	return hostfit.ServingWindow1M, ""
+}
+
+// storedContextLength is what the build's own file claims, which is the
+// ceiling ollama enforces. false when there is nothing to read: no tag, no
+// store, no such blob, or a header this product does not understand.
+func storedContextLength(modelsDir string, v catalog.Variant) (int, bool) {
+	if modelsDir == "" || v.Source.Tag == "" {
+		return 0, false
+	}
+	blob, _, err := download.ModelBlobPath(modelsDir, v.Source.Tag)
+	if err != nil {
+		return 0, false
+	}
+	n, ok, err := gguf.ArchUint32(blob, "context_length")
+	if err != nil || !ok {
+		return 0, false
+	}
+	return int(n), true
 }
 
 // ollamaKVRequest is the kvType production passes to the sizing: auto unless a
@@ -346,6 +408,12 @@ type ollamaTuningOpts struct {
 	// opposite ways, and one number would let a degrade that lowered the
 	// ceiling read as a choice that re-opened the window.
 	ChosenWindow int
+	// WindowWarning is what to tell the person about the window they asked
+	// for and are not getting — ollamaWindowRequestFor's second return. It
+	// arrives here rather than being logged at the call site because the
+	// user-visible channel is ModelTuning.Warning, which reaches
+	// `waired status`, doctor, the tray and the control plane.
+	WindowWarning string
 	// OperatorParallel is an admin's requested slot count. 0 = unset.
 	OperatorParallel int
 	Observed         ollamaObservedServe
@@ -374,6 +442,8 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 		KVFactor:          kvFactorFor(kv.Type),
 		kvBytesPerTokFP16: v.KVBytesPerTokenFP16,
 	}
+	// First, so every warning the sizing adds below appends after it.
+	t.Warning = opts.WindowWarning
 
 	// The sizing itself lives in proto/hostfit, because the control
 	// plane's wizard and the agent's picker have to reach the same answer

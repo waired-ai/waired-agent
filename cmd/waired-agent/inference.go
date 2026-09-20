@@ -649,7 +649,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
 		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
-			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequestFor(cfg, tm, tv, hwProfile), ollamaObservedServe{})
+			win, winWarn := ollamaWindowRequestFor(cfg, tm, tv, bundledOllamaModels)
+			ollamaTune = computeOllamaTuningOpts(tm, tv, hwProfile, ollamaTuningOpts{
+				KVCacheType:   ollamaKVRequestFor(cfg, tm, tv, hwProfile),
+				ChosenWindow:  win,
+				WindowWarning: winWarn,
+			})
 			ollamaTuned = true
 			if ms, found := tuneState.Models[tm.ModelID]; found && ms.OllamaTag != "" {
 				ollamaTuneTag = ms.OllamaTag
@@ -690,7 +695,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			return nil, infruntime.ModelTuning{}, false
 		}
 		tune := applyModelDecisionReasons(cfg, tm,
-			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequestFor(cfg, tm, tv, hwProfile), ollamaObservedServe{}), logger)
+			func() ollamaTuning {
+				win, winWarn := ollamaWindowRequestFor(cfg, tm, tv, bundledOllamaModels)
+				return computeOllamaTuningOpts(tm, tv, hwProfile, ollamaTuningOpts{
+					KVCacheType:   ollamaKVRequestFor(cfg, tm, tv, hwProfile),
+					ChosenWindow:  win,
+					WindowWarning: winWarn,
+				})
+			}(), logger)
 		logger.Info("ollama serve tuning computed at spawn",
 			"model", tune.ModelID, "variant", tune.VariantID,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
@@ -716,21 +728,22 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		WithLogger(func(format string, args ...any) { logger.Info("ollama store: " + fmt.Sprintf(format, args...)) })
 
 	provider := &agentInferenceProvider{
-		cfg:            cfg,
-		logger:         logger,
-		agentCtx:       ctx,
-		manifests:      manifests,
-		store:          store,
-		profiler:       profiler,
-		registry:       registry,
-		ollama:         ollama,
-		engineExits:    engineExits,
-		puller:         puller,
-		notices:        deps.Notices,
-		stateDir:       stateDir,
-		preferencePath: deps.PreferencePath,
-		dlProgress:     newDownloadProgress(),
-		ollamaUsable:   func() bool { _, e := ollamaResolver(); return e == nil },
+		cfg:             cfg,
+		logger:          logger,
+		agentCtx:        ctx,
+		manifests:       manifests,
+		store:           store,
+		profiler:        profiler,
+		registry:        registry,
+		ollama:          ollama,
+		engineExits:     engineExits,
+		puller:          puller,
+		notices:         deps.Notices,
+		stateDir:        stateDir,
+		ollamaModelsDir: bundledOllamaModels,
+		preferencePath:  deps.PreferencePath,
+		dlProgress:      newDownloadProgress(),
+		ollamaUsable:    func() bool { _, e := ollamaResolver(); return e == nil },
 		// The one rule, not the cached profile (#225). engineViable and
 		// setupEngineState already ask this way; this was the site that
 		// did not.
@@ -1345,8 +1358,12 @@ type agentInferenceProvider struct {
 	// vLLM venv installed after this process started, which no restart-free
 	// path could reach while the boot decision was frozen.
 	stateDir string
-	engine   atomic.Pointer[string]
-	vllm     atomic.Pointer[infruntime.Adapter]
+	// ollamaModelsDir is the engine's model store, needed to read a stored
+	// build's own context_length before asking for a window past it
+	// (ollamaWindowRequestFor, waired-ai/waired#1456).
+	ollamaModelsDir string
+	engine          atomic.Pointer[string]
+	vllm            atomic.Pointer[infruntime.Adapter]
 	// vllmParked is the operator's hard engine-power latch for the vLLM
 	// engine (#881). Reach it through setVLLMParked / vllmIsParked; see
 	// engine_power.go for why it lives here rather than on the adapter, the
@@ -2829,7 +2846,10 @@ func (p *agentInferenceProvider) ollamaDraftToWrite(ctx context.Context, m catal
 		return 0
 	}
 	hw := p.profiler.Profile(ctx)
-	t := computeOllamaTuning(m, v, hw, ollamaKVRequestFor(p.cfg, m, v, hw), ollamaObservedServe{})
+	win, _ := ollamaWindowRequestFor(p.cfg, m, v, p.ollamaModelsDir)
+	t := computeOllamaTuningOpts(m, v, hw, ollamaTuningOpts{
+		KVCacheType: ollamaKVRequestFor(p.cfg, m, v, hw), ChosenWindow: win,
+	})
 	return hostfit.OllamaDraftTokens(v, hw.HostFit(), t.KVCacheType, t.ContextLength)
 }
 
