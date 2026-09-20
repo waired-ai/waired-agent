@@ -293,3 +293,55 @@ func TestCarvedFromSystemRAM_NeverAnswersDiscrete(t *testing.T) {
 		}
 	}
 }
+
+// A reading taken earlier under privileges this process does not have
+// reaches the profile, is keyed by the PCI pair, and never outranks a
+// live reading (waired-agent#459).
+func TestProfile_PersistedIntegration(t *testing.T) {
+	build := func(live integratedFrom, persisted func(string) (bool, bool)) Profile {
+		return NewProfiler(t.TempDir(),
+			WithOSArch(func() (string, string) { return "linux", "x86_64" }),
+			WithCPU(func(context.Context) CPUInfo { return CPUInfo{Model: "test", Cores: 8} }),
+			WithRAM(func(context.Context) (int, int, error) { return 64, 32, nil }),
+			WithStorage(func(context.Context, string) (int64, error) { return 1 << 40, nil }),
+			WithGPU(func(context.Context) ([]GPU, Accelerators, error) {
+				return []GPU{{Vendor: "amd", Model: "an APU", PCIID: "1002:1586"}}, Accelerators{}, nil
+			}),
+			WithUMA(func(context.Context, *Profile) {}),
+			WithIntegratedDetector(live),
+			WithPersistedIntegration(persisted),
+		).Profile(context.Background())
+	}
+	unread := func(string) (bool, bool) { return false, false }
+	silent := func(*Profile, int) integration { return integrationUnknown() }
+
+	t.Run("the persisted reading answers where the live one cannot", func(t *testing.T) {
+		got := build(silent, func(id string) (bool, bool) {
+			if id != "1002:1586" {
+				t.Errorf("looked up %q, want the device's own pair", id)
+			}
+			return true, true
+		})
+		if !got.GPUs[0].IntegratedKnown || !got.GPUs[0].Integrated {
+			t.Errorf("GPUs[0] = %+v, want a known integrated reading", got.GPUs[0])
+		}
+	})
+
+	t.Run("a live reading overrides a stale persisted one", func(t *testing.T) {
+		got := build(
+			func(*Profile, int) integration { return integratedKnown(false) },
+			func(string) (bool, bool) { return true, true },
+		)
+		if !got.GPUs[0].IntegratedKnown || got.GPUs[0].Integrated {
+			t.Errorf("GPUs[0] = %+v, want the LIVE answer (discrete) to win", got.GPUs[0])
+		}
+	})
+
+	t.Run("a record with no entry for this card says nothing", func(t *testing.T) {
+		got := build(silent, unread)
+		if got.GPUs[0].IntegratedKnown {
+			t.Errorf("GPUs[0] = %+v, want unknown — a card the reading never covered "+
+				"must not read as discrete", got.GPUs[0])
+		}
+	})
+}

@@ -1261,7 +1261,12 @@ func run(ctx context.Context, args []string) error {
 					// The date rides with the figure (#699); read from the
 					// same record ensureHostMemoryMeasured just settled.
 					hardware.WithRAMAvailableAtInstall(
-						hostMemoryMeasurement(filepath.Dir(agentJSONPath), os.Getenv)))
+						hostMemoryMeasurement(filepath.Dir(agentJSONPath), os.Getenv)),
+					// The GPU topology reading an elevated setup left
+					// behind, which this process cannot take for itself
+					// (waired-agent#459).
+					hardware.WithPersistedIntegration(
+						persistedGPUIntegration(filepath.Dir(agentJSONPath))))
 				_ = hwProfiler.Profile(ctx)
 			}
 

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -376,6 +377,15 @@ func runInitBody(o *initFlags) error {
 	if err != nil {
 		return err
 	}
+	// Take the GPU topology reading while this process still has the
+	// privileges to (waired-agent#459). Best effort in both directions:
+	// an unelevated run writes nothing rather than an empty record, and
+	// a write failure is reported without failing enrollment, which has
+	// nothing to do with it.
+	if err := persistGPUTopologyFn(context.Background(), *stateDir, time.Now); err != nil {
+		fmt.Fprintf(stdout, "%s\n", dim("Could not record this computer's GPU memory topology: "+err.Error()))
+	}
+
 	route := chooseEnrollRoute(enrollFacts{
 		serviceInstalled: serviceInstalledFn(),
 	}, func(serviceInstalled bool) bool {

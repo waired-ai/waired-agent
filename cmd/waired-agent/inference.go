@@ -491,7 +491,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		hardware.WithEngineVersion(engineVersionProbe),
 		// The persisted memory figure (#568): the catalog endpoint's
 		// fit verdicts must match what the wire publishes.
-		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)))
+		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)),
+		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir)))
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
