@@ -203,6 +203,18 @@ func importShapes(paths []string, o shapeImportOpts) error {
 	if err != nil {
 		return err
 	}
+	// A legacy spelling may continue this store, not start one.
+	if err := checkLegacyContinuesStore("shapes", o.Host, hostsIn(func(yield func(string) bool) {
+		for _, m := range set.Models {
+			for _, rec := range m.Variants {
+				if !yield(rec.Host) {
+					return
+				}
+			}
+		}
+	})); err != nil {
+		return err
+	}
 	want := currentShapeRefs()
 
 	for _, path := range paths {

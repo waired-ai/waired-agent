@@ -75,7 +75,7 @@ func TestImportAgentGradeRoundTripsEveryField(t *testing.T) {
 
 	err := importGrade(t, gradeReportWithMatrix(t, "0.32.15"),
 		"--store", store,
-		"--host", "nvidia-24gb-discrete",
+		"--host", "discrete-nvidia-sm120",
 		"--run-url", "https://github.com/waired-ai/waired-agent/actions/runs/12345",
 		"--retrieved", "2026-08-29",
 		"--notes", "round-trip test",
@@ -115,7 +115,7 @@ func TestImportAgentGradeDerivesTheEngineBuild(t *testing.T) {
 
 	err := importGrade(t, gradeReportWithMatrix(t, "0.32.15"),
 		"--store", store,
-		"--host", "nvidia-24gb-discrete",
+		"--host", "discrete-nvidia-sm120",
 		"--retrieved", "2026-08-29",
 	)
 	if err != nil {
@@ -156,7 +156,12 @@ func TestImportAgentGradeRefusals(t *testing.T) {
 			name: "a host that is not a declared hardware class",
 			rep:  valid(),
 			args: []string{"--host", "sv-mag"},
-			want: "not a known hardware class",
+			// The refusal names the GRAMMAR now, not a list: the
+			// vocabulary stopped being a roster in
+			// waired-agent#1455 and "sv-mag" is rejected for having
+			// no topology on the front rather than for being absent
+			// from a slice.
+			want: "not a well-formed host key",
 		},
 		{
 			name: "no host at all",
@@ -191,7 +196,7 @@ func TestImportAgentGradeRefusals(t *testing.T) {
 			store := emptyAgentGradeStore(t)
 			args := []string{
 				"--store", store,
-				"--host", "nvidia-24gb-discrete",
+				"--host", "discrete-nvidia-sm120",
 				"--retrieved", "2026-08-29",
 			}
 			args = append(args, tc.args...)
@@ -223,7 +228,7 @@ func TestImportAgentGradeRefusesPoolingAcrossEngineBuilds(t *testing.T) {
 	err := runAgentGrade([]string{
 		"--import", a, "--import", b,
 		"--store", store,
-		"--host", "nvidia-24gb-discrete",
+		"--host", "discrete-nvidia-sm120",
 		"--retrieved", "2026-08-29",
 	})
 	if err == nil {
@@ -234,12 +239,17 @@ func TestImportAgentGradeRefusesPoolingAcrossEngineBuilds(t *testing.T) {
 	}
 }
 
-// The vocabulary is only useful if it is not empty and the shipped stores
-// live inside it — a list nobody uses would pass every check above while
+// The vocabulary is only useful if the shipped stores live inside it — a
+// rule nobody's records satisfy would pass every check above while
 // asserting nothing.
+//
+// The shipped records all carry LEGACY spellings today, which is the
+// point of keeping them readable: derived keys arrive with the next
+// measurement, not by rewriting what was already measured
+// (waired-agent#1455).
 func TestHostClassVocabularyIsUsed(t *testing.T) {
-	if len(catalog.HostClasses) == 0 {
-		t.Fatal("no host classes declared — the guard above is checking nothing")
+	if len(catalog.LegacyHostClasses) == 0 {
+		t.Fatal("no legacy host classes declared — the shipped records name nothing")
 	}
 	grades, err := catalog.AgentGrades()
 	if err != nil {

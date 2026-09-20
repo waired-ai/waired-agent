@@ -261,7 +261,12 @@ type BenchDeps struct {
 	GPUModel      string
 	VRAMTotalMB   int
 	DriverVersion string
-	VariantSHA    string
+	// HostKey and HostPCIID travel with the figure so the catalog
+	// importer can read the provenance off the snapshot rather than
+	// being told it on a flag (waired-agent#1455).
+	HostKey    string
+	HostPCIID  string
+	VariantSHA string
 
 	// WarmSlots, when non-nil, reports how many conversations this host
 	// can hold warm — the quantity BenchResult.Capacity carries since

@@ -1,12 +1,19 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260920/2000-host-provenance-is-derived-at-chip-granularity.md
 ---
 
 # 測定記録の出自は「導出する」か「語彙で縛る」かのどちらかにする (20260829 11:00)
 
 ## Status
 
-Accepted。waired-agent#1117。
+Accepted。waired-agent#1117。**§2 のうち `--host` に関する部分だけ**が
+`docs/decisions/20260920/2000-host-provenance-is-derived-at-chip-granularity.md`
+に改められた(waired-agent#1455): ホストクラスは観測可能になったので、
+§2 の「語彙で縛る」ではなく §1 の「観測できるものは導出する」が掛かる。
+§1・§3・§4・§5 と、§2 が退けた「正規表現で識別子っぽさを推測する」ことの
+禁止は、いずれも不変。
 
 ## Context
 

@@ -48,11 +48,18 @@ func runTurnSpeeds(args []string) error {
 		return fmt.Errorf("turnspeeds: load bundled catalog: %w", err)
 	}
 	if len(importPaths) > 0 {
-		for _, err := range []error{
-			checkRetrieved("turnspeeds", *retrieved),
-			checkHostClass("turnspeeds", *host),
-		} {
-			if err != nil {
+		if err := checkRetrieved("turnspeeds", *retrieved); err != nil {
+			return err
+		}
+		// --host is optional here and nowhere else: the snapshots this
+		// subcommand imports are the product's own state, and since
+		// waired-agent#1455 they carry the key the measuring host
+		// derived for itself. A flag is still accepted, and still
+		// checked for shape, but it is a cross-check rather than the
+		// source — settleTurnSpeedHost refuses one that contradicts the
+		// snapshots.
+		if *host != "" {
+			if err := checkHostClass("turnspeeds", *host); err != nil {
 				return err
 			}
 		}
@@ -117,18 +124,19 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 	if err != nil {
 		return err
 	}
-	if set.HostClass != "" && set.HostClass != o.Host {
-		return fmt.Errorf("turnspeeds: the store holds %s measurements; --host %s would mix host classes",
-			set.HostClass, o.Host)
-	}
-	set.HostClass = o.Host
-
 	type key struct{ model, variant string }
 	samples := map[key]map[time.Time]catalog.VariantMeasurement{}
 	// flags holds the engine's launch flags per sample, read from
 	// <name>.runner.txt beside <name>.state.json. Every sample needs one.
 	flags := map[key]map[time.Time]string{}
 	var notMeasured []string
+	// derivedHosts is what the SNAPSHOTS say about the machine they were
+	// taken on. Decision 20260829/1100 §1 settled the shape for
+	// engine_version and this is the same field's last hand-typed
+	// sibling: what can be observed is derived, never typed, and a flag
+	// that contradicts the observation is refused rather than obeyed
+	// (waired-agent#1455).
+	derivedHosts := map[string]struct{}{}
 	for _, p := range paths {
 		runnerFlags := ""
 		if b, err := os.ReadFile(strings.TrimSuffix(p, ".state.json") + ".runner.txt"); err == nil {
@@ -160,6 +168,9 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 			samples[k] = map[time.Time]catalog.VariantMeasurement{}
 		}
 		samples[k][m.MeasuredAt] = m
+		if m.HostKey != "" {
+			derivedHosts[m.HostKey] = struct{}{}
+		}
 		if runnerFlags != "" {
 			if flags[k] == nil {
 				flags[k] = map[time.Time]string{}
@@ -171,6 +182,12 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 		fmt.Printf("turnspeeds: %d snapshot(s) hold no measurement of their own (the run reused a stored figure or failed): %s\n",
 			len(notMeasured), strings.Join(notMeasured, ", "))
 	}
+
+	host, err := settleTurnSpeedHost(o.Host, set.HostClass, derivedHosts)
+	if err != nil {
+		return err
+	}
+	set.HostClass = host
 
 	if set.Models == nil {
 		set.Models = map[string]catalog.ModelTurnSpeeds{}
@@ -323,4 +340,57 @@ func measuredByThisRun(st snapshotState) (string, catalog.VariantMeasurement, bo
 		}
 	}
 	return "", catalog.VariantMeasurement{}, false
+}
+
+// settleTurnSpeedHost decides which host class the store carries after
+// this import, from three sources that may disagree: the snapshots'
+// own derived keys, the flag, and what the store already holds.
+//
+// The order is the point. A snapshot's key is an OBSERVATION the
+// measuring host made of itself; the flag is a claim someone typed. So
+// a flag that contradicts the snapshots is refused rather than obeyed,
+// exactly as decision 20260829/1100 §1 has --engine-version refused when
+// it disagrees with the report's own shape matrix.
+//
+// Snapshots taken by an agent from before the key existed carry none, so
+// the flag remains the answer there, and remains required — an import
+// that could name neither would file a measurement nobody can place.
+func settleTurnSpeedHost(flag, stored string, derived map[string]struct{}) (string, error) {
+	switch len(derived) {
+	case 0:
+		// Nothing observed. The flag is all there is.
+		if flag == "" {
+			return "", fmt.Errorf("turnspeeds: no snapshot carries a host key and --host was not given; " +
+				"the store would hold a measurement nobody can place")
+		}
+	case 1:
+		var only string
+		for h := range derived {
+			only = h
+		}
+		if flag != "" && flag != only {
+			return "", fmt.Errorf("turnspeeds: --host %q contradicts the snapshots, which were taken on %q. "+
+				"The host is derived from the measuring machine's own hardware profile; drop the flag "+
+				"rather than overriding the observation", flag, only)
+		}
+		flag = only
+	default:
+		names := make([]string, 0, len(derived))
+		for h := range derived {
+			names = append(names, h)
+		}
+		sort.Strings(names)
+		return "", fmt.Errorf("turnspeeds: the snapshots were taken on more than one kind of machine (%s); "+
+			"comparing seconds across machines is exactly what the step-down must not do",
+			strings.Join(names, ", "))
+	}
+	if stored != "" && stored != flag {
+		return "", fmt.Errorf("turnspeeds: the store holds %s measurements; %s would mix host classes",
+			stored, flag)
+	}
+	// A legacy spelling may continue this store, not start one.
+	if err := checkLegacyContinuesStore("turnspeeds", flag, []string{stored}); err != nil {
+		return "", err
+	}
+	return flag, nil
 }

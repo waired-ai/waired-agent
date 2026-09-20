@@ -627,6 +627,18 @@ func importAgentGrade(paths []string, o importOpts) error {
 	if err != nil {
 		return err
 	}
+	// A legacy spelling may continue this store, not start one.
+	if err := checkLegacyContinuesStore("agentgrade", o.Host, hostsIn(func(yield func(string) bool) {
+		for _, m := range set.Models {
+			for _, rec := range m.Variants {
+				if !yield(rec.Host) {
+					return
+				}
+			}
+		}
+	})); err != nil {
+		return err
+	}
 	if set.Models == nil {
 		set.Models = map[string]catalog.ModelAgentGrade{}
 	}

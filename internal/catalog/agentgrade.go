@@ -127,13 +127,20 @@ type VariantAgentGrade struct {
 	Transport     string `json:"transport,omitempty"`
 
 	// Host is a hardware CLASS, never an identifier — this repository is
-	// public. "nvidia-24gb-discrete", "apple-unified-64gb". It matters
-	// because a model that spills most of its layers may answer
-	// differently from the same model held resident.
+	// public. It matters because a model that spills most of its layers
+	// may answer differently from the same model held resident.
 	//
-	// HostClasses is that sentence with teeth: it was prose only until
-	// waired-agent#1117, and both importers took the field as a free
-	// string.
+	// It is DERIVED from the measuring host's own hardware profile
+	// (hardware.HostKey) and spelled <topology>-<vendor>-<chip>:
+	// "unified-amd-ryzen-ai-max-395", "discrete-nvidia-sm120". Nothing
+	// types it, which is what keeps a machine name out of the store —
+	// a stronger guarantee than the reviewed list it replaces, which
+	// relied on somebody noticing (waired-agent#1455).
+	//
+	// Three older spellings survive as LegacyHostClasses because the
+	// records that carry them were measured before keys were derived and
+	// are not rewritten. ValidHostClass accepts both; an importer
+	// accepts only the derived form for a NEW record.
 	Host string `json:"host,omitempty"`
 
 	// RunURL points at the CI run that produced the verdict, when it

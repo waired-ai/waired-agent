@@ -103,6 +103,11 @@ func readDisplayAdapter(parent registry.Key, name, pciVendorID, vendor string) (
 		Model:         trimNul(desc),
 		DriverVersion: trimNul(driverVer),
 		VRAMTotalMB:   readAdapterVRAMMB(k),
+		// The pair is already in hand: MatchingDeviceId was read above
+		// for the vendor filter and carries "VEN_10DE&DEV_2C34". It is
+		// the accelerator identity that matches what Linux reads from
+		// sysfs for the same part (waired-agent#1455).
+		PCIID: PCIIDFromWindowsMatchingID(trimNul(matching)),
 	}, true
 }
 
