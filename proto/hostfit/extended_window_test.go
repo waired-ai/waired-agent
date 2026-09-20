@@ -306,3 +306,140 @@ func TestOllamaEstimate_MatchesTheEngineAtBothWindows(t *testing.T) {
 		}
 	}
 }
+
+// longModel is a manifest that reaches the long window through the rope
+// scaling its publisher documents, with a per-token KV size real enough for
+// the sizing to bite.
+func longModel() (catalog.Manifest, catalog.Variant) {
+	v := catalog.Variant{
+		VariantID: "q4-gguf", Format: "ollama-tag", Quantization: "Q4_K_M",
+		RuntimeSupport: []string{catalog.RuntimeOllama}, EstimatedWeightGB: 6.0,
+		MinRAMGB: 16, QualityTier: 90, KVBytesPerTokenFP16: 65536,
+		Source: catalog.VariantSource{Type: "ollama", Tag: "big:9b"},
+	}
+	m := catalog.Manifest{
+		ModelID: "big", ContextLength: 262144, Capabilities: []string{"chat"},
+		RopeScaling: &catalog.RopeScaling{
+			Type: catalog.RopeScalingYaRN, Factor: 4,
+			OriginalContextLength: 262144, PublisherMaxContextLength: 1010000,
+		},
+		Variants: []catalog.Variant{v},
+	}
+	return m, v
+}
+
+// PRODUCT CONTRACT (owner ruling 2026-09-20 on waired-ai/waired#1359): the
+// recommendation is answered WITHIN the window a person chose. The same host
+// and the same model give different answers at the two windows, because the
+// KV cache is more than five times the size at the long one.
+func TestOllamaRecommendModelAt_AnswersTheWindowAsked(t *testing.T) {
+	m, v := longModel()
+	kv := hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, hostfit.Host{}, nil, "")
+
+	// Measured against this fixture: 32 GB holds the coding window but not
+	// the long one; 64 GB holds both.
+	tight := hostfit.Host{RAMTotalGB: 32}
+	roomy := hostfit.Host{RAMTotalGB: 64}
+
+	if got := hostfit.OllamaRecommendModelAt(m, v, tight, kv, 0); !got.Fits {
+		t.Fatalf("coding window on the tight host: %+v, want recommended", got)
+	}
+	got := hostfit.OllamaRecommendModelAt(m, v, tight, kv, hostfit.ServingWindow1M)
+	if got.Fits {
+		t.Error("long window on the tight host: recommended, but it cannot hold the cache")
+	}
+	if got.Reason != hostfit.ReasonWindowExceedsMemory {
+		t.Errorf("reason = %q, want %q", got.Reason, hostfit.ReasonWindowExceedsMemory)
+	}
+	if got := hostfit.OllamaRecommendModelAt(m, v, roomy, kv, hostfit.ServingWindow1M); !got.Fits {
+		t.Errorf("long window on the roomy host: %+v, want recommended", got)
+	}
+}
+
+// PRODUCT CONTRACT: the published entry points keep answering the coding
+// window. OllamaRecommendModelFor became a wrapper in waired-ai/waired#1456
+// and must not have moved.
+func TestOllamaRecommendModelFor_StillTheCodingWindow(t *testing.T) {
+	m, v := longModel()
+	kv := hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, hostfit.Host{}, nil, "")
+	for _, h := range []hostfit.Host{{RAMTotalGB: 16}, {RAMTotalGB: 32}, {RAMTotalGB: 64}} {
+		want := hostfit.OllamaRecommendModelAt(m, v, h, kv, 0)
+		if got := hostfit.OllamaRecommendModelFor(m, v, h, kv); got != want {
+			t.Errorf("RAM %d GB: For gave %+v, At(0) gave %+v", h.RAMTotalGB, got, want)
+		}
+	}
+}
+
+// A window the model cannot reach collapses to the coding window rather than
+// being refused — a verdict describes a row; declining a window is
+// ReachesWindow's job at the point of choice.
+func TestOllamaRecommendModelAt_UnreachableWindowCollapses(t *testing.T) {
+	m, v := longModel()
+	m.RopeScaling = nil // now it reaches only its trained length
+	kv := hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, hostfit.Host{}, nil, "")
+	h := hostfit.Host{RAMTotalGB: 32}
+	want := hostfit.OllamaRecommendModelAt(m, v, h, kv, 0)
+	if got := hostfit.OllamaRecommendModelAt(m, v, h, kv, hostfit.ServingWindow1M); got != want {
+		t.Errorf("asking for an unreachable window gave %+v, want the coding answer %+v", got, want)
+	}
+}
+
+// A RECORD of today's behaviour: the long rung is ollama-only until a vLLM
+// host is measured at it. Both engines serve the coding window.
+func TestEngineServesWindow(t *testing.T) {
+	for _, tc := range []struct {
+		engine string
+		window int
+		want   bool
+	}{
+		{catalog.RuntimeOllama, hostfit.ServingWindow200k, true},
+		{catalog.RuntimeVLLM, hostfit.ServingWindow200k, true},
+		{catalog.RuntimeOllama, hostfit.ServingWindow1M, true},
+		{catalog.RuntimeVLLM, hostfit.ServingWindow1M, false},
+		{"nonsense", hostfit.ServingWindow200k, false},
+		{catalog.RuntimeOllama, 0, true},
+	} {
+		if got := hostfit.EngineServesWindow(tc.engine, tc.window); got != tc.want {
+			t.Errorf("EngineServesWindow(%q, %d) = %v, want %v",
+				tc.engine, tc.window, got, tc.want)
+		}
+	}
+}
+
+// The claim OllamaDeclaresWindowFrom's doc makes: at the coding window it
+// and OllamaDeclaresWindowFor agree. "Agree by construction" is a statement
+// about code, and code stops being true, so it is pinned here over every
+// shipped build and a range of hosts.
+func TestOllamaDeclaresWindowFrom_MatchesForAtTheCodingWindow(t *testing.T) {
+	manifests, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	hosts := []hostfit.Host{
+		{RAMTotalGB: 8}, {RAMTotalGB: 16}, {RAMTotalGB: 32},
+		{RAMTotalGB: 64}, {RAMTotalGB: 128},
+	}
+	checked := 0
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			for _, h := range hosts {
+				kv := hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, h, nil, "")
+				for _, w := range []int{0, hostfit.ServingWindow200k} {
+					want := hostfit.OllamaDeclaresWindowFor(m, v, h, kv, w)
+					got := hostfit.OllamaDeclaresWindowFrom(hostfit.OllamaWindowRequest{
+						Manifest: m, Variant: v, Host: h, KVCacheType: kv, ChosenWindow: w,
+					})
+					if got != want {
+						t.Errorf("%s/%s at %d GB, window %d: From=%v For=%v",
+							m.ModelID, v.VariantID, h.RAMTotalGB, w, got, want)
+					}
+					checked++
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("compared nothing: the catalog fixture is empty")
+	}
+	t.Logf("compared %d (model, build, host, window) combinations", checked)
+}
