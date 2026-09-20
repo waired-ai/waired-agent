@@ -422,11 +422,19 @@ type setupProvider interface {
 	//
 	// A host below the recommended spec starts with local inference off
 	// (waired-ai/waired#1056 decision 4), and since #507 "off" means the
-	// engine stands down — so without this the wizard's engine step would
-	// be refused on exactly the machines removing the latch finally let
-	// the wizard reach. The control plane writes a desired engine or
-	// model only when a person chose one, so applying it IS the
-	// browser-side half of the opt-in.
+	// engine stands down — so without a way back the wizard's engine step
+	// would be refused on exactly the machines removing the latch finally
+	// let the wizard reach.
+	//
+	// The way back is the explicit answer and nothing else. Until #1446 a
+	// desired engine or model arriving at all was read as the browser
+	// asking, on the reasoning that the control plane writes one only
+	// when a person chose it. The instruction is sticky and replayed
+	// forever, so that read turned local inference back on for people who
+	// had switched it off — the three frames that did it are listed beside
+	// the applyDesiredInference call in Apply. The browser now says
+	// `inference: "on"` with the engine and model it writes, and this is
+	// reached only from applyDesiredInference.
 	//
 	// Fire-and-forget for the same reason startSetupEngine is.
 	setupEnableLocalInference(reason string)
@@ -720,15 +728,6 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	if changed && r.desired.modelID != "" && r.desired.modelID == d.modelID && r.desired.variantID != d.variantID {
 		supersededBuildOf = d.modelID
 	}
-	// The serve-ask below must not read an inference-only change as
-	// "asked to serve" (#597): a wizard writing "off" beside a standing
-	// engine would otherwise fire an enable a breath before the off
-	// applies. Compared with the inference field blanked on both sides,
-	// which is exactly the comparison `changed` made before the field
-	// existed.
-	prevServe, dServe := r.desired, d
-	prevServe.inference, dServe.inference = "", ""
-	changedServe := dServe != prevServe
 	if changed && !baseline {
 		// Watched it change: something wrote this instruction while we
 		// were here (#308).
@@ -808,24 +807,38 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 			"gen", d.modelGen, "model", d.modelID)
 	}
 
-	// Someone asked this device to serve (#465). Gated on `changedServe`
-	// — not on the current toggle state — because Apply runs on every
-	// frame and the control plane never clears a desired value:
-	// re-asserting on every frame would undo a `waired inference off`
-	// seconds after the user made it. A benchmark generation alone is
-	// deliberately not an ask; it tells a device that already serves to
-	// measure itself. And an inference-only change is the OPPOSITE of an
-	// ask (#597) — it is excluded from this comparison and applied below.
-	if changedServe && (d.engine != "" || d.modelID != "") {
-		r.provider.setupEnableLocalInference("setup: the wizard asked this device to serve")
-	}
-
 	// The operator's explicit local-AI answer (#597; waired#1109/#1110),
-	// applied once per persisted value — see applyDesiredInference. AFTER
-	// the serve-ask above, so a frame that (incoherently) carries both a
-	// serve instruction and "off" lands on off — the explicit answer
-	// outranks the implied one, and the CP validates the pair anyway.
-	r.applyDesiredInference(d.inference)
+	// applied once per ask — see applyDesiredInference. It is the ONLY
+	// thing here that turns local inference on.
+	//
+	// A desired engine or model used to imply it: until #1446 this spot
+	// called setupEnableLocalInference whenever the serve half of the
+	// instruction differed from the one this process last saw. That read
+	// the instruction's CONTENTS rather than what had changed, and three
+	// kinds of frame satisfied it without anybody asking — the first
+	// frame after every daemon start (the compare is against the zero
+	// value, and the control plane never clears a desired value), the
+	// control plane's own realignment onto the model this device already
+	// serves (#647), and a frame that moved only the benchmark
+	// generation or the coding-tool toggles beside a standing engine. On
+	// real hardware a restart rewrote the person's `waired inference off`
+	// to `enabled` on disk, on the same frame whose model step declined
+	// the instruction as a leftover nobody here chose (#308) — the enable
+	// was turning the subsystem on for an instruction it was not going to
+	// apply.
+	//
+	// The browser's half of the waired-ai/waired#1056 decision-4 opt-in
+	// did not go away with it; it moved from an inferred signal to a
+	// stated one. The wizard now sends `inference: "on"` with the engine
+	// and model it writes (waired-ai/waired, Setup.tsx chooseEngineStep
+	// and writeSetup), and the CP stamps DesiredInferenceSetAt beside it
+	// so the same answer can be given twice.
+	//
+	// The time is read from the frame rather than carried on setupDesired
+	// deliberately: setupDesired is the change detector for the whole
+	// instruction, and a time moving would otherwise read as a wizard
+	// driving and unblock the model step for a model nobody chose.
+	r.applyDesiredInference(d.inference, st.DesiredInferenceSetAt)
 
 	// Benchmark (§12). See startBenchmarkIfDue.
 	r.startBenchmarkIfDue(d)
@@ -1548,29 +1561,47 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 // host has no onboarding activity. Statuses derive from observable
 // state only, so a restarted agent reports the same truth.
 // applyDesiredInference acts on the wizard's explicit local-AI answer
-// (#597) — once per persisted VALUE, never per frame and never per
-// process. The CP re-sends the instruction on every map frame and never
-// clears it, so any weaker guard re-applies a weeks-old answer over a
-// person's later local `waired inference off|on`: acting on the toggle
-// state would do it every frame, an in-memory marker every restart. The
-// durable record (state.SetupInference) is what lets a person's local
-// flip stand until the wizard actually says something different — the
-// #465 rule that an opt-in silently reverted on the next boot is no
-// opt-in at all.
+// (#597) — once per ASK, never per frame and never per process. The CP
+// re-sends the instruction on every map frame and never clears it, so any
+// weaker guard re-applies a weeks-old answer over a person's later local
+// `waired inference off|on`: acting on the toggle state would do it every
+// frame, an in-memory marker every restart. The durable record
+// (state.SetupInference) is what lets a person's local flip stand until
+// the wizard actually says something different — the #465 rule that an
+// opt-in silently reverted on the next boot is no opt-in at all.
+//
+// An ask is identified by the pair (value, askedAt), not by the value
+// alone. Per-value was the whole rule until #1446, and it made the same
+// word unsayable twice: a person who turns local inference off at the
+// machine leaves the record still naming the wizard's earlier "on", so
+// the console's "turn local AI back on" wrote a value this function
+// correctly read as already acted on and the button did nothing. With
+// the CP's DesiredInferenceSetAt beside the value, pressing it again is a
+// new ask while a replayed frame is not.
+//
+// An EMPTY askedAt keeps the per-value rule verbatim — a control plane
+// that predates the field, and a record written before it existed, must
+// both behave exactly as they do today rather than have a freshness
+// guessed for them. Nothing is migrated: the first stamped ask from a
+// newer CP differs from the unstamped record and acts once.
 //
 // A value outside the closed on/off set is left un-acted and UNRECORDED:
 // a newer CP speaking a vocabulary this build does not know should find
 // the instruction still pending after an upgrade, not consumed.
-func (r *setupReconciler) applyDesiredInference(value string) {
+func (r *setupReconciler) applyDesiredInference(value, askedAt string) {
 	if value != signer.DesiredInferenceOn && value != signer.DesiredInferenceOff {
 		return
 	}
 	r.mu.Lock()
-	if r.inferenceActed.Value == value {
+	if r.inferenceActed.Value == value && r.inferenceActed.AskedAt == askedAt {
 		r.mu.Unlock()
 		return
 	}
-	rec := state.SetupInference{Value: value, AppliedAt: r.now().UTC().Format(time.RFC3339)}
+	rec := state.SetupInference{
+		Value:     value,
+		AskedAt:   askedAt,
+		AppliedAt: r.now().UTC().Format(time.RFC3339),
+	}
 	r.inferenceActed = rec
 	r.mu.Unlock()
 	switch value {
@@ -2876,9 +2907,13 @@ func (p *agentInferenceProvider) startSetupBenchmark(gen int) {
 // (#304). Coalesced and dispatched on the daemon's own context by
 // requestEngineStart; a parked or crash-latched engine is left alone.
 // setupEnableLocalInference turns local inference on when the wizard's
-// desired state arrives on a device that had it off (#465). A no-op when
-// it is already on, so the per-frame reconcile costs nothing and the
-// desired-inference file is not rewritten on a cadence.
+// explicit answer arrives on a device that had it off (#465, #597). A
+// no-op when it is already on, so the per-frame reconcile costs nothing
+// and the desired-inference file is not rewritten on a cadence.
+//
+// "the wizard's answer", not "the wizard's desired state": until #1446 a
+// desired engine or model was enough, which re-enabled devices nobody
+// had asked.
 //
 // enableInference is nil on a daemon started with --disable-inference:
 // there is no subsystem to turn on, and the operator's kill switch is
