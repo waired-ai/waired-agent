@@ -219,3 +219,86 @@ func TestEngineStoppedReason_NamesOneWayOut(t *testing.T) {
 		}
 	})
 }
+
+// TestPublishedEngineStoppedCause is waired-agent#1480: the control plane
+// gets a code for why the engine is not running, so it can write its own
+// words instead of guessing from `engine_failed`.
+//
+// PRODUCT CONTRACT: silence for the three situations nothing here decided.
+// `engine_failed` covers four — a load that ran out of memory, a crashed
+// runner, an exhausted recovery budget, an engine that never came up — and
+// naming a remedy for the wrong one is worse than naming none. Only the one
+// this product decided may speak.
+func TestPublishedEngineStoppedCause(t *testing.T) {
+	t.Run("a memory stop names itself", func(t *testing.T) {
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		p.parkForOutOfMemory(context.Background(), "ran out of memory")
+		if got := p.PublishedEngineStoppedCause(); got != signer.EngineStoppedCauseOutOfMemory {
+			t.Errorf("cause = %q, want %q", got, signer.EngineStoppedCauseOutOfMemory)
+		}
+	})
+
+	t.Run("the operator's stop names itself", func(t *testing.T) {
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		p.noteParked(parkCauseOperator)
+		if err := p.ollama.Park(context.Background()); err != nil {
+			t.Fatalf("Park: %v", err)
+		}
+		if got := p.PublishedEngineStoppedCause(); got != signer.EngineStoppedCauseOperator {
+			t.Errorf("cause = %q, want %q", got, signer.EngineStoppedCauseOperator)
+		}
+	})
+
+	t.Run("a running engine says nothing", func(t *testing.T) {
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		if got := p.PublishedEngineStoppedCause(); got != "" {
+			t.Errorf("cause = %q on a running engine, want empty", got)
+		}
+	})
+
+	t.Run("CONTRACT: nothing is claimed about the failures this product did not cause", func(t *testing.T) {
+		// A crashed runner reaches the same `engine_failed` on the wire.
+		// Nothing parked it, so parkedBecause is none and the cause stays
+		// empty — which is what keeps a reader from offering "choose a
+		// different model" to someone whose engine crashed.
+		e := &warmEngine{}
+		p := warmProvider(t, e, "model-a", "a:q4")
+		if p.ollama.IsParked() {
+			t.Fatal("precondition: the engine was parked")
+		}
+		if got := p.PublishedEngineStoppedCause(); got != "" {
+			t.Errorf("cause = %q for a failure nothing here decided; a reader would name "+
+				"a remedy that does not apply", got)
+		}
+	})
+
+	// Every value this can emit has to be one the boundary validator
+	// accepts, or a newer agent would be rejected by the control plane.
+	t.Run("every emitted value is valid on the wire", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			set  func(*agentInferenceProvider)
+		}{
+			{"memory", func(p *agentInferenceProvider) {
+				p.parkForOutOfMemory(context.Background(), "ran out of memory")
+			}},
+			{"operator", func(p *agentInferenceProvider) {
+				p.noteParked(parkCauseOperator)
+				_ = p.ollama.Park(context.Background())
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				e := &warmEngine{}
+				p := warmProvider(t, e, "model-a", "a:q4")
+				tc.set(p)
+				got := p.PublishedEngineStoppedCause()
+				if !signer.IsValidEngineStoppedCause(got) {
+					t.Errorf("emitted %q, which the wire validator rejects", got)
+				}
+			})
+		}
+	})
+}

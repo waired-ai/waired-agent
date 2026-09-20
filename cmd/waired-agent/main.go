@@ -1495,6 +1495,7 @@ func run(ctx context.Context, args []string) error {
 				// engine's answer rather than the one it booted with.
 				deps.ModelMeasurements = prov.PublishedMeasurements
 				deps.LoadFailures = prov.PublishedLoadFailures
+				deps.EngineStoppedCause = prov.PublishedEngineStoppedCause
 				// The SERVING engine's version, which is what the doc
 				// two lines up already claimed and the implementation did
 				// not do: it named ollama unconditionally, so a vLLM host

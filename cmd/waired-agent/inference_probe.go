@@ -190,6 +190,12 @@ type inferenceProbeDeps struct {
 	// engine tag in Models).
 	ActiveModel    func() string
 	SubsystemState func() string
+
+	// EngineStoppedCause is why the engine is not running, when something
+	// decided it should not be (waired-agent#1480). A live getter beside
+	// SubsystemState because the two are read together and must not
+	// disagree by a tick.
+	EngineStoppedCause func() string
 	// ActiveBuild and StoredVariants, when non-nil, report the build of
 	// ActiveModel being served with its KV-cache type, and the builds a
 	// switch left on disk (waired-agent#1348). Ungated like ActiveModel,
@@ -639,6 +645,9 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if deps.SubsystemState != nil {
 			s.SubsystemState = deps.SubsystemState()
 		}
+		if deps.EngineStoppedCause != nil {
+			s.EngineStoppedCause = deps.EngineStoppedCause()
+		}
 		if deps.ActiveBuild != nil {
 			s.ActiveVariantID, s.ActiveKVCacheType = deps.ActiveBuild()
 		}
@@ -902,6 +911,9 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 		// as a candidate), but the admin Device page reads the same field.
 		if deps.SubsystemState != nil {
 			st.SubsystemState = deps.SubsystemState()
+		}
+		if deps.EngineStoppedCause != nil {
+			st.EngineStoppedCause = deps.EngineStoppedCause()
 		}
 		if deps.HostSpeed != nil {
 			st.HostSpeed = deps.HostSpeed()
