@@ -682,8 +682,17 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the binary through ollamaResolver on every pull rather than freezing
 	// the boot-time path: on a fresh install that path is empty, and the
 	// puller's own fallback cannot see a state-dir install (#304).
+	//
+	// The model store is handed over separately because a pull may have to
+	// finish the job on the file it fetched: ollama will not serve a window
+	// past a GGUF's own context_length, so a build asked for the long window
+	// has that one value raised in place (Rendering.ContextLength,
+	// waired-ai/waired#1456). The puller is the only thing that knows a
+	// fetch just happened, which is why the edit lives there.
 	puller := download.NewResolvingPuller(ollamaResolver, download.DefaultRunner{},
-		fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", cfg.ResolvedOllamaPort()))
+		fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", cfg.ResolvedOllamaPort())).
+		WithModelStore(bundledOllamaModels).
+		WithLogger(func(format string, args ...any) { logger.Info("ollama store: " + fmt.Sprintf(format, args...)) })
 
 	provider := &agentInferenceProvider{
 		cfg:            cfg,

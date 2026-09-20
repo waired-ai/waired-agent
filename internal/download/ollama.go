@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/waired-ai/waired-agent/internal/catalog/gguf"
 )
 
 // Pull-progress states emitted to the user-supplied callback. They
@@ -62,10 +64,30 @@ type CommandRunner interface {
 
 // Puller drives `ollama pull` and parses its progress output.
 type Puller struct {
-	binary  string
-	resolve func() (string, error)
-	runner  CommandRunner
-	env     []string
+	binary    string
+	resolve   func() (string, error)
+	runner    CommandRunner
+	env       []string
+	modelsDir string
+	logf      func(format string, args ...any)
+}
+
+// WithModelStore records where the engine keeps its models, so a pull can
+// finish the job on the file it just fetched (Rendering.ContextLength).
+// Without it that step is skipped and said so in the error.
+//
+// Call it at construction, before the Puller is shared: Puller has no mutex
+// because nothing mutates it once it is handed out.
+func (p *Puller) WithModelStore(dir string) *Puller {
+	p.modelsDir = dir
+	return p
+}
+
+// WithLogger gives the Puller somewhere to record a store edit. Optional;
+// nil logs nothing.
+func (p *Puller) WithLogger(logf func(format string, args ...any)) *Puller {
+	p.logf = logf
+	return p
 }
 
 // NewPuller wires a Puller with the given ollama binary path and
@@ -99,6 +121,31 @@ type Rendering struct {
 	Renderer string
 	Parser   string
 
+	// ContextLength, when > 0, is the context_length the pulled build's GGUF
+	// must claim, rewritten in place if it claims less.
+	//
+	// It exists because ollama will not serve a window past that value: it
+	// clamps num_ctx to the GGUF's own context_length (v0.34.0
+	// llm/server.go:112-115) and passes -c on the command line, so no
+	// environment variable can lift it. Everything ELSE the longer window
+	// needs reaches the runner through llama.cpp's own LLAMA_ARG_* — ollama
+	// spawns the upstream llama-server and hands it os.Environ() — so this
+	// one number is all the file has to say (waired-ai/waired#1456).
+	//
+	// Raising it does not make the engine serve more. The window served is
+	// whatever OLLAMA_CONTEXT_LENGTH asks for, and the rope scaling is
+	// applied only when the long window is the one being served; a build
+	// with this raised and no scaling passed serves exactly what it served
+	// before. What it removes is a ceiling, not a default.
+	//
+	// It is done at PULL time rather than when someone picks the long
+	// window, so that no file is edited underneath a running engine and the
+	// edit has one home. The cost is that the stored file stops matching the
+	// publisher's bytes for a person who never picks 1M — the same trade
+	// stamp already makes with the manifest, and recorded in the decision
+	// log rather than left implicit.
+	ContextLength int
+
 	// DraftNumPredict, when > 0, is written as PARAMETER draft_num_predict:
 	// the MTP draft length for a tag that carries nextn blocks but whose
 	// publisher set no draft, so ollama would otherwise run none
@@ -108,7 +155,9 @@ type Rendering struct {
 	DraftNumPredict int
 }
 
-// Wanted reports whether anything needs stamping.
+// Wanted reports whether anything needs stamping. ContextLength is not part
+// of it: that is a rewrite of the weights file, not of the manifest, and it
+// happens after the stamp rather than inside it.
 func (r Rendering) Wanted() bool {
 	return strings.TrimSpace(r.Renderer) != "" || strings.TrimSpace(r.Parser) != "" || r.DraftNumPredict > 0
 }
@@ -162,7 +211,53 @@ func (p *Puller) Pull(ctx context.Context, tag string, want Rendering, onProgres
 	}); err != nil {
 		return err
 	}
-	return p.stamp(ctx, binary, tag, want)
+	if err := p.stamp(ctx, binary, tag, want); err != nil {
+		return err
+	}
+	return p.raiseContextLength(tag, want.ContextLength)
+}
+
+// raiseContextLength lifts the pulled build's own context_length ceiling to
+// want, in place, when it is lower. See Rendering.ContextLength for why the
+// engine needs it and why it is done here.
+//
+// It is INSIDE Pull for the reason stamp is: `ollama pull` on a tag that is
+// already present rewrites the local manifest, and while it leaves the
+// weights blob alone — so this edit survives a re-pull where the stamp does
+// not — a blob that was deleted and re-fetched comes back as published. A
+// caller able to skip this is a caller able to leave a model unable to serve
+// the window a person chose.
+//
+// A blob is shared by digest, so the edit reaches every tag that names the
+// same weights. That is recorded rather than prevented: the value is a
+// ceiling and raising it changes what no tag serves by default, but a
+// reader of the store should be able to find out from the log why a file
+// does not match its publisher.
+func (p *Puller) raiseContextLength(tag string, want int) error {
+	if want <= 0 {
+		return nil
+	}
+	if p.modelsDir == "" {
+		return fmt.Errorf("download: %s needs context_length %d but no model store was configured (WithModelStore)", tag, want)
+	}
+	blob, digest, err := ModelBlobPath(p.modelsDir, tag)
+	if err != nil {
+		return err
+	}
+	old, err := gguf.SetArchUint32(blob, "context_length", uint32(want))
+	if err != nil {
+		return fmt.Errorf("download: %s: raise context_length to %d: %w", tag, want, err)
+	}
+	if old == uint32(want) || p.logf == nil {
+		return nil
+	}
+	shared, err := TagsSharingBlob(p.modelsDir, digest)
+	if err != nil {
+		shared = []string{tag}
+	}
+	p.logf("raised the stored context_length of %s from %d to %d (blob %s, also named by %v)",
+		tag, old, want, digest, shared)
+	return nil
 }
 
 // Remove runs `ollama rm <tag>`, deleting the weights the matching Pull
