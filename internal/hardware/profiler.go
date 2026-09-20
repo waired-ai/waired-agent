@@ -246,6 +246,29 @@ type GPU struct {
 	DriverVersion string `json:"driver_version,omitempty"`
 	ComputeCap    string `json:"compute_cap,omitempty"`
 	UUID          string `json:"uuid,omitempty"`
+
+	// Integrated and IntegratedKnown are the detected answer to "are
+	// this device's memory and the operating system's RAM two readings
+	// of one physical pool?" — see internal/hardware/integrated.go for
+	// the question, the per-OS readings, and why the answer is
+	// three-state (waired-agent#459).
+	//
+	// They are a REPORT, not a policy. Nothing here decides a budget:
+	// UnifiedMemory below still gates that, because a class carries a
+	// budget rule with it and knowing a part is integrated does not by
+	// itself say how much of the pool it may wire down. llama.cpp keeps
+	// the same two switches apart for the same reason — its CUDA
+	// backend reports the device type from a live cudaDeviceProp while
+	// its scheduler reads a separately gated flag.
+	//
+	// IntegratedKnown false means NO SOURCE ANSWERED, which is not the
+	// same as "discrete" and must never be read as it: on this platform
+	// set the silence is the common case (an NVIDIA part on Linux, an
+	// Intel Mac, a host whose render node will not open), and reading
+	// silence as "discrete" is the defect waired-agent#459 was opened
+	// for.
+	Integrated      bool `json:"integrated,omitempty"`
+	IntegratedKnown bool `json:"integrated_known,omitempty"`
 }
 
 // GPUSummary is the minimal per-device shape suitable for inclusion in
@@ -340,6 +363,7 @@ type Profiler struct {
 	engineVersionFn func(context.Context, string) (bool, string)
 	gpuFn           func(context.Context) ([]GPU, Accelerators, error)
 	umaFn           func(context.Context, *Profile)
+	integratedFn    integratedFrom
 
 	ramAtInstallGB         int
 	ramAtInstallMeasuredAt string
@@ -470,6 +494,18 @@ func WithUMA(fn func(context.Context, *Profile)) Option {
 	return func(p *Profiler) { p.umaFn = fn }
 }
 
+// WithIntegratedDetector injects the per-device "is this one pool?"
+// reading (waired-agent#459), so a test can drive the merge and the
+// fields it lands in without the OS the real reading needs.
+//
+// Deliberately separate from WithUMA even though both concern the same
+// hardware property. The UMA hook settles a BUDGET and must stay the one
+// place that does; this one settles a REPORTED FACT and settles nothing
+// else. Folding them together is how a report starts deciding things.
+func WithIntegratedDetector(fn integratedFrom) Option {
+	return func(p *Profiler) { p.integratedFn = fn }
+}
+
 // NewProfiler returns a Profiler that caches results for 30s by default
 // (per spec §6) and uses real OS detection. cachePath is the directory
 // whose free-space we report (typically the model cache root).
@@ -485,6 +521,7 @@ func NewProfiler(cachePath string, opts ...Option) *Profiler {
 		engineVersionFn: defaultEngineVersion,
 		gpuFn:           defaultGPU,
 		umaFn:           defaultUMA,
+		integratedFn:    integratedFromOS,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -554,7 +591,21 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 		prof.Engines.VLLM = EngineInfo{Installed: true, Version: ver}
 	}
 
-	// UMA detection runs last so it can inspect GPUs / RAM / CPU.Model
+	// The per-device "is this one pool?" reading runs before the UMA
+	// hook, so the hook could consult it — and so that the fact is
+	// recorded even on the hosts where the hook declines to act on it,
+	// which is most of them (waired-agent#459).
+	if p.integratedFn != nil {
+		for i := range prof.GPUs {
+			got := integration{
+				integrated: prof.GPUs[i].Integrated,
+				known:      prof.GPUs[i].IntegratedKnown,
+			}.merge(p.integratedFn(&prof, i))
+			prof.GPUs[i].Integrated, prof.GPUs[i].IntegratedKnown = got.integrated, got.known
+		}
+	}
+
+	// UMA detection runs after so it can inspect GPUs / RAM / CPU.Model
 	// (used by the Linux Strix Halo path) without re-walking sysfs.
 	if p.umaFn != nil {
 		p.umaFn(ctx, &prof)
