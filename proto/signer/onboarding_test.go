@@ -29,7 +29,8 @@ func TestNetworkMapWithoutDesiredState_NoNewFieldsInCanonical(t *testing.T) {
 		t.Fatalf("canonical: %v", err)
 	}
 	for _, key := range []string{"desired_engine", "desired_model_id", "desired_benchmark_gen",
-		"desired_integrations", "desired_model_gen", "desired_variant_id", "desired_kv_cache_type"} {
+		"desired_integrations", "desired_model_gen", "desired_variant_id", "desired_kv_cache_type",
+		"desired_inference", "desired_inference_set_at"} {
 		if bytes.Contains(canonical, []byte(`"`+key+`"`)) {
 			t.Fatalf("canonical JSON unexpectedly contains %q:\n%s", key, canonical)
 		}
@@ -60,6 +61,7 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		},
 		DesiredModelGen:       2,
 		DesiredInference:      signer.DesiredInferenceOff,
+		DesiredInferenceSetAt: "2026-09-20T10:30:05.122205419Z",
 		DesiredVariantID:      "q3-gguf",
 		DesiredKVCacheType:    "q4_0",
 		DesiredRemoveVariants: []string{"qwen3:8b/q4-gguf"},
@@ -102,6 +104,13 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		// signed here.
 		{"DesiredInference", func(m *signer.NetworkMap) {
 			m.Self.InferenceState.DesiredInference = signer.DesiredInferenceOn
+		}},
+		// Moving this one forward is how an on-path attacker would make a
+		// spent instruction look like a new ask, which is exactly the
+		// re-application over a person's local `waired inference off`
+		// that the record exists to prevent (#1446).
+		{"DesiredInferenceSetAt", func(m *signer.NetworkMap) {
+			m.Self.InferenceState.DesiredInferenceSetAt = "2026-09-20T11:00:00Z"
 		}},
 		{"DesiredVariantID", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredVariantID = "mtp-q4-gguf" }},
 		{"DesiredKVCacheType", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredKVCacheType = "f16" }},
@@ -407,6 +416,25 @@ func TestCapabilityOnboardingV2_WireValue(t *testing.T) {
 // stay distinct for the same reason v1 and v2 do — a v2 agent has no
 // applier for the model generation and would drop the field on
 // canonical re-marshal, failing verification.
+// TestCapabilityOnboardingV5_WireValue pins the fifth constant apart
+// from the four before it. A build that declared v4 alone would be told
+// the answer without the time that makes it re-assertable, which is the
+// generation v5 exists for (#1446).
+func TestCapabilityOnboardingV5_WireValue(t *testing.T) {
+	if signer.CapabilityOnboardingV5 != "onboarding-v5" {
+		t.Fatalf("CapabilityOnboardingV5 = %q, want %q",
+			signer.CapabilityOnboardingV5, "onboarding-v5")
+	}
+	for _, other := range []string{
+		signer.CapabilityOnboardingV1, signer.CapabilityOnboardingV2,
+		signer.CapabilityOnboardingV3, signer.CapabilityOnboardingV4,
+	} {
+		if signer.CapabilityOnboardingV5 == other {
+			t.Fatalf("onboarding-v5 collides with %q", other)
+		}
+	}
+}
+
 func TestCapabilityOnboardingV3_WireValue(t *testing.T) {
 	if signer.CapabilityOnboardingV3 != "onboarding-v3" {
 		t.Fatalf("CapabilityOnboardingV3 = %q, want %q",

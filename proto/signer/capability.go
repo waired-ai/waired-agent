@@ -77,6 +77,24 @@ const (
 	// wait forever on every older agent.
 	CapabilityOnboardingV4 = "onboarding-v4"
 
+	// CapabilityOnboardingV5 declares that this agent additionally
+	// understands InferenceState.DesiredInferenceSetAt — WHEN the answer
+	// V4 carries was recorded, which is what lets the operator give the
+	// same answer twice (waired-agent#1446).
+	//
+	// A fifth constant rather than a wider reading of V4, for the reason
+	// RAMAvailableV2 states: an agent declaring onboarding-v4 knows
+	// DesiredInference and nothing else, so it drops the timestamp on
+	// canonical re-marshal and fails verification. Reusing V4 would break
+	// precisely the generation it was added for.
+	//
+	// It joins the onboarding family rather than standing alone because
+	// the field it gates is meaningless without DesiredInference, and the
+	// family is already declared all-or-none by an agent that has a setup
+	// reconciler. The CP does not have to trust an agent to get that
+	// right: it strips the timestamp when V4 is missing, whatever V5 says.
+	CapabilityOnboardingV5 = "onboarding-v5"
+
 	// CapabilityContextWindowV1 declares that this agent understands
 	// InferenceState.ContextWindow — the window a device says its engine
 	// is loaded with, which the requesting router uses to decide whether

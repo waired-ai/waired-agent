@@ -29,7 +29,7 @@ import (
 // fails here until someone decides, in writing, which side of the line
 // it is on.
 var capabilityNotDeclared = map[string]string{
-	// The onboarding quartet is declared all-or-none and only by an
+	// The onboarding family is declared all-or-none and only by an
 	// agent that has a setup reconciler, so it is not in the
 	// unconditional list — declareCapabilities appends it when
 	// OnboardingCapable. network_map_capability_test.go covers both
@@ -38,6 +38,7 @@ var capabilityNotDeclared = map[string]string{
 	"CapabilityOnboardingV2": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV3": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV4": "conditional: appended when OnboardingCapable",
+	"CapabilityOnboardingV5": "conditional: appended when OnboardingCapable",
 }
 
 // unconditionalCapabilities returns the names in the `caps := []string{…}`
@@ -160,7 +161,15 @@ func TestEveryProtoCapabilityIsDecided(t *testing.T) {
 // on the commit that overflows.
 func TestCapabilityCSVFitsTheColumn(t *testing.T) {
 	const (
-		columnBytes = 256
+		// The control plane's Device.agent_capabilities column. Widened
+		// from 256 to 1024 in waired-ai/waired#1459 when onboarding-v5
+		// put the set one byte over this guard's margin — the first time
+		// the margin caught anything, and it caught it before the
+		// normalizer silently dropped a token rather than after. The two
+		// numbers have to move together: this one describes a column
+		// over there, and a bump here that runs ahead of the schema
+		// would let the agent declare more than the column can hold.
+		columnBytes = 1024
 		// Enough for two more capabilities of ordinary length.
 		wantSpare = 32
 	)

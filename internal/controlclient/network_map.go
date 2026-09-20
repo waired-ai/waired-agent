@@ -246,11 +246,16 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// constructed on exactly this condition.
 			// onboarding-v4 is the explicit local-AI answer
 			// (waired-agent#597), applied by the same reconciler.
+			// onboarding-v5 is WHEN that answer was recorded, which is
+			// what lets the operator give the same answer twice
+			// (waired-agent#1446) — v4 without v5 would receive the
+			// answer and drop the time, so the CP strips both.
 			caps = append(caps,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
 				signer.CapabilityOnboardingV3,
 				signer.CapabilityOnboardingV4,
+				signer.CapabilityOnboardingV5,
 			)
 		}
 		// Marshalled rather than concatenated. The capability names are
