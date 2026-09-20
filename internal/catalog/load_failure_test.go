@@ -46,7 +46,7 @@ func TestVariantLoadFailure_Blocks(t *testing.T) {
 		{"CONTRACT: a cheaper KV cache is allowed to try",
 			refHost, shapeWith(func(s *LoadShape) { s.KVCacheType = "q4_0" }), false},
 		{"CONTRACT: less parallelism is allowed to try",
-			refHost, shapeWith(func(s *LoadShape) { s.NumParallel = 1 - 1 }), false},
+			refHost, shapeWith(func(s *LoadShape) { s.NumParallel = 0 }), false},
 		{"a different backend is a different load",
 			refHost, shapeWith(func(s *LoadShape) { s.Backend = "rocm" }), false},
 
