@@ -10,7 +10,7 @@ import (
 
 // ollamaSingleRequestFamilies is the list of model families ollama's
 // scheduler starts with one slot whatever OLLAMA_NUM_PARALLEL asks, copied
-// from ollama v0.34.0 server/sched.go Scheduler.load:
+// from ollama v0.34.2 server/sched.go Scheduler.load:
 //
 //	// Some architectures are not safe with num_parallel > 1.
 //	// ref: https://github.com/ollama/ollama/issues/4165
@@ -71,7 +71,7 @@ func TestParseSchedSingleRequestFamilies(t *testing.T) {
 `
 	got, err := parseSchedSingleRequestFamilies(pinned)
 	if err != nil {
-		t.Fatalf("the v0.34.0 shape: %v", err)
+		t.Fatalf("the v0.34.2 shape: %v", err)
 	}
 	if !slices.Equal(got, ollamaSingleRequestFamilies) {
 		t.Errorf("parsed %v, want the copied list %v", got, ollamaSingleRequestFamilies)

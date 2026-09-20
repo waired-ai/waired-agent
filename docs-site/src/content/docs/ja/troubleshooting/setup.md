@@ -72,7 +72,7 @@ Run `waired doctor` for details. `waired status` shows the current state.
 - **推論エンジンがクラッシュを繰り返す。** 数回クラッシュすると、Wairedは再起動をやめてそのことを表示します。`waired status`と`waired runtimes ls`は、推論エンジンの状態の代わりに**gave up**と表示します。
 
   ```
-  runtimes:       ollama 0.34.0 (gave up, ctx 32k q4_0)
+  runtimes:       ollama 0.34.2 (gave up, ctx 32k q4_0)
   ⚠ ollama: engine repeatedly crashed; not retrying — …
   ```
 

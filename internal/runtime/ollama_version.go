@@ -257,4 +257,4 @@ package runtime
 // §4 can then be struck.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.34.0"
+const OllamaPinnedVersion = "0.34.2"
