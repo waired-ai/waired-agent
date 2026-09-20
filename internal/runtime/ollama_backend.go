@@ -152,11 +152,23 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three do not
 // !!! agree.
 // !!!
+// !!! RE-READ AT 0.34.2 (2026-09-20): nothing moved. The overlay is still
+// !!! rocm_v7_1, and its rocblas/library/ still holds exactly those nine
+// !!! TensileLibrary_lazy_gfx*.dat targets — read from the 0.34.2 zip
+// !!! itself, which is the set rocblasGFXTargets globs and so the set
+// !!! that decides ROCm capability. Upstream's docs/gpu.mdx is
+// !!! byte-identical from v0.33.3 through v0.34.2, so the #1248 recheck
+// !!! below answers "no": RX 9000 has NOT moved into upstream's Windows
+// !!! column, and the #1266 disagreement is unchanged too.
+// !!!
 // !!! AT THE NEXT BUMP, also re-read these upstream threads before
 // !!! assuming the Strix Halo arm below still needs to name Vulkan.
 // !!! They are the reason it does, and they were open at 0.33.3
 // !!! (checked 2026-09-06); the arm can be revisited when they close,
-// !!! not before. Full context:
+// !!! not before. Re-read at 0.34.2 (2026-09-20): the three CORRECTNESS
+// !!! bugs are still open, so the arm stays. The two that are now closed
+// !!! are marked below; neither of them was a reason for the arm, and
+// !!! one of them was never as open as this stamp said. Full context:
 // !!! docs/knowledges/20260906/1700-what-to-recheck-about-amd-backends.md
 // !!!
 // !!!   ollama/ollama#17895  ROCm on gfx1151 answers WRONGLY above ~4k
@@ -169,6 +181,11 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!!   ollama/ollama#17870  Vulkan on gfx1151 loses the device on very
 // !!!                        long prefill (num_batch=128 works around
 // !!!                        it). The Vulkan-side counterweight.
+// !!!                        CLOSED not_planned 2026-09-07. So the
+// !!!                        counterweight has no upstream fix coming.
+// !!!                        That does not move the arm: a workaround
+// !!!                        that exists beats three open correctness
+// !!!                        bugs that have none.
 // !!!   ROCm 7.2.4           ships native hipBLASLt gfx1151 kernels,
 // !!!                        which upstream says removes the need for
 // !!!                        HSA_OVERRIDE_GFX_VERSION. 0.33.3 bundles
@@ -182,12 +199,20 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // !!!   ggml-org/llama.cpp#27856  qwen4exp (Qwen3.8-Flash-Next) decode
 // !!!                        collapses 3.5-4x once context passes ~1k on
 // !!!                        HIP/gfx1151 and plateaus at 5.5-6.1 tok/s.
-// !!!                        CUDA decays only mildly. Open at 0.33.3
-// !!!                        (checked 2026-09-06). This one lands on the
-// !!!                        LINUX arm, which prefers ROCm — the Windows
-// !!!                        arm is already on Vulkan — and the #290
-// !!!                        probe cannot see it, since it falls back
-// !!!                        only on size_vram == 0.
+// !!!                        CUDA decays only mildly. This one lands on
+// !!!                        the LINUX arm, which prefers ROCm — the
+// !!!                        Windows arm is already on Vulkan — and the
+// !!!                        #290 probe cannot see it, since it falls
+// !!!                        back only on size_vram == 0.
+// !!!                        CLOSED completed 2026-09-07, and the stamp
+// !!!                        above was wrong to call it open at 0.33.3:
+// !!!                        the fix is ggml-org/llama.cpp#27466 (radix
+// !!!                        TOP_K for long rows, f8dbcd6, merged
+// !!!                        2026-08-31), FIRST IN b10720 — so b10760
+// !!!                        already carried it and 0.33.3 was never
+// !!!                        exposed. The tracking, not the engine, was
+// !!!                        stale. Re-checked at 0.34.2 / b10969, which
+// !!!                        also carries it.
 // !!!
 // !!! The gfx1151 half of that was measured and is settled: ROCm runs
 // !!! on a Strix Halo iGPU under Windows — and did so at v0.31.1 too, so

@@ -88,16 +88,23 @@ a MLA model), which results in wasted memory."。indexer のキャッシュを M
 約 588 MiB。このモデルは `min_ram_gb` 128 なので、影響するのは 128 GB 以上の
 ホストのコンテキストウィンドウの段だけ。
 
-### 4. 次に pin を動かす人が見ること
+### 4. 次に pin を動かす人が見ること (済 — 2026-09-21)
 
-1. **#28330 が閉じたか。** 閉じていればどの b 番号で閉じたかを控え、
-   `OllamaPinnedVersion` の doc が記録している vendored llama.cpp の版が
-   それ以降かを見る。
-2. 入っていれば `qwen3.8-flash-next` を再度立てて `llama_kv_cache` の行を数え直す。
-   2 本目が `V (f16): 0.00 MiB` になっているか、行ごと消えていれば、実測は 27648 に
-   一致し、注記はそのままでよい。**その確認をして初めて、この節は消してよい。**
-3. 同じ調査で見つかった、同じモデルの別の上流問題 (HIP での decode 崖) は
-   `docs/knowledges/20260906/1700-what-to-recheck-about-amd-backends.md` §6 にある。
+**この節は役目を終えた。**ここに書いた 3 つの手順は
+waired-ai/waired-agent#1472 (ollama 0.34.2 / llama.cpp b10969) で実行され、
+結論が出ている。手順そのものは記録として残すが、やることはもう無い。
+
+- #28330 は `311d4211b` として閉じ、**b10889 が初出**。0.34.2 の同梱は b10969 で、
+  これを含む。
+- 8192 cells で立て直した実測: 2 本目は `24.00 MiB (8192 cells, 12 layers), K (f16):
+  24.00 MiB, V (f16): **0.00 MiB**`。**V 半分は消えた。**割り戻すと attention
+  24,576 B/token + indexer key 3,072 B/token = **27,648 B/token** で、カタログの注記と
+  一致する。注記は変えていない。
+- HIP の decode 崖 (llama.cpp#27856) も閉じている。修正は #27466 (`f8dbcd6`) で
+  **b10720 が初出**なので、**b10760 の時点で既に入っていた** — この節を書いた時点の
+  「open」という認識のほうが古かった。
+
+実測の全文は `docs/knowledges/20260920/1400-engine-pins-0342-and-uv-01217.md` §7。
 
 ### 5. 一般化: 起動ログの `llama_kv_cache` 行を数える
 

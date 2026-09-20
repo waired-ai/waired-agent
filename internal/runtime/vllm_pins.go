@@ -104,6 +104,19 @@ package runtime
 //   - GPU KV cache size: and the scheduler tiers read the same as at
 //     0.28.0 (vllmKVCapacityRe; router.vllmBigGPUVRAMMB).
 //
+// 2026-09-20: checked while moving the ollama pin to 0.34.2 and uv to
+// 0.12.17, and DELIBERATELY NOT MOVED. Every vLLM tag newer than 0.29.0 is
+// a prerelease — v0.29.1rc0, v0.30.0rc1 and v0.30.0rc2 — and PyPI's latest
+// is still 0.29.0. renovate.json sets ignoreUnstable on this dep, so no
+// bump PR is raised for them either; this note is for the human who reads
+// the pin, sees a newer rc upstream, and wonders whether it was missed.
+// The cost of taking one anyway is not the diff: since #843 a pin-set move
+// rebuilds the venv on every installed host, and upstream can withdraw an
+// rc, which would leave the pin naming a release that no longer exists.
+// TransformersConstraint and VLLMPythonVersion are unchanged with it, and
+// uv is not a member of VLLMPinSet, so moving the uv pin on its own does
+// not rebuild any venv.
+//
 // renovate: datasource=pypi depName=vllm
 const VLLMPinnedVersion = "0.29.0"
 
