@@ -242,19 +242,108 @@ package runtime
 //     registered: stamped onto a tag, the non-first system turn answers
 //     200, while an unregistered renderer name answers 500.
 //
-// AT THE NEXT BUMP, one thing to re-read that is not about this release.
-// The catalog annotates qwen3.8-flash-next with 27648 B/token of KV while
-// the engine at b10760 actually holds 33792: the QSA indexer's cache gets
-// a V half allocated that the model has no projection for and the graph
-// never touches (ggml-org/llama.cpp#28330 — it makes that cache present
-// as MLA so has_v goes false; merged 2026-09-10, first in b10889, which
-// 0.34.0's b10760 does not include). The annotation deliberately
-// carries the derivable number rather than the measured one. When the
-// vendored llama.cpp passes the commit that closes #28330, re-serve the
-// model and count the llama_kv_cache lines: the second one's V should be
-// gone, the measurement should meet the annotation, and
+// 0.34.0 -> 0.34.2 is the first move since 0.33.3 that carries the
+// vendored llama.cpp with it: b10760 -> b10969, 209 commits and 177 files
+// under src/, common/ and tools/. So this one is measurement rather than a
+// refresh, and what follows was taken rather than reasoned.
+//
+// Static first, because these are the ways the product breaks without
+// erroring, and all of them held:
+//
+//   - Asset names and sha256sum.txt still cover all four (goos, goarch)
+//     pairs (TestPinnedReleasePublishesEveryAssetChecksum against the real
+//     release), and the LAYOUTS still match ExtractSub: linux unpacks
+//     bin/ + lib/ (TestOllamaInstaller_RealArchive unpacks and runs it),
+//     the windows zip is 87 entries with ollama.exe alone at the root and
+//     lib/ollama/{cuda_v12, cuda_v13, vulkan} and still no rocm, and the
+//     darwin tgz is flat plus mlx_metal_v3 / mlx_metal_v4.
+//     A CORRECTION while re-reading that last one: the stamp above says
+//     darwin lists 59 entries. It lists 57, and did at 0.33.3 and 0.34.0
+//     too — those two archives have byte-identical file lists, so the 59
+//     was a miscount rather than something that changed. 0.34.0 -> 0.34.2
+//     differs only in the vendored sonames (libggml 0.22.0 -> 0.24.0,
+//     libllama / libllama-common / libmtmd 0.3.0 -> 0.4.1), which is what
+//     a llama.cpp move looks like from outside.
+//   - The runner argv flag set in llm/llama_server.go is BYTE-IDENTICAL to
+//     0.34.0's, so nothing ObservedNumParallel or ParseRunnerFlags reads
+//     could have moved.
+//   - api.ProcessModelResponse is unchanged, so /api/ps still carries the
+//     same eight keys.
+//   - The one-slot model-family list in server/sched.go is unchanged (only
+//     its line numbers moved); TestOllamaSingleRequestFamiliesMatchThePin
+//     re-parses the 0.34.2 source and agrees.
+//   - The three llama.cpp lines ParseLlamaPlacement depends on still exist
+//     verbatim at b10969: src/llama-model.cpp's "offloaded %d/%d layers to
+//     GPU", src/llama-kv-cache.cpp's "size = ... K (%s) ... V (%s)", and
+//     common/fit.cpp's "projected to use". common/fit.cpp changed
+//     additively only (a JSONL fit_memory_breakdown log), so the margin
+//     logic OllamaFitTargetMB describes is untouched.
+//   - "ollama version is %s" is unchanged, so ParseEngineVersion is safe.
+//
+// Two changes in 0.34.1/0.34.2 that look dangerous and are not:
+//
+//   - typical_p is now rejected with HTTP 400 on requests AND on create
+//     (server/routes.go, server/create.go). The product never sends it —
+//     grep finds none, and a deliberate request carrying it answered 400
+//     on all three OSes, which makes that a measurement rather than an
+//     absence argument.
+//   - 0.34.2 adds a first-run welcome, but runWelcome (cmd/welcome.go)
+//     returns nil unless BOTH stdin and stdout are terminals, and it is
+//     wired only to the bare `ollama` root command — not serve, create or
+//     pull. A spawned engine never reaches it.
+//   - /api/show changed shape (tensors only when verbose, uppercased type
+//     strings, long arrays no longer flattened when not verbose). No Go in
+//     this product calls /api/show.
+//
+// Re-measured on all three OSes this time, which closes the coverage gap
+// 0.34.0 left when it checked macOS by archive layout only. One engine
+// start each, qwen3.5:0.8b-q8_0, OLLAMA_CONTEXT_LENGTH=32768, on a 24 GB
+// CUDA dGPU, a 128 GiB unified-memory Vulkan iGPU, and a 16 GiB Metal Mac:
+//
+//   - A system turn that is not first is HTTP 200 on both
+//     /v1/chat/completions and /api/chat, everywhere. #1035 stays fixed.
+//   - keep_alive is still DISCARDED on the OpenAI-compatible surface and
+//     HONOURED on the native one, which is what ResidencyEffect (#908)
+//     rests on. 37m via /v1 left the default ~5-minute expiry on all
+//     three; 41m via /api/chat moved expires_at to now+41m on all three.
+//   - /api/ps returns the same eight keys, and engine.log is still logfmt
+//     with a msg="..." field, so inference_ollama_verify.go still parses.
+//     The engine's own lines still carry the time= prefix that
+//     lastRunnerLine uses to tell them from the runner's.
+//   - The runner still gets -np, and still sizes its own prompt batch:
+//     -c 32768 -np 1 with -b 512 -ub 512 on CUDA and -b 1024 -ub 1024 on
+//     Vulkan and Metal.
+//   - The VRAM tiering behind "vram-based default context" still holds at
+//     all three rungs, which is the first time it has been read at the
+//     bottom one: 11.8 GiB -> 4096, 23.5 GiB -> 32768, 102.2 GiB ->
+//     262144.
+//   - cached_tokens is reported on both surfaces (18 of 22 on a resend).
+//   - ParseLlamaPlacement was run over a real 0.34.2 log rather than
+//     reasoned about, and filled every field: ContextCells, offloaded and
+//     total layers, device and host weight buffers, the KV type, and all
+//     three fit terms. All eight of its regexes bind.
+//
+// STILL OWED, and deliberately not done here. The QSA-indexer item the
+// previous stamp scheduled for "the next bump" is this bump:
+// ggml-org/llama.cpp#28330 (311d4211b, first in b10889) IS an ancestor of
+// b10969, so the indexer's unused V half should be gone and the catalog's
+// 27648 B/token annotation for qwen3.8-flash-next should now meet a
+// measurement. Confirming that means serving those weights and counting
+// the llama_kv_cache lines, and the fleet is under a no-downloads hold
+// (2026-09-20) with the model present nowhere. Nothing here depends on the
+// answer — the annotation already carries the derivable number and is not
+// changed by this bump — so the instruction below stands, narrowed to the
+// one thing left to do.
+//
+// AT THE NEXT BUMP, or as soon as those weights are on a host that can
+// serve them: re-serve qwen3.8-flash-next, count the llama_kv_cache lines,
+// and check the second one's V half is gone and the measurement meets the
+// annotation. Then
 // docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
-// §4 can then be struck.
+// §4 can be struck. The catalog deliberately carries the derivable number
+// rather than the measured one, so an unconfirmed fix costs nothing; what
+// it costs is that nobody yet knows which of the two figures the engine
+// now holds.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
 const OllamaPinnedVersion = "0.34.2"
