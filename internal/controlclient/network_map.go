@@ -235,6 +235,21 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// injects the desired half only beside the onboarding
 			// capabilities, whose reconciler applies it.
 			signer.CapabilityVariantChoiceV1,
+			// window-choice-v1 declares that this BUILD understands
+			// InferenceState.DesiredContextWindow — which of the two
+			// serving windows a person chose for this computer
+			// (waired-ai/waired#1456). Unconditional for the byte-identity
+			// reason the rest are: the field rides the signed map, and a
+			// build that does not know it would drop it on canonical
+			// re-marshal and fail verification of the whole map.
+			//
+			// This build honours it: the serve tuning reads the recorded
+			// window, checks the stored build can actually serve it, and
+			// asks the engine for the long one only then. Declaring it
+			// before that was true would have the control plane send an
+			// instruction the device silently ignores, which is worse than
+			// not being sent it at all.
+			signer.CapabilityWindowChoiceV1,
 		}
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2
