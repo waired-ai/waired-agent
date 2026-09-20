@@ -241,3 +241,68 @@ func TestReachesWindow_Catalog(t *testing.T) {
 		t.Errorf("%d models are greyed at the long window, want 3: %v", len(greyed), greyed)
 	}
 }
+
+// TestOllamaEstimate_MatchesTheEngineAtBothWindows pins the estimate to what
+// llama.cpp actually allocated on the reference host for the default 35B-A3B
+// build (qwen3.6-35b-a3b/mtp-q4-gguf, q4_0 KV, flash attention on), read from
+// its own log lines:
+//
+//	200,704    llama_kv_cache: size = 1102.50 MiB   draft 392.00 MiB
+//	1,048,576  llama_kv_cache: size = 5760.00 MiB   draft 2048.00 MiB
+//
+// The 1M column had never been checked against a running engine before
+// waired-ai/waired#1456, and checking it is how a wrong reading of the catalog
+// got caught: the ollama path does NOT read Variant.MTPKVBytesPerTokenFP16 —
+// that field belongs to the vLLM sizing — and derives the draft head's cache
+// from the full-attention layer count instead. An empty field there is not a
+// missing term, and this test fails if anyone "fixes" it by adding one.
+//
+// Driven through OllamaEstimateMemory and the shipped manifest rather than
+// recomputed here, so it bites on the arithmetic and on the catalog figures
+// alike.
+func TestOllamaEstimate_MatchesTheEngineAtBothWindows(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m catalog.Manifest
+	var v catalog.Variant
+	for _, cand := range manifests {
+		if cand.ModelID != "qwen3.6-35b-a3b" {
+			continue
+		}
+		for _, cv := range cand.Variants {
+			if cv.VariantID == "mtp-q4-gguf" {
+				m, v = cand, cv
+			}
+		}
+	}
+	if v.VariantID == "" {
+		t.Skip("qwen3.6-35b-a3b/mtp-q4-gguf is no longer shipped; re-measure before re-pinning")
+	}
+	_ = m
+
+	// The reference host: unified memory, room for either window.
+	host := hostfit.Host{RAMTotalGB: 128, UnifiedMemory: true, GPUCount: 1, UsableVRAMMB: 98304}
+
+	// The estimate reports whole MiB and rounds up, so where the engine
+	// reported a half it reads one higher — 1102.50 becomes 1103. Rounding
+	// up is the safe direction for a budget and is not a discrepancy.
+	for _, tc := range []struct {
+		window, wantKV, wantDraft int
+		engineKV, engineDraft     string
+	}{
+		{hostfit.ServingWindow200k, 1103, 392, "1102.50", "392.00"},
+		{hostfit.ServingWindow1M, 5760, 2048, "5760.00", "2048.00"},
+	} {
+		got := hostfit.OllamaEstimateMemory(v, host, catalog.KVCacheQ4_0, tc.window, 1)
+		if got.KVCacheMB != tc.wantKV {
+			t.Errorf("window %d: KVCacheMB = %d, want %d (the engine allocated %s MiB)",
+				tc.window, got.KVCacheMB, tc.wantKV, tc.engineKV)
+		}
+		if got.DraftKVCacheMB != tc.wantDraft {
+			t.Errorf("window %d: DraftKVCacheMB = %d, want %d (the engine allocated %s MiB)",
+				tc.window, got.DraftKVCacheMB, tc.wantDraft, tc.engineDraft)
+		}
+	}
+}
