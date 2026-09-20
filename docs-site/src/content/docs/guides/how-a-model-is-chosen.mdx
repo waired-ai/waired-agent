@@ -45,7 +45,10 @@ model in that group:
   GPU is what fixes it.
 - **The KV cache does not fit alongside them.** The model runs and answers
   well, but in a long session the engine keeps part of the model in system
-  RAM, and every reply is slower for it.
+  RAM, and every reply is slower for it. Past a point this computer cannot
+  hold the 200,704-token window with the model at all. Waired then stops
+  sending coding-agent requests here rather than quietly serving a shorter
+  session, and a smaller model is what fixes it.
 
 Where you choose, Waired says which is which. The recommended model is marked
 *recommended*, and a model that runs here but is not that one is marked with

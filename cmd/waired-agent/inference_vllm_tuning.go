@@ -96,7 +96,7 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 // holds less than the 200k session on this host. Shown as an engine notice
 // on `waired status` and in `waired runtimes ls`. Written with the doc-writer
 // skill (owner pre-approval, 2026-09-17).
-const vllmBelowTierWarning = "KV cache holds a context window of %d tokens for this model at gpu-memory-utilization=%.2f, TP=%d, under the 200,704 every Waired row needs, so no Waired row will use this computer — pick a smaller model or raise gpu-memory-utilization"
+const vllmBelowTierWarning = "KV cache holds a context window of %d tokens for this model at gpu-memory-utilization=%.2f, TP=%d, under the 200,704 a coding agent needs, so Waired won't send one to this computer — pick a smaller model or raise gpu-memory-utilization"
 
 // vllmTierWindow is the tier this build serves given the KV pool's estimate:
 // 1048576 or 200704, capped by the model's own window, or 0 when the pool
