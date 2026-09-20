@@ -104,6 +104,20 @@ type State struct {
 	// host recommends has to survive that, and has to include the runs
 	// the CLI and the control plane ask for.
 	MeasuredVariants map[string]VariantMeasurement `json:"measured_variants,omitempty"`
+
+	// FailedLoads records builds this computer could not put in memory, so
+	// it stops trying to and stops offering them (waired-agent#1453).
+	//
+	// The sibling of MeasuredVariants above, and keyed the same way, by the
+	// variant's content digest: a re-quantized or re-tagged build is a
+	// different key and the old verdict expires without a rule anyone has
+	// to remember. What it holds is the opposite kind of fact — not how
+	// fast this build ran here, but that it never ran here at all — and
+	// the product needs it for the same reason: a host that has learned
+	// something about a build should not have to learn it again, once per
+	// restart, by putting itself back under the memory pressure that
+	// taught it.
+	FailedLoads map[string]VariantLoadFailure `json:"failed_loads,omitempty"`
 }
 
 // VariantMeasurement is one variant's speed measurement on this host — a
@@ -158,6 +172,66 @@ type VariantMeasurement struct {
 	// The draft the engine ran, absent for none (waired-ai/waired#1432).
 	SpeculativeMethod string `json:"speculative_method,omitempty"`
 	SpeculativeTokens int    `json:"speculative_tokens,omitempty"`
+}
+
+// LoadContext is the host and engine a load happened under: the facts that
+// have to be unchanged for a past load's outcome to still describe this
+// computer.
+//
+// A comparable struct rather than a hash, because the fields are few and a
+// reader of state.json should be able to see WHY a stored verdict stopped
+// applying. The tuple is the one the boot bench cache already keys on
+// (cmd/waired-agent/inference_bench_cache.go): engine build, GPU, driver,
+// and how much memory there is.
+type LoadContext struct {
+	EngineKind    string `json:"engine_kind,omitempty"`
+	EngineVersion string `json:"engine_version,omitempty"`
+	GPUModel      string `json:"gpu_model,omitempty"`
+	DriverVersion string `json:"driver_version,omitempty"`
+	VRAMTotalMB   int    `json:"vram_total_mb,omitempty"`
+	RAMTotalMB    int    `json:"ram_total_mb,omitempty"`
+}
+
+// LoadShape is what was asked of the engine: the same tuple the residency
+// warm-up keys its failure count on (cmd/waired-agent's warmLoadKey).
+type LoadShape struct {
+	ContextLength int    `json:"context_length,omitempty"`
+	KVCacheType   string `json:"kv_cache_type,omitempty"`
+	NumParallel   int    `json:"num_parallel,omitempty"`
+	Backend       string `json:"backend,omitempty"`
+}
+
+// VariantLoadFailure is one build that this computer could not load.
+type VariantLoadFailure struct {
+	ModelID   string `json:"model_id,omitempty"`
+	VariantID string `json:"variant_id,omitempty"`
+
+	// Reason is the sentence a surface shows an operator. Detail is the
+	// engine's own first line, kept so a bug report carries the words the
+	// engine used rather than ours.
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+
+	Context LoadContext `json:"context"`
+	Shape   LoadShape   `json:"shape"`
+
+	FailedAt time.Time `json:"failed_at"`
+}
+
+// Blocks reports whether this record stands in the way of loading the same
+// build again, under ctx, shaped like shape.
+//
+// The context must match exactly: a new engine build, a new driver, a
+// different GPU or a change in how much memory the machine has all make the
+// stored outcome a fact about a computer that no longer exists.
+//
+// The shape must match exactly too, and that is deliberately narrow. A
+// smaller window, a cheaper KV cache or less parallelism is a DIFFERENT load
+// and is allowed to try — it is exactly the step down the product is
+// supposed to take after this failure, and a record that blocked it would
+// block the recovery it exists to cause.
+func (f VariantLoadFailure) Blocks(ctx LoadContext, shape LoadShape) bool {
+	return f.Context == ctx && f.Shape == shape
 }
 
 // BenchmarkRecord is the persisted completion record of a benchmark
