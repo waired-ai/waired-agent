@@ -75,32 +75,6 @@ func minNonZero(values ...int) int {
 // allow larger GPU-side allocations.
 const strixHaloUMACapMB = 96 * 1024
 
-// windowsUMALoadableCapMB is the largest budget a Windows Strix Halo is
-// given, whatever the arithmetic above it allows.
-//
-// Measured on the reference host on 2026-09-20 (waired-ai/waired-agent#1443,
-// docs/knowledges/20260920/0600-windows-igpu-memory-ceiling-below-fit.md):
-// with 127 GB visible to the OS and the carve-out at its 512 MB minimum,
-// loads that llama.cpp projected at 84,270 MiB of device memory succeeded
-// and 85,070 MiB failed, whatever the KV cache type, the context window or
-// the model. Every allocation succeeds; the runner dies with a C++ exception
-// during the warm-up run, the first moment the memory has to be resident.
-// The engine plans against the sum of the two Vulkan heap budgets — 99,287
-// MiB there — so nothing in it stops short of that ceiling, and the budget
-// it was previously given (the 96 GiB above) is over it too.
-//
-// 80 GiB leaves about 3 GB below the largest load that worked, for the GPU
-// memory a desktop session holds; the measurement ran on an idle one.
-//
-// A record of one host, not a platform contract, and deliberately a constant
-// rather than a share of RAM: the same Windows branch also serves hosts
-// configured the other way round, with a large carve-out and little RAM left
-// to the OS, and a 22.6 GB model ran on one of those with 31.65 GB visible
-// (#863). Scaling this ceiling by RAM would refuse that measured-good
-// configuration, so it binds only where a budget would otherwise exceed what
-// was measured here.
-const windowsUMALoadableCapMB = 80 * 1024
-
 // strixHaloUMA computes the GPU-addressable memory budget and the
 // additive firmware carve-out for a Strix Halo UMA host. It takes goos
 // because the two operating systems that reach it answer differently,
@@ -138,10 +112,6 @@ const windowsUMALoadableCapMB = 80 * 1024
 // returns 0 for it. The registry figure survives on GPUs[0].VRAMTotalMB
 // for diagnostics.
 //
-// That leftover RAM is an upper bound the load never reaches on a host
-// with RAM to spare, so the budget is also held to the largest load
-// measured to work there (windowsUMALoadableCapMB, #1443).
-//
 // This is a record of what those two configurations measured, not a
 // platform contract: only the one host was measured, and the mechanism
 // above is documented for WDDM, not for amdgpu.
@@ -168,7 +138,7 @@ func strixHaloUMA(goos string, amdVRAMMB, ramTotalGB, ramAvailableAtInstallGB in
 		if usable <= 0 {
 			return 0, 0
 		}
-		return min(usable, strixHaloUMACapMB, windowsUMALoadableCapMB), 0
+		return min(usable, strixHaloUMACapMB), 0
 	}
 	if amdVRAMMB > 0 {
 		c := minNonZero(amdVRAMMB, strixHaloUMACapMB)

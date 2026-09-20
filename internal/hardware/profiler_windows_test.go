@@ -22,15 +22,12 @@ import (
 // a non-zero one would restore the capacity overstatement #863 is about.
 func TestDefaultUMA_Windows(t *testing.T) {
 	const (
-		strixHaloCPU = "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
-		phoenixCPU   = "AMD Ryzen 9 7940HS w/ Radeon 780M Graphics"
-		intelCPU     = "13th Gen Intel(R) Core(TM) i7-13700K"
-		amdGPUModel  = "AMD Radeon(TM) 8060S Graphics"
-		nvidiaGPU    = "NVIDIA GeForce RTX 4090"
-		// What a 128 GB Strix Halo publishes: the BIOS ceiling and the RAM
-		// left to the OS are both above the largest load measured to work
-		// there, so windowsUMALoadableCapMB decides (#1443).
-		strixHaloCap  = windowsUMALoadableCapMB
+		strixHaloCPU  = "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
+		phoenixCPU    = "AMD Ryzen 9 7940HS w/ Radeon 780M Graphics"
+		intelCPU      = "13th Gen Intel(R) Core(TM) i7-13700K"
+		amdGPUModel   = "AMD Radeon(TM) 8060S Graphics"
+		nvidiaGPU     = "NVIDIA GeForce RTX 4090"
+		strixHaloCap  = 96 * 1024
 		ramTotalGB128 = 128
 		ramTotalGB32  = 32
 	)
@@ -49,8 +46,8 @@ func TestDefaultUMA_Windows(t *testing.T) {
 				GPUs:       []GPU{{Vendor: "amd", Model: amdGPUModel, VRAMTotalMB: 64 * 1024}},
 			},
 			wantUnifiedMemory: true,
-			// The 64 GB registry reading is not consulted: (128-2) GiB,
-			// held down to the loadable cap.
+			// The 64 GB registry reading is not consulted: (128-2) GiB
+			// clamped to the 96 GiB ceiling.
 			wantUsableVRAMMB: strixHaloCap,
 		},
 		{
