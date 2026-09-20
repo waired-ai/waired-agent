@@ -128,6 +128,9 @@ What starts it trying again:
   applying and the model is fair game again.
 - **turning inference back on** — on the console, or `waired inference engine
   start` on this computer. Either is you asking for it back, which is enough.
+- **choosing the same model again** — Waired warns you first and defaults to
+  No, and then does what you asked. It is your computer; if you want it to
+  try again, it tries again.
 
 None of these is a timer. Waired does not quietly try again after a while,
 and it does not try again when it restarts: a load that failed does not

@@ -65,6 +65,22 @@ func newModelsUseCmd() *cobra.Command {
 				fmt.Fprintln(stdout, "switch cancelled.")
 				return nil
 			}
+			// A build this computer has already failed to load is its own
+			// question, asked before the window one and with the same
+			// default: No. It is NOT a refusal — the owner's ruling of
+			// 2026-09-20 is that an explicit choice is warned about and
+			// then honoured — and answering yes clears the record on the
+			// daemon so the switch actually loads (waired-agent#1453).
+			if !assumeYes {
+				if why := didNotLoadHere(mgmt, model); why != "" {
+					warnDidNotLoadHere(stdout, model, why)
+					if ynAsk(stdout, bufio.NewScanner(os.Stdin),
+						"Choose it anyway?", false) != ynYes {
+						fmt.Fprintln(stdout, "switch cancelled.")
+						return nil
+					}
+				}
+			}
 			// The long window is its own question, asked after the fit one
 			// and with the same default: No. It is not a capacity matter —
 			// a computer that can hold it is still being told what the
@@ -249,4 +265,38 @@ func servingModelID(mgmt string) string {
 		}
 	}
 	return ""
+}
+
+// didNotLoadHere asks the daemon whether this computer has already failed to
+// load a build, and why.
+//
+// Fails open, like every other reader of fetchCatalogDetail: a daemon that
+// cannot answer leaves the switch alone. The question is a courtesy before a
+// choice, never a gate on it — the ruling is that an explicit choice is
+// honoured, so an unreachable daemon must not be able to block one.
+func didNotLoadHere(mgmt, modelID string) string {
+	cat, ok := fetchCatalogDetail(mgmt)
+	if !ok {
+		return ""
+	}
+	f, ok := familyByID(cat, modelID)
+	if !ok {
+		return ""
+	}
+	return f.DidNotLoadHere
+}
+
+// warnDidNotLoadHere is the ratified wording (owner, 2026-09-21).
+//
+// Past tense throughout: this computer TRIED this build and the load failed,
+// so nothing here is a prediction. The heading states the state rather than
+// asking, and only the last line is a question — ynAsk adds the
+// "[y/N] (default: No)".
+func warnDidNotLoadHere(out io.Writer, model, why string) {
+	fmt.Fprintf(out, "\n%s %s did not load on this computer\n", emo("\u26a0", "!"), model)
+	fmt.Fprint(out, "  Waired tried this build before and ran out of memory loading it. The\n")
+	fmt.Fprint(out, "  engine stopped and no Waired row on this computer answered. Choosing it\n")
+	fmt.Fprint(out, "  again runs the same load: minutes of work, and the computer back under\n")
+	fmt.Fprint(out, "  the memory pressure it just came out of.\n")
+	fmt.Fprintf(out, "  (%s)\n\n", why)
 }

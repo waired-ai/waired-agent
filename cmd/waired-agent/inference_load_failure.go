@@ -288,3 +288,57 @@ func (p *agentInferenceProvider) reviewOutOfMemoryPark(context.Context) {
 	}
 	p.resumeAfterOutOfMemory("this computer changed, so what it could not load before no longer applies")
 }
+
+// forgetLoadFailure drops the record for one build, because a person has
+// just chosen it on purpose (waired-agent#1453).
+//
+// The issue says the product stops reloading a build "until the build
+// changes or the person chooses it again", and the second half was missing:
+// the record blocked the warm path whoever had asked, so someone who read
+// the warning, decided to try anyway, and re-selected the build got silence.
+// That is refusing an explicit choice without saying so, which the owner's
+// ruling of 2026-09-20 forbids — a choice is warned about and then honoured.
+//
+// The warning belongs to whoever is asking (the CLI prompts before it gets
+// here); by this point the person has answered, so this only has to get out
+// of the way. If the load fails again the classifier writes a fresh record,
+// so nothing is lost but the memory of an answer the person has overruled.
+func (p *agentInferenceProvider) forgetLoadFailure(sha string) {
+	if p == nil || p.store == nil || sha == "" {
+		return
+	}
+	if err := p.store.Update(func(st *catalog.State) {
+		delete(st.FailedLoads, sha)
+	}); err != nil && p.logger != nil {
+		p.logger.Warn("could not clear the load-failure record for a build that was chosen again",
+			"variant_sha", sha, "err", err)
+	}
+}
+
+// LoadFailuresBySHA is what this host could not load, keyed by variant
+// digest, for the surfaces that price a row (waired-agent#1453).
+//
+// Only records that still apply to this computer: one taken under a
+// different engine build, driver or amount of memory describes a machine
+// that no longer exists, and showing it would warn about a thing that is no
+// longer true.
+func (p *agentInferenceProvider) LoadFailuresBySHA() map[string]string {
+	if p == nil || p.store == nil {
+		return nil
+	}
+	st, err := p.store.Load()
+	if err != nil || len(st.FailedLoads) == 0 {
+		return nil
+	}
+	here, shape := p.loadContextNow(p.backgroundCtx()), p.loadShapeNow()
+	out := map[string]string{}
+	for sha, f := range st.FailedLoads {
+		if f.Blocks(here, shape) {
+			out[sha] = f.Reason
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

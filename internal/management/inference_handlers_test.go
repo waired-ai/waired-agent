@@ -27,19 +27,20 @@ func (stubPinger) PingPeer(context.Context, string) (PingResult, error) {
 
 // fakeInference satisfies InferenceProvider for tests.
 type fakeInference struct {
-	mu         sync.Mutex
-	pulled     string
-	deleted    string
-	cancelled  string
-	cancelResp PullCancel
-	cancelErr  error
-	deleteErr  error
-	pullErr    error
-	selectErr  error
-	canned     InferenceStatus
-	hwProfile  hardware.Profile
-	runtimes   []RuntimeStatus
-	models     []ModelEntry
+	loadFailures map[string]string
+	mu           sync.Mutex
+	pulled       string
+	deleted      string
+	cancelled    string
+	cancelResp   PullCancel
+	cancelErr    error
+	deleteErr    error
+	pullErr      error
+	selectErr    error
+	canned       InferenceStatus
+	hwProfile    hardware.Profile
+	runtimes     []RuntimeStatus
+	models       []ModelEntry
 	// modelSizes is what the engine would report; nil stands for an engine
 	// that is not answering, which is the common case in these tests.
 	modelSizes map[string]int64
@@ -127,6 +128,10 @@ func (f *fakeInference) BenchmarkStatus() BenchmarkStatusResponse {
 func (f *fakeInference) MeasuredRates() (map[string]router.MeasuredRate, float64) {
 	return f.measuredRates, f.measuredFloor
 }
+
+// LoadFailuresBySHA: nothing has failed to load in these tests, which is
+// what every host reports until one does (waired-agent#1453).
+func (f *fakeInference) LoadFailuresBySHA() map[string]string { return f.loadFailures }
 func (f *fakeInference) DismissRecommendation(from, to string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

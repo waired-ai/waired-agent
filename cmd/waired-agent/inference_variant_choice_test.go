@@ -360,3 +360,54 @@ func (r *scriptedRunner) tagsSeen() []string {
 	defer r.mu.Unlock()
 	return append([]string(nil), r.tags...)
 }
+
+// TestSwapPreferredBuild_ClearsTheLoadFailureRecord drives the WIRING, not
+// the helper.
+//
+// waired-agent#1453 says the product stops reloading a build "until the
+// build changes or the person chooses it again", and the first
+// implementation shipped only the first half: the record blocked the warm
+// path whoever had asked, so someone who read the warning, decided to try
+// anyway and re-selected the build got silence.
+//
+// A unit test of forgetLoadFailure cannot catch that — removing the call
+// from SwapPreferredBuild leaves such a test green, which is exactly what
+// happened when this was first written. So this goes through the swap.
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-20): an explicit choice is warned
+// about and then honoured, never refused.
+func TestSwapPreferredBuild_ClearsTheLoadFailureRecord(t *testing.T) {
+	p, _, _ := variantChoiceProvider(t)
+
+	// The digest of the build the person is about to choose — resolved the
+	// same way the product resolves it, from the manifests, NOT from
+	// whatever happens to be active.
+	sha := activeVariantSHA(p.manifests, "heavy", "q4")
+	if sha == "" {
+		t.Fatal("the fixture has no heavy/q4 to key a record by")
+	}
+	if err := p.store.Update(func(st *catalog.State) {
+		if st.FailedLoads == nil {
+			st.FailedLoads = map[string]catalog.VariantLoadFailure{}
+		}
+		st.FailedLoads[sha] = catalog.VariantLoadFailure{
+			ModelID: "heavy", VariantID: "q4", Reason: "ran out of memory",
+		}
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// The person chooses it again, having been warned.
+	if _, err := p.SwapPreferredBuild(context.Background(), "heavy", "q4", ""); err != nil {
+		t.Fatalf("re-choosing the same build: %v", err)
+	}
+
+	st, err := p.store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, still := st.FailedLoads[sha]; still {
+		t.Error("choosing the build again left the record standing; the warm path would " +
+			"decline in silence and the switch would do nothing visible")
+	}
+}

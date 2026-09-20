@@ -5715,6 +5715,20 @@ func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOr
 		}
 		return false, fmt.Errorf("swap preferred model: unknown model %q", modelOrAlias)
 	}
+	// An explicit choice is honoured, not refused (owner ruling,
+	// 2026-09-20). Choosing a build this computer failed to load is the
+	// person overruling that record, so it goes — otherwise the warm path
+	// would decline in silence and the switch would do nothing visible.
+	// The warning happens before this call, where there is someone to
+	// answer it.
+	//
+	// The build being CHOSEN, never the active one. They are different
+	// until the switch completes — a staged build is still downloading
+	// while the old row serves — so clearing the active one would forget
+	// the record for the build the person is leaving and keep the one they
+	// just overruled. A test that drove the helper directly could not see
+	// that; the one that drives this function could.
+	p.forgetLoadFailure(activeVariantSHA(p.manifests, manifest.ModelID, variantID))
 	if retired.SuccessorModelID != "" {
 		p.logger.Info("model switch target was retired; switching to its successor",
 			"requested", modelOrAlias, "model", manifest.ModelID)

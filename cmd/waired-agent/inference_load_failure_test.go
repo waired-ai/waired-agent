@@ -164,3 +164,59 @@ func TestPublishedLoadFailures_OrderIsStable(t *testing.T) {
 		}
 	}
 }
+
+// TestForgetLoadFailure_AnExplicitChoiceIsHonoured is the half of
+// waired-agent#1453 that the first implementation missed.
+//
+// The issue says the product stops reloading a build "until the build
+// changes OR THE PERSON CHOOSES IT AGAIN". Only the first half shipped: the
+// record blocked the warm path whoever had asked, so someone who read the
+// warning, decided to try anyway and re-selected the build got silence — the
+// engine came back and the model still did not load, with nothing said.
+//
+// PRODUCT CONTRACT (owner ruling, 2026-09-20): an explicit choice is warned
+// about and then honoured, never refused. The warning belongs to whoever is
+// asking; by the time this runs the person has answered.
+func TestForgetLoadFailure_AnExplicitChoiceIsHonoured(t *testing.T) {
+	e := &warmEngine{}
+	p := warmProvider(t, e, "model-a", "a:q4")
+	rec := refFailure()
+	seedFailedLoad(t, p, "sha256:0fbaae8d", rec)
+
+	st, err := p.store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, ok := st.FailedLoads["sha256:0fbaae8d"]; !ok {
+		t.Fatal("precondition: the record was not seeded")
+	}
+
+	p.forgetLoadFailure("sha256:0fbaae8d")
+
+	st, err = p.store.Load()
+	if err != nil {
+		t.Fatalf("load after: %v", err)
+	}
+	if _, ok := st.FailedLoads["sha256:0fbaae8d"]; ok {
+		t.Error("the record survived an explicit choice; the warm path would decline in " +
+			"silence and the switch would do nothing visible")
+	}
+}
+
+// TestLoadFailuresBySHA_OnlyWhatStillApplies: a record taken under a
+// different engine build, driver or amount of memory describes a computer
+// that no longer exists, and warning about it would warn about something
+// that is no longer true.
+func TestLoadFailuresBySHA_OnlyWhatStillApplies(t *testing.T) {
+	e := &warmEngine{}
+	p := warmProvider(t, e, "model-a", "a:q4")
+
+	// A record from a machine that is not this one. warmProvider's host has
+	// no GPU and no engine version, so the reference host's context cannot
+	// match it.
+	seedFailedLoad(t, p, "sha256:elsewhere", refFailure())
+
+	if got := p.LoadFailuresBySHA(); len(got) != 0 {
+		t.Errorf("reported %v; a record from a different computer must not warn anyone", got)
+	}
+}
