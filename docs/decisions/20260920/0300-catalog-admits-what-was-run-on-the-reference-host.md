@@ -10,6 +10,8 @@ supersedes:
 
 Accepted。オーナー判断 2026-09-19〜20（waired-ai/waired#1427、comment 5744102939）。
 
+決定 4 の「足すモデル」は、その後の計測を受けて **2026-09-20 にオーナーが見送りに改めた**（waired-ai/waired#1427、comment 5748611270）。決定 1・2・3 と、退役の部分は変わらない。
+
 次の記録を**部分的に狭め、例外を 1 つ足す（覆さない）**。
 
 - `docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md` の決定 3（入れる条件は「参照機で 200k 込みの完全常駐」）について:
@@ -48,9 +50,15 @@ Accepted。オーナー判断 2026-09-19〜20（waired-ai/waired#1427、comment 
      - glm-5.2 には、参照機に載る variant が無い（最小の GGUF で 211 GB）。
      - deepseek-v4-flash で参照機に載るのは、枝刈り版だけ。
      - 退役表で glm-5.2 を後継にしていた 2 行は、`qwen3.8-27b` に付け替える（連鎖の禁止）。
-   - Laguna S 2.1 と Ling-3.0-flash を足す。Laguna は ollama で取り込める 1 ファイルのタグを、参照機で確かめてから入れる。
+   - Laguna S 2.1 と Ling-3.0-flash は、**どちらも足さない**（2026-09-20 に改めた。下の決定 6）。
    - Step-3.7-Flash は見送る。参照機に載る量子化は分割ファイルしか無く、Hugging Face は分割 GGUF を ollama に渡さない。ollama のタグも無い。
 5. **YaRN で 1M まで広げられるモデル**（既存の Qwen を含む）は、1M を選んだときに警告を出したうえで出す。設計と実装は waired-ai/waired#1456 で扱い、この記録では決めない。
+6. **Laguna S 2.1 と Ling-3.0-flash は見送る**（2026-09-20、決定 4 の改定）。
+   - 2 本とも決定 1 は満たした。参照機で 200,704 のコンテキストウィンドウで読み込め、tool call とその続き、約 27k トークンの要求まで通り、agentgrade（12 回 × unary と stream）と request-shape 6 形も抜けた。
+   - 足さない理由は**質**。決定 1 は「動くこと」までしか見ておらず、`quality_tier` を既存モデルのどこに置くかは別の根拠が要る。その根拠が、既存モデルより上にも同等にも届かなかった。
+     - Laguna S 2.1: 自前の計測（LiveCodeBench v6 の easy+medium、共通 48 問）で 40/48。同じ問題で qwen3.6-27b は 47/48 で、差 -14.6 ポイント・McNemar の正確検定 p=0.016。第三者の計測は、主要なリーダーボードのどれにも無い。
+     - Ling-3.0-flash: 単発のコード生成は qwen3.8-27b とほぼ同点だが、エージェント作業の計測（Vals.ai、同一ハーネス）で SWE-bench Verified 65.2 対 86.0、Terminal-Bench 2.1 50.2 対 58.4。tool 呼び出しの専用パーサ（ggml-org/llama.cpp#28682、2026-09-10 merge）は、まだどの ollama リリースにも載っていない。
+   - 再開の条件と、計測の全文は waired-ai/waired#1427（comment 5748611270）。ベンチマークの設計と、それが順位付けに使えなかった理由は `docs/knowledges/20260920/1600-livecodebench-easy-medium-cannot-rank-the-2026-models.md`。
 
 ## Consequences
 
@@ -59,3 +67,5 @@ Accepted。オーナー判断 2026-09-19〜20（waired-ai/waired#1427、comment 
   - 1M を宣言するモデルは、#1456 の YaRN で戻る。
   - `proto/hostfit/serving_window_test.go` は、1M に届くモデルが出荷カタログにあることを求めなくなった。
 - 量子化していない variant の秒数は、実測ではない。参照機の上に、それを載せられるホストはまだ無い。
+- 決定 3 は、**使う variant がまだ 1 つも無い**。足す予定だった 2 本を決定 6 で見送ったため、例外の対象が空になった。仕組み（`internal/catalog` の表と、入れる条件のテストの分岐）は実装せずに保留する。モデルを足すときに、この決定の文面から書き起こす。
+- カタログの中身は、この記録の前後で変わらない。動いたのは glm-5.2 と deepseek-v4-flash の退役（waired-ai/waired-agent#1449）だけ。
