@@ -30,6 +30,24 @@ type SetupInference struct {
 	// AppliedAt is when the daemon applied it, RFC3339. Diagnostics only —
 	// no decision may depend on it.
 	AppliedAt string `json:"applied_at,omitempty"`
+
+	// AskedAt is the control plane's DesiredInferenceSetAt for the
+	// instruction above — when the operator gave that answer, as opposed
+	// to when this daemon acted on it (waired-agent#1446).
+	//
+	// It is what makes the record per-ASK rather than per-VALUE. Without
+	// it, the same word could not be said twice: a person who turns local
+	// inference off at the machine leaves this record still naming the
+	// wizard's earlier "on", so the console's "turn local AI back on"
+	// writes a value the applier correctly reads as already acted on and
+	// nothing happens.
+	//
+	// Empty is a real state and must keep today's behaviour exactly: a
+	// control plane that predates the field, or an answer stored before it
+	// existed. Treating an untimed instruction as new would re-apply a
+	// weeks-old answer on every restart — the #465 silent revert this
+	// whole record exists to prevent.
+	AskedAt string `json:"asked_at,omitempty"`
 }
 
 // SetupInferencePath is the on-disk location of the record. Missing file

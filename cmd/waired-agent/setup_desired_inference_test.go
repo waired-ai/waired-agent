@@ -10,8 +10,13 @@ import (
 
 // PRODUCT CONTRACT (waired-agent#597; waired#1109/#1110, the waired#835
 // §6 pair-contract amendment): the wizard's explicit local-AI answer is
-// applied once per VALUE. The CP re-sends its instruction on every map
+// applied once per ASK. The CP re-sends its instruction on every map
 // frame, so anything keyed to the frame would re-disable forever.
+//
+// An UNTIMED instruction — a control plane that predates
+// DesiredInferenceSetAt — is one ask per value, which is the rule that
+// stood alone until #1446 and the one this test pins verbatim. The
+// stamped cases are below.
 func TestDesiredInference_OffAppliesOncePerValue(t *testing.T) {
 	f := &fakeSetupProvider{stateDir: t.TempDir()}
 	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
@@ -52,6 +57,109 @@ func TestDesiredInference_PersistedRecordStopsARestartReplay(t *testing.T) {
 	r2.Apply(ctx, &signer.InferenceState{DesiredInference: signer.DesiredInferenceOff})
 	if got := g.localInferenceDisableCount(); got != 0 {
 		t.Fatalf("disables after the restart replay = %d, want 0 — the record must survive", got)
+	}
+}
+
+// PRODUCT CONTRACT (#1446): a NEW stamp on the SAME word is a new ask.
+//
+// This is what the wire field exists for. A person who turns local
+// inference off at the machine leaves the record still naming the
+// wizard's earlier "on"; without the stamp the console's "turn local AI
+// back on" writes a value the applier reads as already acted on, and the
+// button does nothing at all. Reproduced on sv-mag before the fix.
+func TestDesiredInference_ANewStampMakesTheSameAnswerANewAsk(t *testing.T) {
+	const (
+		first  = "2026-09-20T10:30:05.122205419Z"
+		second = "2026-09-20T10:47:11.004Z"
+	)
+	f := &fakeSetupProvider{stateDir: t.TempDir()}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	on := &signer.InferenceState{
+		DesiredInference:      signer.DesiredInferenceOn,
+		DesiredInferenceSetAt: first,
+	}
+	r.Apply(ctx, on)
+	r.Apply(ctx, on)
+	r.Apply(ctx, on)
+	if got := f.localInferenceEnableCount(); got != 1 {
+		t.Fatalf("enables over three replays of one ask = %d, want 1", got)
+	}
+
+	// The person turns it off at the machine. Nothing writes the acted
+	// record — `waired inference off` moves the toggle only — so the
+	// record still says the wizard's "on", and the browser says it again.
+	again := *on
+	again.DesiredInferenceSetAt = second
+	r.Apply(ctx, &again)
+	if got := f.localInferenceEnableCount(); got != 2 {
+		t.Fatalf("enables after the operator asked again = %d, want 2 — the button does nothing", got)
+	}
+	rec, err := state.ReadSetupInference(f.setupStateDir())
+	if err != nil || rec.AskedAt != second {
+		t.Fatalf("acted record = %+v err=%v, want the second ask's time", rec, err)
+	}
+}
+
+// PRODUCT CONTRACT (#1446, and the #465 rule it must not break): an
+// UNTIMED instruction keeps the per-value rule exactly.
+//
+// The mutation this forbids is reading an empty stamp as "new": a
+// control plane that predates the field re-sends the same untimed answer
+// on every frame, so that reading would re-apply a weeks-old answer over
+// a person's local flip once per frame — the silent revert the durable
+// record exists to prevent. Nothing is migrated either way: the first
+// STAMPED ask from an upgraded control plane differs from the unstamped
+// record and acts once.
+func TestDesiredInference_AnUnstampedAnswerKeepsThePerValueRule(t *testing.T) {
+	f := &fakeSetupProvider{stateDir: t.TempDir()}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	untimed := &signer.InferenceState{DesiredInference: signer.DesiredInferenceOff}
+	r.Apply(ctx, untimed)
+	r.Apply(ctx, untimed)
+	r.Apply(ctx, untimed)
+	if got := f.localInferenceDisableCount(); got != 1 {
+		t.Fatalf("disables over three untimed replays = %d, want 1", got)
+	}
+	rec, err := state.ReadSetupInference(f.setupStateDir())
+	if err != nil || rec.AskedAt != "" {
+		t.Fatalf("acted record = %+v err=%v, want no time recorded", rec, err)
+	}
+
+	stamped := *untimed
+	stamped.DesiredInferenceSetAt = "2026-09-20T10:30:05.122205419Z"
+	r.Apply(ctx, &stamped)
+	if got := f.localInferenceDisableCount(); got != 2 {
+		t.Fatalf("disables after the CP started stamping = %d, want 2 — the first stamped ask acts once", got)
+	}
+}
+
+// PRODUCT CONTRACT (#1446): the stamp is DURABLE, like the value beside
+// it. A restarted daemon fed the same stamped instruction acts on
+// nothing — a record that forgot the time would make every restart a new
+// ask, which is #465's silent revert wearing the fix's clothes.
+func TestDesiredInference_TheStampSurvivesARestart(t *testing.T) {
+	const at = "2026-09-20T10:30:05.122205419Z"
+	dir := t.TempDir()
+	ctx := context.Background()
+	on := &signer.InferenceState{
+		DesiredInference:      signer.DesiredInferenceOn,
+		DesiredInferenceSetAt: at,
+	}
+
+	f := &fakeSetupProvider{stateDir: dir}
+	newSetupReconciler(f, nil, "dev-1", nil, quietLogger()).Apply(ctx, on)
+	if got := f.localInferenceEnableCount(); got != 1 {
+		t.Fatalf("enables before the restart = %d, want 1", got)
+	}
+
+	g := &fakeSetupProvider{stateDir: dir}
+	newSetupReconciler(g, nil, "dev-1", nil, quietLogger()).Apply(ctx, on)
+	if got := g.localInferenceEnableCount(); got != 0 {
+		t.Fatalf("enables after the restart replay = %d, want 0 — the stamp must survive", got)
 	}
 }
 
@@ -98,34 +206,6 @@ func TestDesiredInference_UnknownValueIsLeftPending(t *testing.T) {
 	r.Apply(ctx, &signer.InferenceState{DesiredInference: signer.DesiredInferenceOff})
 	if got := f.localInferenceDisableCount(); got != 1 {
 		t.Fatalf("a known value after an unknown one must still apply, disables = %d", got)
-	}
-}
-
-// PRODUCT CONTRACT (#597): an inference-only change beside a standing
-// engine must not fire the serve-ask enable — a wizard writing "off"
-// would otherwise be answered with an enable a breath before the off
-// applies.
-func TestDesiredInference_OffBesideAStandingEngineDoesNotAskToServe(t *testing.T) {
-	f := &fakeSetupProvider{stateDir: t.TempDir()}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
-	ctx := context.Background()
-
-	standing := &signer.InferenceState{
-		DesiredEngine:  signer.InferenceTypeOllama,
-		DesiredModelID: "qwen3-8b-instruct",
-	}
-	r.Apply(ctx, standing)
-	base := f.localInferenceEnableCount()
-
-	withOff := *standing
-	withOff.DesiredInference = signer.DesiredInferenceOff
-	r.Apply(ctx, &withOff)
-
-	if got := f.localInferenceEnableCount(); got != base {
-		t.Fatalf("enables went %d → %d — an inference-only change fired the serve-ask", base, got)
-	}
-	if got := f.localInferenceDisableCount(); got != 1 {
-		t.Fatalf("disables = %d, want the off applied once", got)
 	}
 }
 

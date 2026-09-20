@@ -686,57 +686,141 @@ func TestSetupApplyBenchmarkIdempotent(t *testing.T) {
 	}
 }
 
-// TestSetupApplyTurnsLocalInferenceOn is the BROWSER half of #465's
-// opt-in, and it closes a hole #507 opened.
+// TestSetupApplyNeverTurnsLocalInferenceOnByItself pins the BROWSER half
+// of #465's opt-in after #1446 moved it from an inferred signal to a
+// stated one.
 //
-// #507 made "local inference off" mean the engine stands down rather
-// than the subsystem being unbuilt — which is what let the wizard reach
-// a host below the recommended spec at all. But the wizard's desired
-// state is applied through startSetupEngine, so on exactly those hosts
-// the engine step would be refused and the browser would wait forever
-// on a machine that had decided not to serve.
+// The product contract has not changed: waired-ai/waired#1056 decision 4
+// ("推奨要件未満 は…警告つきオプトイン可") requires the opt-in to exist on
+// BOTH surfaces, and this is still the browser's. What changed is how
+// the browser says it. Until #1446 a desired engine or model IMPLIED it:
+// Apply called setupEnableLocalInference whenever the serve half of the
+// instruction differed from the one this process last saw, which closed
+// the hole #507 opened — #507 made "local inference off" mean the engine
+// stands down rather than the subsystem being unbuilt, which is what let
+// the wizard reach a host below the recommended spec at all, and on
+// exactly those hosts the engine step would otherwise be refused.
 //
-// A CP-served desired engine or model is not a background default: the
-// control plane writes it when a person chose it in the wizard, so
-// applying one IS the opt-in. Product contract, per waired-ai/waired#1056
-// decision 4 ("推奨要件未満 は…警告つきオプトイン可") — the opt-in has
-// to exist on BOTH surfaces, and this is the browser's.
-func TestSetupApplyTurnsLocalInferenceOn(t *testing.T) {
+// That test read the instruction's CONTENTS rather than what had
+// changed, and three kinds of frame satisfied it with nobody asking —
+// each one a subtest below. The wizard now STATES the answer instead:
+// it sends inference:"on" with the engine and model it writes
+// (waired-ai/waired, web/admin/src/pages/Setup.tsx, chooseEngineStep and
+// writeSetup), and applyDesiredInference is the only door left.
+//
+// Every subtest that asserts zero would pass against an empty function,
+// so each one says how it bites: restoring the retired block turns its
+// count non-zero. The three deltas are measured AFTER a standing
+// instruction is in place, because under the old rule that first frame
+// was a genuine ask and would mask the one being tested.
+func TestSetupApplyNeverTurnsLocalInferenceOnByItself(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("a desired engine asks", func(t *testing.T) {
+	t.Run("a standing instruction on the first frame after a restart asks nothing", func(t *testing.T) {
+		// newSetupReconciler, not watchingReconciler: this IS the first
+		// frame, and its compare is against the zero value. The control
+		// plane never clears a desired value, so a device set up from a
+		// browser once carries the instruction forever and every daemon
+		// start looked like a change. Reproduced on sv-mag: the restart
+		// rewrote a person's `waired inference off` to `enabled` on disk.
 		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 0))
+		if got := f.localInferenceEnableCount(); got != 0 {
+			t.Fatalf("enable calls = %d, want 0 — a leftover instruction is not somebody asking (#308)", got)
+		}
+	})
+
+	t.Run("an engine the wizard wrote while we watched asks nothing either", func(t *testing.T) {
+		// The same frame as above, but genuinely watched. It is what
+		// separates retiring the ask from merely gating it on the #308
+		// freshness test: a `driving`-gated version would still enable
+		// here, and the browser is now expected to say so explicitly.
+		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+		r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 		r.Apply(ctx, desiredFrame("ollama", "", 0))
-		if got := f.localInferenceEnableCount(); got != 1 {
-			t.Fatalf("enable calls = %d, want 1 — the wizard's engine step "+
-				"would be refused on a host that starts with local inference off", got)
+		if got := f.localInferenceEnableCount(); got != 0 {
+			t.Fatalf("enable calls = %d, want 0 — the engine step no longer implies the answer", got)
 		}
 	})
 
-	t.Run("a desired model asks", func(t *testing.T) {
+	t.Run("a realignment onto the model this device serves asks nothing", func(t *testing.T) {
+		// #647: the control plane moves desired_model_id onto what the
+		// device reports it is serving, after a person there chose it.
+		// The realignment FOLLOWS the device; it does not ask it
+		// anything, and the device could not tell the two apart.
 		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
-		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
-		r.Apply(ctx, desiredFrame("", "qwen3-8b-instruct", 0))
-		if got := f.localInferenceEnableCount(); got != 1 {
-			t.Fatalf("enable calls = %d, want 1", got)
+		r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("ollama", "model-a", 0))
+		before := f.localInferenceEnableCount()
+		f.mu.Lock()
+		f.preferred = "model-b"
+		f.mu.Unlock()
+		r.Apply(ctx, desiredFrame("ollama", "model-b", 0))
+		if got := f.localInferenceEnableCount() - before; got != 0 {
+			t.Fatalf("enable calls after the realignment = %d, want 0 (#647)", got)
 		}
 	})
 
-	t.Run("asked once per instruction, not once per frame", func(t *testing.T) {
-		// Apply runs on EVERY network-map frame. The real implementation
-		// is a no-op while it is already on, but the reconciler must not
-		// lean on that: a desired value the CP replays forever would
-		// otherwise re-assert a choice the user has since reversed from
-		// the tray.
+	t.Run("a benchmark generation beside a standing engine asks nothing", func(t *testing.T) {
+		// The retired comment claimed this already: "A benchmark
+		// generation alone is deliberately not an ask; it tells a device
+		// that already serves to measure itself." It was not true
+		// whenever the instruction still named an engine or a model,
+		// because the gate read those rather than what moved. Pressing
+		// "measure the speed again" in the browser turned local
+		// inference back on.
 		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
-		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
-		frame := desiredFrame("ollama", "qwen3-8b-instruct", 0)
-		for i := 0; i < 3; i++ {
-			r.Apply(ctx, frame)
+		r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 1))
+		before := f.localInferenceEnableCount()
+		r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 2))
+		if got := f.localInferenceEnableCount() - before; got != 0 {
+			t.Fatalf("enable calls after a benchmark bump = %d, want 0", got)
 		}
-		if got := f.localInferenceEnableCount(); got != 1 {
-			t.Fatalf("enable calls = %d over 3 identical frames, want 1", got)
+	})
+
+	t.Run("coding-tool toggles beside a standing engine ask nothing", func(t *testing.T) {
+		// The same shape one field over (waired#935). A person changing
+		// which coding tools this computer sets up is not asking it to
+		// start serving.
+		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+		r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 0))
+		before := f.localInferenceEnableCount()
+		withTools := desiredFrame("ollama", "qwen3-8b-instruct", 0)
+		withTools.DesiredIntegrations = &signer.DesiredIntegrations{
+			Enabled: []string{signer.IntegrationClaudeCode},
+		}
+		r.Apply(ctx, withTools)
+		if got := f.localInferenceEnableCount() - before; got != 0 {
+			t.Fatalf("enable calls after a coding-tool change = %d, want 0", got)
+		}
+	})
+
+	t.Run("the explicit answer is the only door", func(t *testing.T) {
+		// And the reason string is asserted, not just the count: the
+		// fake records it (localInferenceEnables), which is the only way
+		// to tell the two doors apart. A regression that revived the
+		// implicit ask would enable with the retired wording.
+		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+		r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 0))
+		if got := f.localInferenceEnableCount(); got != 0 {
+			t.Fatalf("enable calls = %d before the answer, want 0", got)
+		}
+		asked := desiredFrame("ollama", "qwen3-8b-instruct", 0)
+		asked.DesiredInference = signer.DesiredInferenceOn
+		asked.DesiredInferenceSetAt = "2026-09-20T10:30:05.122205419Z"
+		r.Apply(ctx, asked)
+		f.mu.Lock()
+		reasons := append([]string(nil), f.localInferenceEnables...)
+		f.mu.Unlock()
+		if len(reasons) != 1 {
+			t.Fatalf("enable calls = %d after the explicit answer, want 1", len(reasons))
+		}
+		if !strings.Contains(reasons[0], "turned local inference back on") {
+			t.Fatalf("enabled for %q, want the explicit-answer reason — the implicit serve-ask is back", reasons[0])
 		}
 	})
 
@@ -745,8 +829,6 @@ func TestSetupApplyTurnsLocalInferenceOn(t *testing.T) {
 		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 		r.Apply(ctx, nil)
 		r.Apply(ctx, &signer.InferenceState{})
-		// A benchmark generation alone is not a request to serve: it is
-		// asking a device that already serves to measure itself.
 		r.Apply(ctx, desiredFrame("", "", 3))
 		if got := f.localInferenceEnableCount(); got != 0 {
 			t.Fatalf("enable calls = %d, want 0 — nobody asked this device to serve", got)
