@@ -397,3 +397,51 @@ func TestModelLoading_ReportsTheLatchAndTheElapsedSeconds(t *testing.T) {
 		t.Errorf("elapsed = %d s for a stamp in the future, want 0", secs)
 	}
 }
+
+// TestWarmServingModel_RecordsResidencyBeforeTheLatchClears is
+// waired-agent#1328.
+//
+// PRODUCT CONTRACT: at the moment a warm-up succeeds, the surfaces must not
+// be told the model is missing. Two signals moved at different times —
+// warmInFlight cleared the instant loadOllamaModel returned, while
+// model_resident was only re-read on the 5 s probe tick — so for up to one
+// tick the status line read "model not loaded" about a model that had just
+// been loaded. Bounded and self-correcting, and worth fixing because it was
+// worst exactly when the thing worked.
+//
+// Asserting on the adapter right after the synchronous body returns is the
+// test: no probe tick has run, so anything recorded here was recorded by the
+// warm-up itself.
+func TestWarmServingModel_RecordsResidencyBeforeTheLatchClears(t *testing.T) {
+	e := &warmEngine{}
+	p := warmProvider(t, e, "model-a", "a:q4")
+	// A started engine has already recorded "nothing resident" — an
+	// observation, not a shrug — so the precondition is that nothing is
+	// resident, not that nothing has been observed.
+	if r := p.ollama.Residency(); r.Resident() {
+		t.Fatalf("precondition: something is already resident (%+v)", r)
+	}
+
+	p.warmServingModelNow(context.Background())
+
+	r := p.ollama.Residency()
+	if !r.Resident() || r.Model != "a:q4" {
+		t.Errorf("residency after a successful warm-up = %+v, want the warmed tag a:q4 resident", r)
+	}
+}
+
+// The other half: a load that did NOT succeed must not assert anything. An
+// observation is a claim about what /api/ps said, and the warm-up that
+// failed has no such claim to make — markNothingResident and residencyFromPS
+// both turn on that distinction.
+func TestWarmServingModel_AFailedLoadObservesNothing(t *testing.T) {
+	e := &warmEngine{}
+	e.setFailLoads(true)
+	p := warmProvider(t, e, "model-a", "a:q4")
+
+	p.warmServingModelNow(context.Background())
+
+	if r := p.ollama.Residency(); r.Resident() {
+		t.Errorf("a failed warm-up recorded the model as resident: %+v", r)
+	}
+}

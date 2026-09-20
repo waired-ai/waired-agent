@@ -195,6 +195,21 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 		return
 	}
 	p.warmFails.reset()
+	// Record that the weights are back BEFORE the in-flight latch clears
+	// (waired-agent#1328). Two signals move at different times: warmInFlight
+	// drops the moment this function returns, while model_resident is only
+	// re-read on the 5 s local-inference probe tick. For up to one tick the
+	// surfaces were told "not loading" and "not resident" together, so the
+	// status line read `model not loaded` at the exact moment the load had
+	// just succeeded — worst when the thing worked.
+	//
+	// refreshOllamaResidency rather than a bare SetResidency: this is an
+	// OBSERVATION of /api/ps, which is the distinction markNothingResident
+	// and residencyFromPS both turn on, and it keeps the residency-changed
+	// log line on one path. Best-effort like the rest of the warm-up — an
+	// unreadable /api/ps leaves the previous observation alone and the probe
+	// tick catches up, which is exactly the old behaviour.
+	refreshOllamaResidency(ctx, p.ollama, client)
 	if p.logger != nil {
 		p.logger.Info("serving model warmed",
 			"model", tag, "took", time.Since(start).Round(time.Second))
