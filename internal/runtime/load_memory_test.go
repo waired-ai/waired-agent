@@ -1,6 +1,13 @@
 package runtime
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+)
 
 // The tails below are verbatim from engine logs captured on the reference
 // host on 2026-09-20 (the runs behind
@@ -189,5 +196,129 @@ func TestLastRunnerLine(t *testing.T) {
 				t.Errorf("lastRunnerLine() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// loadMemoryRecorder records what OnLoadMemoryFailure was handed.
+type loadMemoryRecorder struct {
+	mu   sync.Mutex
+	seen []LoadMemoryFailure
+}
+
+func (r *loadMemoryRecorder) record(f LoadMemoryFailure) {
+	r.mu.Lock()
+	r.seen = append(r.seen, f)
+	r.mu.Unlock()
+}
+
+func (r *loadMemoryRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.seen)
+}
+
+// writeEngineLog puts a tail where the adapter will look for it. Written
+// after the adapter is up, because bringing it up owns that file.
+func writeEngineLog(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "engine.log"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write engine.log: %v", err)
+	}
+}
+
+// TestReportUpstreamFailure_RoutesAMemoryLoadAwayFromDemotion is the
+// product contract of waired-agent#1453 at the seam that decides it.
+//
+// The same reply — a dead runner — must reach two different places
+// depending on what the engine log says happened. Before this, both went to
+// markUnhealthy, and the reference host's answer to a model too big for it
+// was to restart the engine and load the model again.
+func TestReportUpstreamFailure_RoutesAMemoryLoadAwayFromDemotion(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		tail           string
+		wantDemote     bool
+		wantLoadMemory bool
+	}{
+		{
+			name:           "died making the model resident",
+			tail:           failingLoadTail,
+			wantDemote:     false,
+			wantLoadMemory: true,
+		},
+		{
+			name:           "died after it was serving",
+			tail:           healthyLoadTail,
+			wantDemote:     true,
+			wantLoadMemory: false,
+		},
+		{
+			// No log to read: the positional shape cannot be claimed, so
+			// this falls back to the behaviour before #1453.
+			name:           "no engine log at all",
+			tail:           "",
+			wantDemote:     true,
+			wantLoadMemory: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			a, _, unhealthy := livenessAdapter(t, dir)
+			defer func() { _ = a.Stop(context.Background()) }()
+			mem := &loadMemoryRecorder{}
+			a.SetOnLoadMemoryFailure(mem.record)
+			if tc.tail != "" {
+				writeEngineLog(t, dir, tc.tail)
+			} else {
+				_ = os.Remove(filepath.Join(dir, "engine.log"))
+			}
+
+			a.ReportUpstreamFailure(500, []byte(deadRunnerBody))
+
+			if tc.wantLoadMemory {
+				waitFor(t, time.Second, "OnLoadMemoryFailure to fire", func() bool { return mem.count() == 1 })
+				if got := a.Health(context.Background()).State; got != StateReady {
+					t.Errorf("state = %s, want ready: a load that ran out of memory must not demote the engine", got)
+				}
+				if unhealthy.count() != 0 {
+					t.Errorf("OnUnhealthy fired %d times, want 0", unhealthy.count())
+				}
+				if r := mem.seen[0].Reason; r == "" {
+					t.Error("no reason for an operator")
+				}
+				return
+			}
+			if tc.wantDemote {
+				waitFor(t, time.Second, "demotion", func() bool {
+					return a.Health(context.Background()).State == StateFailed
+				})
+			}
+			time.Sleep(30 * time.Millisecond)
+			if mem.count() != 0 {
+				t.Errorf("OnLoadMemoryFailure fired %d times, want 0", mem.count())
+			}
+		})
+	}
+}
+
+// TestReportUpstreamFailure_MemoryBurstIsOneReport covers the debounce. A
+// load that failed for memory leaves nothing resident, so every request
+// behind it pays a cold reload and fails identically; that is one fact
+// about one build, not one per request.
+func TestReportUpstreamFailure_MemoryBurstIsOneReport(t *testing.T) {
+	dir := t.TempDir()
+	a, _, _ := livenessAdapter(t, dir)
+	defer func() { _ = a.Stop(context.Background()) }()
+	mem := &loadMemoryRecorder{}
+	a.SetOnLoadMemoryFailure(mem.record)
+	writeEngineLog(t, dir, failingLoadTail)
+
+	for range 5 {
+		a.ReportUpstreamFailure(500, []byte(deadRunnerBody))
+	}
+	waitFor(t, time.Second, "OnLoadMemoryFailure to fire", func() bool { return mem.count() >= 1 })
+	time.Sleep(50 * time.Millisecond)
+	if got := mem.count(); got != 1 {
+		t.Errorf("OnLoadMemoryFailure fired %d times across a burst, want 1", got)
 	}
 }

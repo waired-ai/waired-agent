@@ -160,6 +160,22 @@ type OllamaConfig struct {
 	// Invoked on its own goroutine, so it may call back in. Debounced, so
 	// the reload-and-fail loop an OOM causes is one report.
 	OnFitFailure func(detail string)
+	// OnLoadMemoryFailure, when set, is called once per load that failed
+	// for want of memory, with a sentence for an operator and the engine's
+	// own words.
+	//
+	// A third thing again, and the one waired-agent#1453 is about. Like
+	// OnFitFailure it does NOT demote the engine — the engine is fine, and
+	// on the reference host it went on serving smaller models immediately
+	// afterwards. Unlike OnFitFailure there is no smaller CONFIGURATION to
+	// fall to: the weights themselves did not fit on this computer, so the
+	// handler's job is to record the build, stop reloading it, and put a
+	// smaller one in front of the operator.
+	//
+	// Invoked on its own goroutine, so it may call back in. Debounced on
+	// its own clock: a failed load evicts nothing and the next request
+	// reloads, so a burst is one fact about one build.
+	OnLoadMemoryFailure func(f LoadMemoryFailure)
 }
 
 // ErrEngineNotOwned is returned by Park when the engine was adopted as
@@ -360,6 +376,9 @@ type OllamaAdapter struct {
 	// following request pays a cold reload and fails identically. A burst
 	// is one fact about one configuration. Guarded by mu.
 	lastFitFailure time.Time
+	// lastLoadMemFailure debounces reportLoadMemoryFailure on its own
+	// clock, for the reason that function's doc gives. Guarded by mu.
+	lastLoadMemFailure time.Time
 	// giveUp latches "repeatedly crashed; stop respawning" so a
 	// deterministically-crashing model cannot turn every request into a
 	// fresh 150-second spawn attempt. Cleared by ClearFailure (which
@@ -471,15 +490,26 @@ func engineOOMBody(body []byte) bool { return EngineOutOfMemory(string(body)) }
 // its terminal error, detection silently reverts to the old behaviour and
 // this line is the only way to notice.
 //
-// The dead-runner check comes first and is unchanged. An accelerator
-// out-of-memory is routed to OnFitFailure instead and does NOT demote:
-// the engine is serving, and what does not fit is the configuration
-// (waired-agent#1038).
+// An accelerator out-of-memory is routed to OnFitFailure instead and does
+// NOT demote: the engine is serving, and what does not fit is the
+// configuration (waired-agent#1038).
+//
+// The dead-runner check no longer comes first. A load that ran the computer
+// out of memory ALSO reports a dead runner — on the reference host of
+// waired-agent#1443 it is the same sentence — and treating it as a broken
+// engine is what restarted the product into the load that had just failed.
+// So the engine log is consulted first, and only a death it cannot explain
+// as memory demotes anything. Reading the log costs a 4 KiB tail, and only
+// on a reply that already says the runner is gone.
 func (a *OllamaAdapter) ReportUpstreamFailure(status int, body []byte) {
 	if status < 500 {
 		return // a 4xx is the request's fault, not the engine's
 	}
 	if engineDeadBody(body) {
+		if f, ok := a.classifyLoadMemory(string(body)); ok {
+			a.reportLoadMemoryFailure(f)
+			return
+		}
 		a.markUnhealthy(fmt.Sprintf("engine returned HTTP %d: %s", status, firstLine(body)))
 		return
 	}
@@ -1156,6 +1186,14 @@ func (a *OllamaAdapter) SetOnStartFailed(fn func(detail string)) {
 func (a *OllamaAdapter) SetOnFitFailure(fn func(detail string)) {
 	a.mu.Lock()
 	a.cfg.OnFitFailure = fn
+	a.mu.Unlock()
+}
+
+// SetOnLoadMemoryFailure installs the out-of-memory-during-a-load handler
+// after construction, for the same reason as SetOnFitFailure above (#1453).
+func (a *OllamaAdapter) SetOnLoadMemoryFailure(fn func(LoadMemoryFailure)) {
+	a.mu.Lock()
+	a.cfg.OnLoadMemoryFailure = fn
 	a.mu.Unlock()
 }
 

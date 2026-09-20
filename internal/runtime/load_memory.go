@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"log/slog"
 	"strings"
+	"time"
 )
 
 // A model load that runs out of memory is a different fact from an engine
@@ -146,4 +148,62 @@ func lastRunnerLine(tail string) string {
 		return s
 	}
 	return ""
+}
+
+// LoadMemoryFailure is one load that failed for want of memory, as the
+// adapter classified it.
+type LoadMemoryFailure struct {
+	// Reason is the sentence to put in front of an operator. It says what
+	// happened, not what the engine printed.
+	Reason string
+	// Detail is the engine's own first line, kept so a log or a bug report
+	// carries the words the engine actually used.
+	Detail string
+	// At is when this was classified.
+	At time.Time
+}
+
+// classifyLoadMemory asks whether an engine reply that says the runner is
+// gone is really a load that ran out of memory.
+//
+// The engine log is read here rather than by the caller because the tail's
+// staleness is part of the answer, and only the adapter knows where its log
+// is. A missing log (LogDir unset, an adopted engine) yields an empty tail,
+// which decides "not memory" — the positional shape cannot be claimed about
+// text nobody has.
+func (a *OllamaAdapter) classifyLoadMemory(body string) (LoadMemoryFailure, bool) {
+	tail := tailEngineLog(a.engineLogPath(), engineLogTailMaxBytes)
+	ok, reason := loadMemoryFailure(loadMemoryFacts{
+		Body:      body,
+		LogTail:   tail,
+		TailStale: EngineLogTailIsStale(tail),
+	})
+	if !ok {
+		return LoadMemoryFailure{}, false
+	}
+	return LoadMemoryFailure{Reason: reason, Detail: firstLine([]byte(body)), At: time.Now()}, true
+}
+
+// reportLoadMemoryFailure fires OnLoadMemoryFailure at most once per
+// unhealthyDebounce, and never demotes.
+//
+// Debounced on its own clock rather than markUnhealthy's or
+// reportFitFailure's: a load that failed for memory leaves nothing resident,
+// so every request that arrives next pays a cold reload and fails the same
+// way. That burst is one fact about one build.
+func (a *OllamaAdapter) reportLoadMemoryFailure(f LoadMemoryFailure) {
+	a.mu.Lock()
+	if !a.lastLoadMemFailure.IsZero() && time.Since(a.lastLoadMemFailure) < unhealthyDebounce {
+		a.mu.Unlock()
+		return
+	}
+	a.lastLoadMemFailure = time.Now()
+	fn := a.cfg.OnLoadMemoryFailure
+	a.mu.Unlock()
+
+	slog.Warn("ollama: this computer ran out of memory loading the model",
+		"reason", f.Reason, "engine_said", f.Detail)
+	if fn != nil {
+		go fn(f)
+	}
 }
