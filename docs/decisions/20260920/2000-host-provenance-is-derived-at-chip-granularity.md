@@ -2,6 +2,8 @@
 status: accepted
 supersedes:
   - docs/decisions/20260829/1100-measurement-provenance-is-derived-or-declared.md
+superseded_by:
+  - docs/decisions/20260921/0300-nvidia-single-pool-parts-are-named.md
 ---
 
 # 測定の出自は、チップの粒度で事実から導く (20260920 20:00)
@@ -12,6 +14,13 @@ Accepted。waired-agent#1455、および #459 の Ask 1・2。
 `docs/decisions/20260829/1100-measurement-provenance-is-derived-or-declared.md`
 の §2 を**部分的に**改める（`--host` が §2 の「語彙で縛る」側から §1 の
 「観測できるものは導出する」側へ移る）。§1・§3・§4・§5 は不変。
+
+この記録の **§4 と §6 は、その後
+`docs/decisions/20260921/0300-nvidia-single-pool-parts-are-named.md` が
+部分的に改めた** — §4 が #459 に繰り延べた「方針の一般化」はそこで解決し、
+§6 の「`GPU.Model` は使わない」は **NVIDIA のユニファイド部品に限って**
+解かれた（`ComputeCap` の `12.1` が GB10 と RTX Spark N1X の 2 機種を
+指してしまい、部品を特定できないため）。§1・§2・§3・§5・§7 は不変。
 
 ## Context
 

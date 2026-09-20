@@ -126,14 +126,33 @@ func UnifiedMemoryBandwidthGBs(cpuModel string) float64 {
 // entirely. Publishing a unified pool figure for such a host would
 // describe memory the fit rule is not reasoning about.
 //
-// Split out from the profiler so the (unified, chip) -> figure decision
-// is testable without building a Profile, per the "put the seam below the
-// behaviour" discipline.
-func unifiedBandwidthFor(unifiedMemory bool, cpuModel string) float64 {
-	if !unifiedMemory {
+// It takes the whole profile because the two vendors are named by
+// different strings and one of them is not the CPU. Apple and AMD are
+// keyed on CPU.Model, which is what #251 settled. NVIDIA cannot be:
+// CPU.Model is EMPTY on every NVIDIA single-pool machine, because they
+// are all aarch64 and aarch64 Linux has no "model name" line in
+// /proc/cpuinfo for defaultCPU to read. So the NVIDIA table is keyed on
+// the device name instead — see nvidia_unified.go for that, and for why
+// the alternatives (compute capability, the PCI pair) do not identify
+// the part.
+//
+// CPU.Model is asked FIRST so the two tables can never race: a machine
+// whose CPU string names a unified part is answered by the figure #251
+// ratified for it, and the device table is consulted only where that
+// found nothing.
+func unifiedBandwidthFor(prof *Profile) float64 {
+	if prof == nil || !prof.UnifiedMemory {
 		return 0
 	}
-	return UnifiedMemoryBandwidthGBs(cpuModel)
+	if bw := UnifiedMemoryBandwidthGBs(prof.CPU.Model); bw > 0 {
+		return bw
+	}
+	if len(prof.GPUs) > 0 {
+		if p, ok := nvidiaUnifiedPartFor(prof.GPUs[0].Model); ok {
+			return p.bandwidthGBs
+		}
+	}
+	return 0
 }
 
 // normalizeChipName lowercases and collapses runs of whitespace so the
