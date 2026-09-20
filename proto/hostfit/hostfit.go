@@ -1102,20 +1102,19 @@ const (
 	ServingWindow1M = 1048576
 )
 
-// ReasonWindowTooSmall is a fit reason code: the model's OWN advertised
-// window cannot reach the serving window being asked about, so no
-// hardware makes it servable. Distinct from ReasonInsufficientVRAM,
-// which says the same model would fit a bigger machine — an operator
-// can act on that one and cannot act on this one.
+// ReasonWindowTooSmall is a fit reason code: the model cannot reach the
+// serving window being asked about, so no hardware makes it servable.
+// Distinct from ReasonInsufficientVRAM, which says the same model would fit
+// a bigger machine — an operator can act on that one and cannot act on this
+// one.
 //
-// Deprecated: nothing produces it since waired-ai/waired-agent#1400. The
-// catalog admits only builds whose own window reaches ServingWindow200k
-// (decision 3 of
-// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md),
-// so the recommendation no longer asks, and the owner had the machinery
-// built around sub-200k models removed (decision 4). A consumer may still
-// meet it from an older agent or control plane. Kept only because the
-// proto module is additive-only.
+// It went unproduced between waired-ai/waired-agent#1400, which made the
+// catalog admit only builds reaching ServingWindow200k, and
+// waired-ai/waired#1456, which gave people a second window to ask for. At
+// ServingWindow1M the question is answerable again and most of the catalog
+// answers no, so this is the reason a surface greys a row out when someone
+// picks the long window (owner ruling 2026-09-20 on waired-ai/waired#1359).
+// ReachesWindow is the predicate.
 const ReasonWindowTooSmall = "window_too_small"
 
 // ReasonWindowExceedsMemory is a RECOMMENDATION reason: the model runs
@@ -1158,6 +1157,41 @@ func DeclarableNativeWindow(m catalog.Manifest) int {
 	default:
 		return 0
 	}
+}
+
+// ReachesWindow reports whether the MODEL could serve window at all — by
+// its own trained length or through the rope scaling its publisher
+// documents. It is the predicate behind ReasonWindowTooSmall, and the one
+// a surface must grey a row out on when a person picks the long window, so
+// that every surface greys the same rows.
+//
+// It says nothing about hardware. A model that reaches the window on paper
+// still needs a computer that holds the KV cache, which is
+// OllamaDeclaresWindow's question.
+func ReachesWindow(m catalog.Manifest, window int) bool {
+	if window <= 0 {
+		return true
+	}
+	return DeclarableNativeWindow(m) >= window || DeclarableExtendedWindow(m) >= window
+}
+
+// DeclarableExtendedWindow is the serving window m could be declared at
+// ONLY IF someone asks for it: the rung the model's published rope scaling
+// reaches (catalog.ExtendedContextLength). ServingWindow1M, or 0 for a
+// model that documents no scaling or whose scaling stops short of it.
+//
+// It never returns ServingWindow200k. The 200k rung is DeclarableNativeWindow's
+// answer, and a caller reading 200k from here would credit the scaling for a
+// window the model already had.
+//
+// Nothing about this is a promise. It says what the MODEL reaches; whether a
+// computer can hold it is OllamaDeclaresWindow's question, and whether anybody
+// asked for it is the agent's.
+func DeclarableExtendedWindow(m catalog.Manifest) int {
+	if catalog.ExtendedContextLength(m) >= ServingWindow1M {
+		return ServingWindow1M
+	}
+	return 0
 }
 
 // ServingWindowKVMB is the KV-cache footprint of window input tokens

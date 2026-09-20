@@ -7,6 +7,12 @@
   ],
   "license": "qwen-community-1.0",
   "context_length": 262144,
+  "rope_scaling": {
+    "type": "yarn",
+    "factor": 4,
+    "original_context_length": 262144,
+    "publisher_max_context_length": 1000000
+  },
   "default_variant": {
     "ollama": "q2-gguf"
   },

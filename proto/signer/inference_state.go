@@ -309,6 +309,42 @@ type InferenceState struct {
 	DesiredVariantID   string `json:"desired_variant_id,omitempty"`
 	DesiredKVCacheType string `json:"desired_kv_cache_type,omitempty"`
 
+	// DesiredContextWindow is the serving window a person chose for this
+	// computer: 200704 or 1048576, the only two an engine serves
+	// (docs/decisions/20260917/0337-engines-serve-only-the-two-tiers.md).
+	// 0 means no instruction, and the device serves the coding window as it
+	// always has — which is also what every device saw before
+	// waired-ai/waired#1456.
+	//
+	// It is an instruction and not a report: ContextWindow, far below,
+	// carries what this device is actually serving, and the two are allowed
+	// to differ while a switch is in flight or where the host cannot hold
+	// the longer window.
+	//
+	// 1048576 is a choice a person has to make, never a default and never
+	// inferred from a capable model. A model reaches it through the rope
+	// scaling its publisher documents (catalog.RopeScaling), and static
+	// scaling is applied to every prompt the engine sees, short ones
+	// included — so a device promoted to the long window without being
+	// asked would be a different model for its owner. The owner decision of
+	// 2026-09-20 (waired-ai/waired#1456) is to serve it when it is chosen,
+	// after warning.
+	//
+	// It carries NO capability of its own yet, and that is deliberate. Every
+	// Desired field above rides the signed map and so must be gated before
+	// anything injects it — an agent that does not know the field drops it
+	// on canonical re-marshal and fails verification of the whole map. The
+	// gate is therefore owed by whichever change first INJECTS this field,
+	// not by the change that publishes the type: until then nothing sends
+	// it, and an absent field cannot be dropped.
+	//
+	// The gate is also not free. The control plane stores the declared set
+	// in a STRING(256) column whose normalizer sorts and then drops from the
+	// tail in silence (waired#1297, waired#1303), and the agent's own margin
+	// test says the list is nearly full. Adding a name has to be weighed
+	// against that column, which is why it is not done speculatively here.
+	DesiredContextWindow int `json:"desired_context_window,omitempty"`
+
 	// DesiredRemoveVariants are the stored builds the user asked this device
 	// to delete, each "<model_id>/<variant_id>" naming an entry of the
 	// device's own StoredVariants (decision 4 of
@@ -578,10 +614,16 @@ type InferenceState struct {
 	// the WHOLE map. Being push-only is also why it carries no capability
 	// constant.
 	//
-	// "" means NO CLAIM — an agent that predates the field, or one whose
-	// stored preference did not come from a person here. A consumer must
-	// keep doing whatever it did before rather than reading it as "nobody
-	// has ever chosen".
+	// It is tied to ActiveModel on purpose: the agent withholds the time
+	// until the chosen model is the one being served, so the time can only
+	// ever license moving the instruction onto the model the person chose
+	// (waired-ai/waired#1454).
+	//
+	// "" means NO CLAIM — an agent that predates the field, one whose
+	// stored preference did not come from a person here, or a choice made
+	// here that is not yet what ActiveModel reports. A consumer must keep
+	// doing whatever it did before rather than reading it as "nobody has
+	// ever chosen".
 	LocalModelChoiceAt string `json:"local_model_choice_at,omitempty"`
 
 	// ResidencyIdleTimeout is how long this device's engine actually keeps a
@@ -676,10 +718,13 @@ type InferenceState struct {
 	// Push-only for the same reasons as ResidencyIdleTimeout above.
 	//
 	// "" means NO ORDERING AVAILABLE and must answer no to any realignment
-	// question — an agent that predates the field, or a host whose residency
-	// was last set before this record existed. Such a host is not corrected
-	// by an agent upgrade; it is corrected the next time someone sets
-	// residency on it.
+	// question — an agent that predates the field, a host whose residency
+	// was last set before this record existed, or a choice made here that
+	// ResidencyIdleTimeout does not yet report (a vLLM host, which reports
+	// "0s" whatever was chosen, waired-agent#943; a restart whose
+	// environment or flag overrides the saved setting; a push read between
+	// the two halves of a change). Such a host is not corrected by an agent
+	// upgrade; it is corrected the next time someone sets residency on it.
 	LocalResidencyChoiceAt string `json:"local_residency_choice_at,omitempty"`
 
 	// ModelMeasurements is what specific models actually decoded on this

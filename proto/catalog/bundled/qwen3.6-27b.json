@@ -8,6 +8,12 @@
   "license": "apache-2.0",
   "manual_only": "Superseded in the 27B band by qwen3.8-27b (#823), which is the next generation of the same family — the swap the catalog makes when one arrives, since it carries one generation per band. It stays listed, resolvable, pullable and servable, so a host that already holds these weights goes on using them and an explicit pin keeps working; it is only no longer what we choose for someone who has not asked.",
   "context_length": 262144,
+  "rope_scaling": {
+    "type": "yarn",
+    "factor": 4,
+    "original_context_length": 262144,
+    "publisher_max_context_length": 1010000
+  },
   "default_variant": {
     "ollama": "mtp-q4-gguf",
     "vllm": "fp8"

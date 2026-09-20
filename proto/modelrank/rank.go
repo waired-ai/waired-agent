@@ -64,6 +64,19 @@ type PickInput struct {
 
 	Engine string
 
+	// Window is the serving window the ranking is for: ServingWindow1M
+	// where a person picked the long window, 0 or ServingWindow200k for the
+	// coding window. The owner's 2026-09-20 ruling on
+	// waired-ai/waired#1359 is that the two windows are ranked separately —
+	// a person chooses an engine, then a window, and the recommendation and
+	// the tiers are then compared WITHIN that window, because most of the
+	// catalog cannot serve the long one at all (hostfit.ReachesWindow) and
+	// the ones that can cost a different amount of memory there.
+	//
+	// The gating is not here yet: every caller passes 0 today, which ranks
+	// the coding window exactly as this package always has.
+	Window int `json:"-"`
+
 	// EngineVersion is the SERVING engine's version, used against
 	// per-variant MinEngineVersion floors. "" = unknown.
 	//
