@@ -41,7 +41,18 @@ import (
 // A new measurement never gets one of these. That is what makes the list
 // frozen rather than merely short.
 var LegacyHostClasses = []string{
-	// The GPU lane's machine. Today: discrete-nvidia-sm120.
+	// The GPU lane's machine — "a g2-standard-4 with one L4", as
+	// installtest-inference.yml says where it names this very class.
+	// An L4 reports compute capability 8.9, so today it would derive
+	// discrete-nvidia-sm89.
+	//
+	// This entry is also the clearest evidence for why the vocabulary
+	// was re-keyed, and it is our own hardware: this repo's Linux fleet
+	// host carries an RTX PRO 4000 Blackwell, ALSO 24 GB and also an
+	// NVIDIA discrete card, which this spelling would call by the same
+	// name. They are not interchangeable — 300 GB/s of GDDR6 against
+	// 672 GB/s of GDDR7, and 8.9 against 12.0 — and seconds measured on
+	// one say nothing about the other (waired-agent#1455).
 	"nvidia-24gb-discrete",
 	// Named as legal by VariantAgentGrade.Host's doc comment since the
 	// field was introduced; no measurement ever used it.

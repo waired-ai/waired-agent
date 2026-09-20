@@ -17,6 +17,17 @@ import (
 // prefill, while one "apple-unified-64gb" would fold together parts
 // whose bandwidth differs more than fourfold.
 //
+// The sharpest example is this project's own two NVIDIA machines, and
+// the old spelling calls them the same thing:
+//
+//	CI GPU lane    NVIDIA L4                      24 GB GDDR6  cc 8.9   300 GB/s
+//	Linux fleet    NVIDIA RTX PRO 4000 Blackwell  24 GB GDDR7  cc 12.0  672 GB/s
+//
+// Both are "nvidia-24gb-discrete". Their memory bandwidth differs by
+// 2.24x, so seconds measured on one say nothing about the other — which
+// is the single thing the name is supposed to convey. Derived, they are
+// discrete-nvidia-sm89 and discrete-nvidia-sm120.
+//
 // THE SHAPE: <topology>-<vendor>-<chip>. Capacity is not in the name.
 // It travels as a number in the record beside the seconds, where a
 // reader can see that two machines differ instead of being told by a

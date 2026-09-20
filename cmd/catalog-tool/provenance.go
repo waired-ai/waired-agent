@@ -96,13 +96,16 @@ func checkHostClass(cmd, v string) error {
 // re-measured, and it would keep the roster alive by use after it was
 // frozen by declaration (waired-agent#1455).
 //
-// The shipped stores are NOT re-spelled to derived keys in the same
-// breath, and deliberately. The reference host's key is known exactly
-// (unified-amd-ryzen-ai-max-395, read off the machine), but the GPU
-// lane's is not: its derived key depends on the compute capability its
-// card reports, which nobody has read from that runner. Re-spelling it
-// would be a guess wearing the clothes of a record. The lane will write
-// its own key the next time it imports.
+// The shipped stores are NOT re-spelled to derived keys, and
+// deliberately. Both keys are in fact known now — the reference host
+// reads unified-amd-ryzen-ai-max-395 off the machine, and the GPU lane
+// is "a g2-standard-4 with one L4" (installtest-inference.yml), an L4
+// reporting compute capability 8.9, so discrete-nvidia-sm89. Knowing
+// them is not a reason to rewrite them: waired-agent#1117 settled that
+// shipped records stay as they were measured, and a bulk re-spelling
+// would edit provenance without taking a measurement. The reader
+// accepts both spellings; the lane writes its own key the next time it
+// imports.
 func checkLegacyContinuesStore(cmd, v string, present []string) error {
 	if !catalog.IsLegacyHostClass(v) {
 		return nil
