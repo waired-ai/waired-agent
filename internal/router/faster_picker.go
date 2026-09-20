@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 )
@@ -103,11 +104,18 @@ func FasterCandidate(in PickInput, activeModelID, activeVariantID string) (Pick,
 	return Pick{}, false
 }
 
+// shippedTurnSpeeds decodes the embedded store once per process. The
+// store is asked for every candidate of every pick, and decoding the
+// whole JSON each time cost a dozen decodes per recommendation
+// (waired-ai/waired-agent#1400 review). It is embedded data, so the
+// answer cannot change while the process runs.
+var shippedTurnSpeeds = sync.OnceValues(catalog.TurnSpeeds)
+
 // shippedTurnSpeedFor reads the embedded store. A store that does not
 // decode answers nothing, which disarms the step-down rather than
 // inventing an ordering.
 func shippedTurnSpeedFor(m catalog.Manifest, v catalog.Variant) (float64, bool) {
-	s, err := catalog.TurnSpeeds()
+	s, err := shippedTurnSpeeds()
 	if err != nil {
 		return 0, false
 	}
