@@ -3,6 +3,7 @@ status: accepted
 superseded_by:
   - docs/decisions/20260916/0410-the-window-floor-is-the-same-on-every-client.md
   - docs/decisions/20260916/2350-every-waired-row-is-a-200k-or-1m-session.md
+  - docs/decisions/20260920/2000-the-rows-are-written-again-once-the-watch-is-armed.md
 ---
 
 # `/model` の Waired 行は `modelPicker` で出し、id から `claude-` を外す (20260906 03:30)
@@ -14,6 +15,14 @@ Accepted。オーナー裁定（2026-09-06、waired-ai/waired-agent#1185 / #1177
 裁定 5 の実装で、書き先については
 `docs/decisions/20260820/0400-picker-cache-refreshes-on-session-start.md` を
 部分的に置き換える。
+
+部分的に superseded（2026-09-20、waired-ai/waired-agent#1454）: 下の
+`## Consequence — 行が反映されるのは次のセッションから` の節は
+`docs/decisions/20260920/2000-the-rows-are-written-again-once-the-watch-is-armed.md`
+が置き換える。**遅延書込には依存しない**という判断を改め、行が変わった起動では
+監視が張られてからもう一度書くことにした。ここに書いた実測（監視は 3〜6 s で
+張られる、hook の書き込みはそれより前なので届かない）はそのまま有効で、
+2.1.278 でも同じ。裁定 1〜7 も有効。
 
 ## Context
 

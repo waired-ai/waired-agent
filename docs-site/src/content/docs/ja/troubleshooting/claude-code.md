@@ -3,7 +3,7 @@ title: Claude Codeの問題
 description: Claude Codeがクラウドのまま、組織の管理下にある、Wairedは答えられないと言う、/modelにWairedの行がない、長いセッションが要約される、ステータス行が出ない、といった症状の対処です。
 meta:
   audience: セッションが想定どおりに動かないClaude Codeのユーザー
-  needs: そのパソコンのターミナル
+  needs: そのコンピュータのターミナル
   time: 各対処は1〜2分
 ---
 
@@ -11,7 +11,7 @@ meta:
 
 ## <a id="claude-code-is-still-using-the-cloud"></a>Claude Codeがクラウドを使ったまま
 
-まずフッターを読みます。`→ waired: Anthropic`は、このセッションがAnthropicのモデルにあることを意味します。まだ操作していないセッションはそうなります。Claude Codeの既定がAnthropicのモデルで、Wairedはそれを変えないからです。セットアップ後の通常の状態であり、不具合ではありません。`/model`と入力して［Waired］の行を選択します。次のターンは自分のパソコンで実行され、フッターは`⚡ waired: on Waired`に変わります。
+まずフッターを読みます。`→ waired: Anthropic`は、このセッションがAnthropicのモデルにあることを意味します。まだ操作していないセッションはそうなります。Claude Codeの既定がAnthropicのモデルで、Wairedはそれを変えないからです。セットアップ後の通常の状態であり、不具合ではありません。`/model`と入力して［Waired］の行を選択します。次のターンは自分のコンピュータで実行され、フッターは`⚡ waired: on Waired`に変わります。
 
 `/model`にWairedの行がない場合は、[/modelにWairedの行がない](#the-waired-rows-are-missing-from-model)を参照してください。`waired claude status`が連携は有効でないと言う場合は、有効にしてClaude Codeのセッションを再起動します。
 
@@ -19,7 +19,7 @@ meta:
 sudo waired claude enable     # Windowsでは管理者のターミナルで
 ```
 
-その結果、このパソコンのClaude Codeは組織が管理していると表示される場合は、[次の項目](#waired-says-claude-code-is-managed-by-your-organization)を参照してください。
+その結果、このコンピュータのClaude Codeは組織が管理していると表示される場合は、[次の項目](#waired-says-claude-code-is-managed-by-your-organization)を参照してください。
 
 `waired claude status`は、新しいセッションがどのモデルで始まるか（`default model:`）と、直前のターンがどうなったかを表示します。
 
@@ -46,20 +46,20 @@ coding tool. `waired link` sets those up per user and touches nothing
 machine-wide.
 ```
 
-これは多くの場合、職場のパソコンです。Claude Codeはパソコン全体の設定ファイルを読み、パソコンの管理者がそこにClaude Codeの組織の設定を置いていると、Wairedはそれを読んで止まります。`Found in`の下の行が見つかったもので、どれか1つあれば十分です。強制ログイン（`forceLoginOrgUUID`、`forceLoginMethod`、`forceLoginGatewayUrl`）、許可モデルの一覧（`availableModels`）、`/model`の行構成（`modelPicker`）、またはWaired以外を指す`ANTHROPIC_BASE_URL`です。
+これは多くの場合、職場のコンピュータです。Claude Codeはコンピュータ全体の設定ファイルを読み、コンピュータの管理者がそこにClaude Codeの組織の設定を置いていると、Wairedはそれを読んで止まります。`Found in`の下の行が見つかったもので、どれか1つあれば十分です。強制ログイン（`forceLoginOrgUUID`、`forceLoginMethod`、`forceLoginGatewayUrl`）、許可モデルの一覧（`availableModels`）、`/model`の行構成（`modelPicker`）、またはWaired以外を指す`ANTHROPIC_BASE_URL`です。
 
-止まる理由は、Claude CodeをWaired経由にするには同じファイルに`ANTHROPIC_BASE_URL`を書き込む必要があり、それによって組織がパソコン上のすべてのセッションに配っている設定が無効になるからです。それを受け入れるかどうかはパソコンの管理者が決めることなので、Wairedは決めず、それでも書き込むオプションはありません。
+止まる理由は、Claude CodeをWaired経由にするには同じファイルに`ANTHROPIC_BASE_URL`を書き込む必要があり、それによって組織がコンピュータ上のすべてのセッションに配っている設定が無効になるからです。それを受け入れるかどうかはコンピュータの管理者が決めることなので、Wairedは決めず、それでも書き込むオプションはありません。
 
 できることは次のとおりです。
 
-- パソコンの管理者に相談します。メッセージにファイルと該当する設定が示されています。
-- 同じパソコンで、ほかのコーディングツールからWairedを使います。Claude Codeのパソコン全体のリダイレクト以外はすべて動きます。[OpenCodeから使う](/ja/guides/opencode/)と[OpenClawから使う](/ja/guides/openclaw/)を参照してください。
+- コンピュータの管理者に相談します。メッセージにファイルと該当する設定が示されています。
+- 同じコンピュータで、ほかのコーディングツールからWairedを使います。Claude Codeのコンピュータ全体のリダイレクト以外はすべて動きます。[OpenCodeから使う](/ja/guides/opencode/)と[OpenClawから使う](/ja/guides/openclaw/)を参照してください。
 
 `waired init`のルーティングの手順も同じ場所で止まり、同じメッセージを表示します。残りのセットアップは完了し、Claude CodeはAnthropic APIと直接通信し続けます。
 
 ## <a id="claude-code-says-waired-cannot-answer"></a>Claude CodeがWairedは答えられないと言う
 
-自分のパソコンのどれも処理できないWairedの行のターンは、Claude Codeの中で`API Error: 400`と、何が答えられなかったかを示すメッセージですぐに失敗します。Anthropic APIには送られません。メイン会話についてのメッセージはすべて同じ文で終わります。``Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.``これが2つの選択肢です。
+自分のコンピュータのどれも処理できないWairedの行のターンは、Claude Codeの中で`API Error: 400`と、何が答えられなかったかを示すメッセージですぐに失敗します。Anthropic APIには送られません。メイン会話についてのメッセージはすべて同じ文で終わります。``Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.``これが2つの選択肢です。
 
 サブエージェントのターンについてのメッセージは、別の文で終わります。``This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.`` `/model`が選ぶのはメイン会話の行で、サブエージェントの実行先は決めません。決めるのは`waired claude subagents`なので、メッセージはそちらを示します。[サブエージェントの実行先を選ぶ](/ja/guides/claude-code/subagents/)を参照してください。
 
@@ -67,27 +67,27 @@ machine-wide.
 
 | メッセージの冒頭 | 意味 | 対処 |
 |---|---|---|
-| `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | ここに推論エンジンがなく、自分のほかのパソコンにも届いていません。 | このパソコンで`waired doctor`を実行します。ここで推論エンジンを始めるか、モデルを動かすパソコンの電源を入れます。 |
-| `The computer this turn is pinned to, <name>, is not answering.` | `waired worker`で固定したパソコンが、オフか、スリープ中か、共有していません。 | [パソコンを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を参照してください。 |
-| `The peer <name> stopped answering after <time>.`または`The peer <name> stopped working on this request after <time>.` | 前者は、そのパソコンが答えている途中で応答が途絶えました。後者は、停止を報告したか、推論エンジンは動いているのに答えなくなりました。 | `waired peers list`で確認し、そのパソコンで`waired doctor`を実行します。 |
-| `The peer <name> was still busy with other work after <time> and had not started this turn.` | そのパソコンが、自分のターン以外の処理（多くの場合はそのパソコンの所有者のターン）を続けていると報告したまま、待ち時間が終わりました。不具合ではありません。 | ターンをもう一度送るか、`/model`で別のパソコンを選びます。 |
-| ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定した最小のモデルサイズが、このパソコンを含むすべてのパソコンを除外しました。 | 最小値を下げるか解除します。[最小のモデルサイズを決める](/ja/guides/routing/#set-a-smallest-model)を参照してください。 |
+| `Waired is not set up to answer on this computer, so this turn has nowhere to run.` | ここに推論エンジンがなく、自分のほかのコンピュータにも届いていません。 | このコンピュータで`waired doctor`を実行します。ここで推論エンジンを始めるか、モデルを動かすコンピュータの電源を入れます。 |
+| `The computer this turn is pinned to, <name>, is not answering.` | `waired worker`で固定したコンピュータが、オフか、スリープ中か、共有していません。 | [コンピュータを固定したあとリクエストが失敗する](/ja/troubleshooting/other-computers/#requests-stopped-working-after-i-pinned-a-computer)を参照してください。 |
+| `The peer <name> stopped answering after <time>.`または`The peer <name> stopped working on this request after <time>.` | 前者は、そのコンピュータが答えている途中で応答が途絶えました。後者は、停止を報告したか、推論エンジンは動いているのに答えなくなりました。 | `waired peers list`で確認し、そのコンピュータで`waired doctor`を実行します。 |
+| `The peer <name> was still busy with other work after <time> and had not started this turn.` | そのコンピュータが、自分のターン以外の処理（多くの場合はそのコンピュータの所有者のターン）を続けていると報告したまま、待ち時間が終わりました。不具合ではありません。 | ターンをもう一度送るか、`/model`で別のコンピュータを選びます。 |
+| ``No computer on Waired runs a medium model or larger. Change the floor with `waired worker set --min-model-size`.`` | 自分で設定した最小のモデルサイズが、このコンピュータを含むすべてのコンピュータを除外しました。 | 最小値を下げるか解除します。[最小のモデルサイズを決める](/ja/guides/routing/#set-a-smallest-model)を参照してください。 |
 | `Waired public share declined this turn:`のあとに自分の設定 | 自分のパブリック共有の設定が断りました。 | メッセージにコマンドが示されます。`waired public status`でこれらの設定を一度に確認でき、`waired public use`で変更します。 |
-| `Waired public share declined this turn:`のあとに`no public machine is reachable right now`または`Public Share is set to use another machine only when it beats this one, and none does` | いま使える公開のマシンを誰も貸していないか、自分のパソコンより良いものがありません。どちらも不具合ではありません。 | 待つか、`/model`で別の行を選びます。後者が当てはまらないようにするには、`waired public use --explicit`を実行します。 |
+| `Waired public share declined this turn:`のあとに`no public machine is reachable right now`または`Public Share is set to use another machine only when it beats this one, and none does` | いま使える公開のマシンを誰も貸していないか、自分のコンピュータより良いものがありません。どちらも不具合ではありません。 | 待つか、`/model`で別の行を選びます。後者が当てはまらないようにするには、`waired public use --explicit`を実行します。 |
 
-多くの場合、フッターが先にそれを伝えます。赤い`⚠ waired: Waired cannot answer (…)`は、自分のパソコンのどれも次のターンを受けられないことをWairedがすでに把握していることを意味し、括弧内には表と同じ言葉で理由が入ります。最小のモデルサイズの設定なら`no computer runs a medium model or larger`、固定なら`the pinned computer is not answering`、このパソコンのローカル推論がオフでほかのパソコンにも届かないなら`local inference is off, and no other computer can answer`です。`⚠ waired: Waired cannot answer (local disabled, no peer)`は、バックグラウンドサービスが古い版のときの形です。括弧内はこのパソコンの推論エンジンの状態（`local disabled`、`local no_engine`など）と、ほかのパソコンに届かないときの`no peer`です。
+多くの場合、フッターが先にそれを伝えます。赤い`⚠ waired: Waired cannot answer (…)`は、自分のコンピュータのどれも次のターンを受けられないことをWairedがすでに把握していることを意味し、括弧内には表と同じ言葉で理由が入ります。最小のモデルサイズの設定なら`no computer runs a medium model or larger`、固定なら`the pinned computer is not answering`、このコンピュータのローカル推論がオフでほかのコンピュータにも届かないなら`local inference is off, and no other computer can answer`です。`⚠ waired: Waired cannot answer (local disabled, no peer)`は、バックグラウンドサービスが古い版のときの形です。括弧内はこのコンピュータの推論エンジンの状態（`local disabled`、`local no_engine`など）と、ほかのコンピュータに届かないときの`no peer`です。
 
 **フッターは緑なのに、すべてのターンが失敗する。**フッターとターンは同じルールで決まるので、緑の`⚡ waired: on Waired`は次のターンに行き先があることを意味します。それでも上のメッセージのどれかですべてのターンが失敗する場合は、次の順で2つを確認します。
 
-1. `waired worker get`を実行します。`smallest model:`の行が、このパソコンを含めてパソコンを除外する設定です。古い版のWairedはフッターのためにこの設定を読まなかったので、すべてのパソコンを除外する最小値のもとでもフッターは緑のまま、各ターンは`No computer on Waired runs …`で失敗していました。`waired worker set --min-model-size`で下げるか解除します。
-2. `waired infer --explain "say hi"`を実行します。出力には、このパソコンを含むすべてのパソコンと、除外されたパソコンとその理由が表示されます。
+1. `waired worker get`を実行します。`smallest model:`の行が、このコンピュータを含めてコンピュータを除外する設定です。古い版のWairedはフッターのためにこの設定を読まなかったので、すべてのコンピュータを除外する最小値のもとでもフッターは緑のまま、各ターンは`No computer on Waired runs …`で失敗していました。`waired worker set --min-model-size`で下げるか解除します。
+2. `waired infer --explain "say hi"`を実行します。出力には、このコンピュータを含むすべてのコンピュータと、除外されたコンピュータとその理由が表示されます。
 
 ## <a id="the-waired-rows-are-missing-from-model"></a>/modelにWairedの行がない
 
 `/model`には、Anthropicのモデルの下に［Waired］、［Waired local］、［Waired peer］が、パブリック共有がオンなら［Waired public share］も表示されるはずです。隠れる原因は4つあり、確認する順に並べます。
 
-1. **Claude Codeを再起動していない。** 行はClaude Codeの起動時に読まれます。動作中のセッションで`/model`を開き直しても読み直されません。Claude Codeを終了して起動し直します。
-2. **このパソコンでルーティングがオンになっていない。** `waired claude status`で確認します。行が表示されるのは、Claude CodeがWairedに向いてからです。
+1. **行がまだ追いついていない。** WairedはClaude Codeの起動時と、その数秒後にもう一度、行を書き直します。数秒おいてから`/model`を開き直してください。それでも表示されないときは、Claude Codeを終了して起動し直します。行は起動時に読まれるので、起動し直せば必ず表示されます。
+2. **このコンピュータでルーティングがオンになっていない。** `waired claude status`で確認します。行が表示されるのは、Claude CodeがWairedに向いてからです。
 
    ```sh
    sudo waired claude enable    # Windowsでは管理者のターミナルで
