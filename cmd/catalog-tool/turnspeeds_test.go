@@ -282,3 +282,65 @@ func TestTurnSpeedsImportTakesOnlyWhatEachSnapshotsRunMeasured(t *testing.T) {
 		t.Errorf("4b recorded from entries no run in these snapshots measured: %+v", rec)
 	}
 }
+
+// PRODUCT CONTRACT (waired-ai/waired-agent#1400 review): importing the
+// same snapshots twice writes the same record. The samples come out of a
+// map, so a field taken from "the first" of them is a field Go's range
+// order chooses; the depth each run reached is the one field that legally
+// differs between samples, and the record keeps the shallowest.
+func TestTurnSpeedsImportIsTheSameWhicheverOrderTheSamplesAreRead(t *testing.T) {
+	t0 := time.Date(2026, 9, 18, 13, 0, 0, 0, time.UTC)
+	depths := []int{33313, 32768, 34000}
+	paths := make([]string, 0, len(depths))
+	for i, d := range depths {
+		paths = append(paths, snapshot(t, "qwen3.5-4b", "q4-gguf", t0.Add(time.Duration(i)*time.Minute), 66.0+float64(i),
+			func(m *catalog.VariantMeasurement) { m.DepthTokens = d }))
+	}
+
+	var first string
+	for run := 0; run < 5; run++ {
+		store := turnSpeedStore(t, "amd-unified-128gb")
+		if err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb",
+			"--backend", "vulkan", "--retrieved", "2026-09-18")); err != nil {
+			t.Fatalf("import: %v", err)
+		}
+		b, err := os.ReadFile(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run == 0 {
+			first = string(b)
+			continue
+		}
+		if string(b) != first {
+			t.Fatalf("import %d wrote a different store from the same snapshots:\n%s", run, string(b))
+		}
+	}
+	var set catalog.TurnSpeedSet
+	if err := json.Unmarshal([]byte(first), &set); err != nil {
+		t.Fatal(err)
+	}
+	rec := set.Models["qwen3.5-4b"].Variants["q4-gguf"]
+	if rec.DepthTokens != 32768 {
+		t.Errorf("depth_tokens = %d, want the shallowest sample's 32768: the record must not claim a depth some sample never reached", rec.DepthTokens)
+	}
+}
+
+// num_parallel changes how much prefill one request gets, so samples that
+// disagree on it are not one figure — the same rule the engine flags
+// already hold, for the field the flags do not name.
+func TestTurnSpeedsImportRefusesSamplesFromDifferentSlotCounts(t *testing.T) {
+	store := turnSpeedStore(t, "amd-unified-128gb")
+	t0 := time.Date(2026, 9, 18, 13, 0, 0, 0, time.UTC)
+	paths := []string{
+		snapshot(t, "qwen3.5-4b", "q4-gguf", t0, 66.7, nil),
+		snapshot(t, "qwen3.5-4b", "q4-gguf", t0.Add(time.Minute), 67.0, nil),
+		snapshot(t, "qwen3.5-4b", "q4-gguf", t0.Add(2*time.Minute), 66.9,
+			func(m *catalog.VariantMeasurement) { m.NumParallel = 2 }),
+	}
+	err := runTurnSpeeds(append(flagsFor(paths), "--store", store, "--host", "amd-unified-128gb",
+		"--backend", "vulkan", "--retrieved", "2026-09-18"))
+	if err == nil || !strings.Contains(err.Error(), "num_parallel") {
+		t.Fatalf("import error = %v, want a refusal naming num_parallel", err)
+	}
+}

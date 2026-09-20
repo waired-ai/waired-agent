@@ -181,10 +181,15 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 			short = append(short, fmt.Sprintf("%s/%s (%d)", k.model, k.variant, len(byTime)))
 			continue
 		}
+		// Ordered by when they were measured, because the samples come
+		// out of a map: ms[0] decides fields below, and a range order Go
+		// randomises would write a different record from the same
+		// snapshots (waired-ai/waired-agent#1400 review).
 		ms := make([]catalog.VariantMeasurement, 0, len(byTime))
 		for _, m := range byTime {
 			ms = append(ms, m)
 		}
+		sort.Slice(ms, func(i, j int) bool { return ms[i].MeasuredAt.Before(ms[j].MeasuredAt) })
 		engineFlags := ""
 		byTimeFlags := flags[k]
 		if len(byTimeFlags) != len(byTime) {
@@ -204,6 +209,18 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 			if m.EngineVersion != engineVersion || m.AppliedWindow != ms[0].AppliedWindow || m.KVCacheType != ms[0].KVCacheType {
 				return fmt.Errorf("turnspeeds: %s/%s: samples disagree on engine version, window or KV cache type", k.model, k.variant)
 			}
+			if m.NumParallel != ms[0].NumParallel {
+				return fmt.Errorf("turnspeeds: %s/%s: samples ran with different num_parallel (%d vs %d); the slots the engine serves at once move prefill, so they are not one figure",
+					k.model, k.variant, ms[0].NumParallel, m.NumParallel)
+			}
+		}
+		// The depth each sample reached is read back from the engine and
+		// need not be identical across runs; the filter above only asks
+		// for at least SpeedMeasurementDepthTokens. Record the shallowest,
+		// which is the depth every sample in the record reached.
+		depth := ms[0].DepthTokens
+		for _, m := range ms[1:] {
+			depth = min(depth, m.DepthTokens)
 		}
 		turn := median(func(m catalog.VariantMeasurement) float64 { return m.TurnSeconds }, ms)
 		lo, hi := math.Inf(1), math.Inf(-1)
@@ -227,7 +244,7 @@ func importTurnSpeeds(paths []string, o turnSpeedImportOpts) error {
 			DecodeTokps:   round2(median(func(m catalog.VariantMeasurement) float64 { return m.MeasuredTokps }, ms)),
 			SpreadPct:     round2((hi - lo) / turn * 100),
 			Samples:       len(ms),
-			DepthTokens:   ms[0].DepthTokens,
+			DepthTokens:   depth,
 			AppliedWindow: ms[0].AppliedWindow,
 			KVCacheType:   ms[0].KVCacheType,
 			NumParallel:   ms[0].NumParallel,
