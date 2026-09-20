@@ -78,8 +78,19 @@ type Header struct {
 	Scalars map[string]any
 	// Arrays holds numeric metadata arrays of up to maxNumericArray
 	// elements, as int64.
-	Arrays  map[string][]int64
-	Tensors []Tensor
+	Arrays map[string][]int64
+	// ScalarValueAt is the byte offset of each scalar's VALUE within the
+	// file, and the GGUF type code stored there. It exists so a value can
+	// be rewritten in place without re-serialising the header — see
+	// SetArchUint32.
+	ScalarValueAt map[string]ValueLocation
+	Tensors       []Tensor
+}
+
+// ValueLocation is where a scalar metadata value sits in the file.
+type ValueLocation struct {
+	Offset int64
+	Type   uint32
 }
 
 // Uint returns a scalar integer metadata value and whether it was present.
@@ -146,7 +157,11 @@ func Read(r io.Reader) (Header, error) {
 	if string(magic[:]) != "GGUF" {
 		return Header{}, ErrNotGGUF
 	}
-	h := Header{Scalars: map[string]any{}, Arrays: map[string][]int64{}}
+	// The magic is read straight from the reader rather than through
+	// d.read, so start the offset counter past it — every recorded value
+	// position is absolute within the file (see Header.ScalarValueAt).
+	d.off = int64(len(magic))
+	h := Header{Scalars: map[string]any{}, Arrays: map[string][]int64{}, ScalarValueAt: map[string]ValueLocation{}}
 	h.Version = d.u32()
 	if h.Version < 2 {
 		return Header{}, fmt.Errorf("gguf: version %d is not supported", h.Version)
@@ -174,11 +189,13 @@ func Read(r io.Reader) (Header, error) {
 			}
 			continue
 		}
+		at := d.off
 		v := d.scalar(vt)
 		if d.err != nil {
 			return Header{}, fmt.Errorf("gguf: key %s: %w", key, d.err)
 		}
 		h.Scalars[key] = v
+		h.ScalarValueAt[key] = ValueLocation{Offset: at, Type: vt}
 	}
 	h.Tensors = make([]Tensor, 0, nTensors)
 	for i := uint64(0); i < nTensors; i++ {
@@ -203,6 +220,7 @@ func Read(r io.Reader) (Header, error) {
 
 type decoder struct {
 	r   *bufio.Reader
+	off int64 // bytes consumed, so a value's position is known
 	err error
 	buf [8]byte
 }
@@ -214,6 +232,7 @@ func (d *decoder) read(n int) []byte {
 	if _, err := io.ReadFull(d.r, d.buf[:n]); err != nil {
 		d.err = err
 	}
+	d.off += int64(n)
 	return d.buf[:n]
 }
 
@@ -233,6 +252,7 @@ func (d *decoder) str() string {
 	if _, err := io.ReadFull(d.r, b); err != nil {
 		d.err = err
 	}
+	d.off += int64(n)
 	return string(b)
 }
 
@@ -242,7 +262,9 @@ func (d *decoder) skip(n uint64) {
 	}
 	if _, err := d.r.Discard(int(n)); err != nil {
 		d.err = err
+		return
 	}
+	d.off += int64(n)
 }
 
 func (d *decoder) scalar(vt uint32) any {
