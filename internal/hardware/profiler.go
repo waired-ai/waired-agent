@@ -377,6 +377,7 @@ type Profiler struct {
 	gpuFn           func(context.Context) ([]GPU, Accelerators, error)
 	umaFn           func(context.Context, *Profile)
 	integratedFn    integratedFrom
+	persistedFn     func(pciID string) (integrated, ok bool)
 
 	ramAtInstallGB         int
 	ramAtInstallMeasuredAt string
@@ -519,6 +520,24 @@ func WithIntegratedDetector(fn integratedFrom) Option {
 	return func(p *Profiler) { p.integratedFn = fn }
 }
 
+// WithPersistedIntegration injects a reading taken earlier, under
+// privileges this process does not have, keyed by the accelerator's PCI
+// vendor:device pair (waired-agent#459).
+//
+// The daemon runs as a service user that cannot open /dev/dri/renderD*,
+// so on Linux the live reading is almost always "unknown". `sudo waired
+// init` can open it, takes the reading once and persists it; this is how
+// it gets back. The pair is the key so that swapping the card leaves the
+// old entry matching nothing, rather than describing hardware that is
+// gone.
+//
+// A live reading still WINS where there is one: it is current, and the
+// merge rule already says a source that knows overrides. The persisted
+// answer is a floor, not a ceiling.
+func WithPersistedIntegration(fn func(pciID string) (integrated, ok bool)) Option {
+	return func(p *Profiler) { p.persistedFn = fn }
+}
+
 // NewProfiler returns a Profiler that caches results for 30s by default
 // (per spec §6) and uses real OS detection. cachePath is the directory
 // whose free-space we report (typically the model cache root).
@@ -604,26 +623,37 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 		prof.Engines.VLLM = EngineInfo{Installed: true, Version: ver}
 	}
 
-	// The per-device "is this one pool?" reading runs before the UMA
-	// hook, so the hook could consult it — and so that the fact is
-	// recorded even on the hosts where the hook declines to act on it,
-	// which is most of them (waired-agent#459).
-	if p.integratedFn != nil {
-		for i := range prof.GPUs {
-			got := integration{
-				integrated: prof.GPUs[i].Integrated,
-				known:      prof.GPUs[i].IntegratedKnown,
-			}.merge(p.integratedFn(&prof, i))
-			prof.GPUs[i].Integrated, prof.GPUs[i].IntegratedKnown = got.integrated, got.known
-		}
-	}
-	// The PCI pair, where the detector did not already have it in hand
-	// (Windows reads MatchingDeviceId for its vendor filter and fills it
-	// there; Linux needs a sysfs pass; Apple Silicon has no PCI bus).
+	// The PCI pair first, where the detector did not already have it in
+	// hand (Windows reads MatchingDeviceId for its vendor filter and
+	// fills it there; Linux needs a sysfs pass; Apple Silicon has no PCI
+	// bus). It comes first because the persisted reading below is keyed
+	// by it.
 	for i := range prof.GPUs {
 		if prof.GPUs[i].PCIID == "" {
 			prof.GPUs[i].PCIID = pciIDFromOS(&prof, i)
 		}
+	}
+	// The per-device "is this one pool?" reading runs before the UMA
+	// hook, so the hook could consult it — and so that the fact is
+	// recorded even on the hosts where the hook declines to act on it,
+	// which is most of them (waired-agent#459).
+	//
+	// Persisted first, live second, so a live reading overrides an old
+	// one rather than the other way round.
+	for i := range prof.GPUs {
+		got := integration{
+			integrated: prof.GPUs[i].Integrated,
+			known:      prof.GPUs[i].IntegratedKnown,
+		}
+		if p.persistedFn != nil {
+			if yes, ok := p.persistedFn(prof.GPUs[i].PCIID); ok {
+				got = got.merge(integratedKnown(yes))
+			}
+		}
+		if p.integratedFn != nil {
+			got = got.merge(p.integratedFn(&prof, i))
+		}
+		prof.GPUs[i].Integrated, prof.GPUs[i].IntegratedKnown = got.integrated, got.known
 	}
 
 	// UMA detection runs after so it can inspect GPUs / RAM / CPU.Model
