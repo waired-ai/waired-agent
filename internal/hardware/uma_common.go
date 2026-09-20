@@ -143,6 +143,25 @@ func strixHaloUMA(goos string, amdVRAMMB, ramTotalGB, ramAvailableAtInstallGB in
 	return minNonZero(heuristicMB, strixHaloUMACapMB), 0
 }
 
+// applyUnifiedBudget is the body of defaultUMA on every platform whose
+// budget is arithmetic rather than a sysctl — Linux and Windows today.
+//
+// It is untagged and takes goos for the reason unifiedBudgetFor does,
+// and for one more: a test that wants to exercise the REAL rule has to
+// be able to run it on whatever host the test is running on. macOS
+// answers this question from a sysctl and short-circuits on arm64
+// before any of this is reached, so a test that called the host's own
+// defaultUMA would be testing macOS on a Mac and this rule everywhere
+// else — passing in both places while only ever checking one of them.
+func applyUnifiedBudget(goos string, p *Profile) {
+	usable, carveOut, ok := unifiedBudgetFor(goos, p)
+	if !ok {
+		return
+	}
+	p.UnifiedMemory = true
+	p.UsableVRAMMB, p.CarveOutVRAMMB = usable, carveOut
+}
+
 // poolMinusOSReserveMB is the budget on a host whose GPU-addressable
 // memory IS system RAM: everything the operating system reports, less
 // what the operating system itself keeps.

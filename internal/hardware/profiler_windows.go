@@ -115,10 +115,5 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 // the budget nor an addend here (waired-agent#863, decision
 // 20260820/0005). See that function.
 func defaultUMA(_ context.Context, p *Profile) {
-	usable, carveOut, ok := unifiedBudgetFor(runtime.GOOS, p)
-	if !ok {
-		return
-	}
-	p.UnifiedMemory = true
-	p.UsableVRAMMB, p.CarveOutVRAMMB = usable, carveOut
+	applyUnifiedBudget(runtime.GOOS, p)
 }

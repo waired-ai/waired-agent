@@ -61,10 +61,5 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 // rules and for why the platform difference is an argument rather than a
 // build tag (waired-agent#459).
 func defaultUMA(_ context.Context, p *Profile) {
-	usable, carveOut, ok := unifiedBudgetFor(runtime.GOOS, p)
-	if !ok {
-		return
-	}
-	p.UnifiedMemory = true
-	p.UsableVRAMMB, p.CarveOutVRAMMB = usable, carveOut
+	applyUnifiedBudget(runtime.GOOS, p)
 }

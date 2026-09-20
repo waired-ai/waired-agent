@@ -149,22 +149,46 @@ func TestIntegratedFromVendor_OutOfRange(t *testing.T) {
 	}
 }
 
-// TestProfile_DGXSparkIsClassifiedEndToEnd drives the whole pipeline —
-// PCI pass, integration merge, UMA hook, bandwidth — with the real
-// defaultUMA rather than a stub, because what is being asserted is that
-// the hook now CONSULTS the detected fact. A stubbed hook would prove
-// nothing about that.
-func TestProfile_DGXSparkIsClassifiedEndToEnd(t *testing.T) {
+// sparkProfiler builds a profiler that sees a DGX Spark, with the UMA
+// hook pinned to the REAL rule rather than to the host's own.
+//
+// WHY THE HOOK IS INJECTED, AND WHY IT IS NOT A STUB. What has to be
+// asserted is that the budget rule consults the detected fact, so
+// replacing that rule with a fake would test nothing. But defaultUMA is
+// build-tagged, and the macOS one answers from a sysctl and returns on
+// arm64 before this rule is reached — so on a Mac the assertions below
+// would be measuring Apple Silicon's 75 %-of-RAM fallback while passing
+// or failing for reasons that have nothing to do with the subject. (It
+// failed exactly that way in CI first: 122 GB * 3/4 = 93696 MB, under
+// the range this test expects.) applyUnifiedBudget is the real,
+// untagged body both non-darwin hooks run, so pinning goos here runs
+// the production rule identically on every host.
+func sparkProfiler(goos string) *Profiler {
 	spark := dgxSparkProfile()
-	p := NewProfiler("",
-		WithOSArch(func() (string, string) { return "linux", "arm64" }),
+	return NewProfiler("",
+		WithOSArch(func() (string, string) { return goos, "arm64" }),
 		WithCPU(func(context.Context) CPUInfo { return spark.CPU }),
 		WithRAM(func(context.Context) (int, int, error) { return spark.RAMTotalGB, 100, nil }),
 		WithGPU(func(context.Context) ([]GPU, Accelerators, error) {
 			return spark.GPUs, spark.Accelerators, nil
 		}),
+		WithUMA(func(_ context.Context, p *Profile) { applyUnifiedBudget(goos, p) }),
+		// The per-OS reading is silenced so the vendor axis is the ONLY
+		// source of the classification. Without this the test would pass
+		// on a darwin runner whatever the vendor axis did, because
+		// integratedFromOS answers "integrated" there off GOARCH alone,
+		// for any device — a pass that would survive deleting the
+		// subject.
+		WithIntegratedDetector(func(*Profile, int) integration { return integrationUnknown() }),
 	)
-	got := p.Profile(context.Background())
+}
+
+// TestProfile_DGXSparkIsClassifiedEndToEnd drives the whole pipeline —
+// PCI pass, integration merge, UMA hook, bandwidth — through the real
+// budget rule, asserting that the hook now CONSULTS the detected fact.
+func TestProfile_DGXSparkIsClassifiedEndToEnd(t *testing.T) {
+	spark := dgxSparkProfile()
+	got := sparkProfiler("linux").Profile(context.Background())
 
 	if !got.GPUs[0].IntegratedKnown || !got.GPUs[0].Integrated {
 		t.Fatalf("GPU integration = {%v,%v}, want a known single-pool reading",
@@ -200,15 +224,7 @@ func TestProfile_DGXSparkIsClassifiedEndToEnd(t *testing.T) {
 // constants behind hostfit move.
 func TestDGXSparkThroughHostfit(t *testing.T) {
 	spark := dgxSparkProfile()
-	p := NewProfiler("",
-		WithOSArch(func() (string, string) { return "linux", "arm64" }),
-		WithCPU(func(context.Context) CPUInfo { return spark.CPU }),
-		WithRAM(func(context.Context) (int, int, error) { return spark.RAMTotalGB, 100, nil }),
-		WithGPU(func(context.Context) ([]GPU, Accelerators, error) {
-			return spark.GPUs, spark.Accelerators, nil
-		}),
-	)
-	h := p.Profile(context.Background()).HostFit()
+	h := sparkProfiler("linux").Profile(context.Background()).HostFit()
 
 	// 1. The class itself. ClassDiscrete's doc says what does not fit
 	//    "spills back over PCIe and executes on the CPU"; there is no
