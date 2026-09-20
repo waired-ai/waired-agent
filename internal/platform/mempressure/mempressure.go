@@ -260,6 +260,11 @@ func levelFrom(goos string, f Facts) (Level, error) {
 	return reported, nil
 }
 
+// LevelOf is levelFrom for callers outside this package: judge a set of
+// facts that were sampled earlier, without taking a new sample. The load
+// guard needs it because it logs the facts it acted on.
+func LevelOf(goos string, f Facts) (Level, error) { return levelFrom(goos, f) }
+
 // osReportedLevel is what the operating system says on its own terms,
 // before the shortage-and-surge rule is applied on top.
 func osReportedLevel(goos string, f Facts) (Level, error) {

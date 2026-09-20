@@ -262,6 +262,20 @@ func (p *agentInferenceProvider) warmTarget(ctx context.Context) (string, bool) 
 	if ms.OllamaTag == "" {
 		return "", false // no engine-native name to ask for
 	}
+	// Already learned that this build does not load on this computer, at
+	// this size (waired-agent#1453). Every automatic trigger reaches here —
+	// boot, a reconcile, an operator engine start, the residency maintainer
+	// — and on a unified-memory host each attempt puts the machine back
+	// under the memory pressure that made the record.
+	//
+	// A smaller configuration is deliberately still allowed: the record is
+	// keyed by the load's shape as well as the build, so the step down this
+	// failure is supposed to cause is not blocked by the failure itself.
+	if rec, blocked := p.loadIsBlocked(); blocked {
+		p.logger.Warn("not loading this model again: it did not fit in this computer's memory",
+			"model", ms.OllamaTag, "reason", rec.Reason, "recorded_at", rec.FailedAt)
+		return "", false
+	}
 	return ms.OllamaTag, true
 }
 

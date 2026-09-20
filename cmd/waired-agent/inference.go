@@ -785,6 +785,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// out of memory serving a request, which is a fact about the
 		// configuration rather than about engine health.
 		ollama.SetOnFitFailure(provider.onEngineFitFailure)
+		ollama.SetOnLoadMemoryFailure(provider.onLoadMemoryFailure)
 	}
 
 	// Engine switch (#557): an explicit preferred_engine that differs from
