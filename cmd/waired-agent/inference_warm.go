@@ -179,6 +179,21 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 
 	wctx, cancel := context.WithTimeout(ctx, warmBudget)
 	defer cancel()
+
+	// Watch the host while the weights load (waired-agent#1453). This is the
+	// only thing the product does that can take a computer down: on a
+	// carve-out host the weights transit the OS-visible half, free memory
+	// pins near zero, and the box starves for ten minutes with no token to
+	// show for it (waired-agent#837).
+	//
+	// Stopping means stopping the ENGINE, not just abandoning the request.
+	// Cancelling the HTTP call leaves ollama loading on the other side of
+	// it, still holding everything it has taken; only retiring the process
+	// gives the memory back, and Stop is what records the tree for the next
+	// start to wait on.
+	stopped := p.watchLoadMemory(wctx, cancel)
+	defer stopped.done()
+
 	start := time.Now()
 	// Send keep_alive explicitly rather than relying on the serve-level
 	// variable: an ADOPTED engine was spawned by a previous run and its
@@ -186,6 +201,13 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 	// would be undone minutes later on the very hosts that cannot be
 	// bounced to fix it.
 	if err := loadOllamaModel(wctx, client, baseURL, tag, p.keepAlive()); err != nil {
+		if f, ok := stopped.failure(); ok {
+			// The guard stopped this one, so the error is our own doing and
+			// says nothing about the model. Record why it was stopped.
+			p.warmFails.fail(p.warmLoadKey(tag))
+			p.onLoadMemoryFailure(f)
+			return
+		}
 		fails := p.warmFails.fail(p.warmLoadKey(tag))
 		if p.logger != nil {
 			p.logger.Info("warm-up load did not complete; the first request will pay for it",
@@ -195,6 +217,21 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 		return
 	}
 	p.warmFails.reset()
+	// Record that the weights are back BEFORE the in-flight latch clears
+	// (waired-agent#1328). Two signals move at different times: warmInFlight
+	// drops the moment this function returns, while model_resident is only
+	// re-read on the 5 s local-inference probe tick. For up to one tick the
+	// surfaces were told "not loading" and "not resident" together, so the
+	// status line read `model not loaded` at the exact moment the load had
+	// just succeeded — worst when the thing worked.
+	//
+	// refreshOllamaResidency rather than a bare SetResidency: this is an
+	// OBSERVATION of /api/ps, which is the distinction markNothingResident
+	// and residencyFromPS both turn on, and it keeps the residency-changed
+	// log line on one path. Best-effort like the rest of the warm-up — an
+	// unreadable /api/ps leaves the previous observation alone and the probe
+	// tick catches up, which is exactly the old behaviour.
+	refreshOllamaResidency(ctx, p.ollama, client)
 	if p.logger != nil {
 		p.logger.Info("serving model warmed",
 			"model", tag, "took", time.Since(start).Round(time.Second))
@@ -246,6 +283,20 @@ func (p *agentInferenceProvider) warmTarget(ctx context.Context) (string, bool) 
 	}
 	if ms.OllamaTag == "" {
 		return "", false // no engine-native name to ask for
+	}
+	// Already learned that this build does not load on this computer, at
+	// this size (waired-agent#1453). Every automatic trigger reaches here —
+	// boot, a reconcile, an operator engine start, the residency maintainer
+	// — and on a unified-memory host each attempt puts the machine back
+	// under the memory pressure that made the record.
+	//
+	// A smaller configuration is deliberately still allowed: the record is
+	// keyed by the load's shape as well as the build, so the step down this
+	// failure is supposed to cause is not blocked by the failure itself.
+	if rec, blocked := p.loadIsBlocked(); blocked {
+		p.logger.Warn("not loading this model again: it did not fit in this computer's memory",
+			"model", ms.OllamaTag, "reason", rec.Reason, "recorded_at", rec.FailedAt)
+		return "", false
 	}
 	return ms.OllamaTag, true
 }

@@ -41,6 +41,7 @@ internal/platform/localipc/     # local management-API write socket / named pipe
 internal/platform/logdump/      # collects journald/log-show/Get-WinEvent + the agent/engine log files into one file for bug reports; read-only log gather, no mesh/enrollment surface
 internal/platform/logrotate/    # size-caps the agent's log files: dup2 on fd 1/2 for the launchd-owned ones (macOS), an owned rolling file under the state dir (Windows); local file rotation, no mesh/enrollment surface
 internal/platform/logsink/      # local log-file sink
+internal/platform/mempressure/ # reads the OS's own memory-pressure signal (linux PSI, darwin memorystatus sysctl, windows low-memory notification) so a model load can be stopped before the host starves; local reads only, no mesh/enrollment surface
 internal/platform/notification/ # desktop notifications
 internal/platform/proclist/     # local process-table read (runner -np/-c for tuning verify); no mesh/enrollment surface
 internal/platform/pwsh/         # strips PSModulePath before spawning Windows PowerShell 5.1; pure env filtering, no mesh/enrollment surface

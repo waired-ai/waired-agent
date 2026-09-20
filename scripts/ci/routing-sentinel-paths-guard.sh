@@ -68,6 +68,7 @@ ALLOW=(
   internal/platform/atomicfile   # publish-by-rename primitive under the state/secret stores below (waired-agent#698); own tests, no routing surface
   internal/platform/elevation    # elevation predicate + per-OS elevation-hint wording (dep of internal/runtime since waired#752); no routing surface
   internal/platform/localipc     # mgmt write socket / named pipe listener (waired#838); loopback IPC only, no routing surface
+  internal/platform/mempressure  # reads the OS's own memory-pressure signal so a load can be stopped before the host starves (waired-agent#1453); local reads only, no routing surface
   internal/platform/paths
   internal/platform/secrets
   internal/runtime               # engine supervision; shared, own tests, no routing-specific surface

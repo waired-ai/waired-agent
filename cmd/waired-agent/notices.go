@@ -31,6 +31,7 @@ const (
 	noticeSourceRecommendation = "inference-recommendation"
 	noticeSourceUpdate         = "update"
 	noticeSourceEngine         = "engine"
+	noticeSourceLoadFailure    = "inference-load-failure"
 )
 
 // noticeProvider adapts the registry to management.NoticeProvider.
@@ -122,6 +123,36 @@ func noticesFromRecommendation(rec *management.BenchmarkRecommendation) []notice
 			rec.FromModelID, rec.ToModelID, rec.TurnSeconds, rec.TurnFloorSeconds, rec.BudgetSeconds)}
 	}
 	return nil
+}
+
+// publishLoadFailureNotices republishes "this model did not fit in this
+// computer's memory" (waired-agent#1453).
+//
+// Its own producer rather than part of the recommendation set above,
+// because the two say different things and stop being true at different
+// moments: a speed suggestion lapses when the next benchmark disagrees,
+// while this one stands until the build changes or the person chooses
+// something else. The registry keys a lease per producer, so each can keep
+// its own answer without consulting the other.
+func (p *agentInferenceProvider) publishLoadFailureNotices(ctx context.Context) {
+	if p == nil || p.notices == nil {
+		return
+	}
+	p.notices.Publish(noticeSourceLoadFailure, p.loadFailureNotices(ctx))
+}
+
+// loadFailureNotices derives the notice from the record, on every call, so
+// that when the record stops applying — a new engine build, a new driver, a
+// different model — the notice stops being published and lapses with nothing
+// having to notice.
+func (p *agentInferenceProvider) loadFailureNotices(ctx context.Context) []notice.Notice {
+	rec, blocked := p.loadIsBlocked()
+	if !blocked {
+		return nil
+	}
+	return []notice.Notice{
+		notice.ModelDidNotLoad(rec.ModelID, p.smallerAlternative(ctx, rec), rec.Reason),
+	}
 }
 
 // showable is the predicate every other surface already applies: a

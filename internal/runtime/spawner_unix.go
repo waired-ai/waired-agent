@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
@@ -42,6 +43,11 @@ func (s DefaultSpawner) Spawn(ctx context.Context, binary string, args, env []st
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err
+	}
+	// Tell the OOM killer what to take if this machine has to lose
+	// something (waired-agent#1453). Best-effort, and a no-op off Linux.
+	if err := applyEngineOOMScore(cmd.Process.Pid); err != nil {
+		slog.Debug("could not set the engine's OOM score", "pid", cmd.Process.Pid, "err", err)
 	}
 	p := &osProcess{cmd: cmd, done: make(chan struct{})}
 	go func() {
