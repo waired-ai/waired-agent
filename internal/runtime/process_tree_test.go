@@ -205,6 +205,39 @@ func TestPendingExits_WaitReturnsOnCancel(t *testing.T) {
 	}
 }
 
+// Two starts can wait on this record at once, because the engines share
+// it: the ollama adapter, the vLLM adapter the bootstrap rebuilds, and the
+// host-speed probe's own. Each entry is read and then written per sweep, so
+// the sweep holds the lock throughout — run with -race, this is where a
+// per-field lock showed up. The kill stays at one for the entry, not one
+// per waiter.
+func TestPendingExits_ConcurrentWaitersShareOneKill(t *testing.T) {
+	e := NewPendingExits(time.Minute, time.Millisecond)
+	p := newTreeProc(4242, true)
+	e.Add("ollama", p)
+
+	const waiters = 4
+	done := make(chan error, waiters)
+	for range waiters {
+		go func() { done <- e.Wait(context.Background()) }()
+	}
+	time.Sleep(50 * time.Millisecond)
+	p.alive.Store(false)
+	for range waiters {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Wait = %v, want nil once the tree exited", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("a waiter did not return after the tree exited")
+		}
+	}
+	if k := p.killCount(); k != 1 {
+		t.Errorf("Kill called %d times, want 1 for the entry however many starts waited", k)
+	}
+}
+
 // A tree that cannot be read is dropped: a start is not blocked on an
 // answer nobody can give.
 func TestPendingExits_UnreadableTreeDoesNotBlock(t *testing.T) {

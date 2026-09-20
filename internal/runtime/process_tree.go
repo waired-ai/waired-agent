@@ -170,27 +170,23 @@ func (e *PendingExits) Wait(ctx context.Context) error {
 
 // sweep asks every recorded tree once. It reports whether any is still
 // running, and an error once one has been running past the limit.
+//
+// The whole sweep holds e.mu, including the TreeAlive and Kill calls. Two
+// starts can wait on this record at once — the engines share it — and each
+// entry is read and then written here, so anything less is a race. It also
+// keeps the kill and the "still running" warning to one per entry rather
+// than one per waiter. The calls under the lock are a process-group probe,
+// a /proc read or a Job Object query, none of which block.
 func (e *PendingExits) sweep() (bool, error) {
 	e.mu.Lock()
-	procs := make([]RunningProcess, 0, len(e.entries))
-	for p := range e.entries {
-		procs = append(procs, p)
-	}
-	e.mu.Unlock()
-
+	defer e.mu.Unlock()
 	stuck := false
-	for _, p := range procs {
+	for p, ent := range e.entries {
 		alive, err := p.(ProcessTree).TreeAlive()
-		e.mu.Lock()
-		ent := e.entries[p]
-		e.mu.Unlock()
-		if ent == nil {
-			continue
-		}
 		if err != nil {
 			slog.Warn(ent.engine+": cannot tell whether the previous engine's processes have exited; starting anyway",
 				"pid", ent.pid, "err", err)
-			e.drop(p)
+			delete(e.entries, p)
 			continue
 		}
 		if !alive {
@@ -198,7 +194,7 @@ func (e *PendingExits) sweep() (bool, error) {
 				slog.Info(ent.engine+": the previous engine's processes have exited",
 					"pid", ent.pid, "since_retired", e.now().Sub(ent.retiredAt).Round(time.Second))
 			}
-			e.drop(p)
+			delete(e.entries, p)
 			continue
 		}
 		if !ent.killed {
@@ -206,9 +202,7 @@ func (e *PendingExits) sweep() (bool, error) {
 				slog.Warn(ent.engine+": kill of the previous engine's processes failed; waiting for them anyway",
 					"pid", ent.pid, "err", kerr)
 			}
-			e.mu.Lock()
 			ent.killed = true
-			e.mu.Unlock()
 		}
 		since := e.now().Sub(ent.retiredAt)
 		if since >= e.limit {
@@ -218,19 +212,11 @@ func (e *PendingExits) sweep() (bool, error) {
 		if !ent.logged {
 			slog.Warn(ent.engine+": processes started by the previous engine are still running; waiting for them to exit before starting an engine",
 				"pid", ent.pid, "limit", e.limit)
-			e.mu.Lock()
 			ent.logged = true
-			e.mu.Unlock()
 		}
 		stuck = true
 	}
 	return stuck, nil
-}
-
-func (e *PendingExits) drop(p RunningProcess) {
-	e.mu.Lock()
-	delete(e.entries, p)
-	e.mu.Unlock()
 }
 
 // pending reports how many processes are recorded, for tests.
