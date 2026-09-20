@@ -104,7 +104,24 @@ func TestHostKey(t *testing.T) {
 			want: "unified-amd-ryzen-ai-max-395",
 		},
 		{
-			name: "the GPU lane (agentgrade's nvidia-24gb-discrete today)",
+			// The machine behind agentgrade's "nvidia-24gb-discrete"
+			// records: installtest-inference.yml brings "a
+			// g2-standard-4 with one L4" for this lane, and an L4
+			// reports compute capability 8.9.
+			name: "the CI GPU lane",
+			prof: Profile{
+				CPU:  CPUInfo{Model: "Intel(R) Xeon(R) CPU @ 2.20GHz"},
+				GPUs: []GPU{{Vendor: "nvidia", Model: "NVIDIA L4", ComputeCap: "8.9"}},
+			},
+			want: "discrete-nvidia-sm89",
+		},
+		{
+			// The other 24 GB NVIDIA discrete card this project runs,
+			// read off the machine on 2026-09-21. The old vocabulary
+			// called BOTH of these "nvidia-24gb-discrete" while their
+			// memory bandwidth differs by 2.24x — which is the whole
+			// argument of waired-agent#1455, in our own hardware.
+			name: "the Linux fleet host, also 24 GB and also NVIDIA discrete",
 			prof: Profile{
 				CPU:  CPUInfo{Model: "AMD Ryzen 9 7950X 16-Core Processor"},
 				GPUs: []GPU{{Vendor: "nvidia", Model: "NVIDIA RTX PRO 4000 Blackwell", ComputeCap: "12.0"}},

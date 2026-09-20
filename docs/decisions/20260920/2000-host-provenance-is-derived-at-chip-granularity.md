@@ -24,6 +24,20 @@ DGX Spark の記録を入れようとすると `nvidia-unified-128gb` を足す�
 llama.cpp 公式の GB10 ベンチを同じ深さで並べると prefill が約 2 倍違い、
 一方 `apple-unified-64gb` は帯域が 4.5 倍違う部品を 1 つの名前に畳む。
 
+**いちばん鋭い例はこのプロジェクト自身の 2 台で、旧綴りはどちらも同じ名前で呼ぶ**
+（2026-09-21 に確認）:
+
+| | カード | 容量 | compute cap | 帯域 |
+|---|---|---|---|---|
+| CI の GPU レーン | NVIDIA L4 | 24 GB GDDR6 | 8.9 | **300 GB/s** |
+| Linux のフリート機 | NVIDIA RTX PRO 4000 Blackwell | 24 GB GDDR7 | 12.0 | **672 GB/s** |
+
+どちらも `nvidia-24gb-discrete`。**帯域は 2.24 倍違う**ので、片方で測った秒数は
+もう片方について何も言わない — それこそが名前が伝えるべき唯一のことである。
+導出すれば `discrete-nvidia-sm89` と `discrete-nvidia-sm120` に分かれる。
+レーンの素性は `installtest-inference.yml` が自ら書いている
+（"this lane brings its own hardware: a g2-standard-4 with one L4"）。
+
 根の問題は語彙の綴りではなく 1 つ下の層にあった。**`UnifiedMemory` という
 フラグが 3 OS で別々の家族名判定から立っていた** — macOS は `GOARCH`、
 Linux と Windows は `strings.Contains(cpuModel, "ryzen ai max")`。
@@ -110,11 +124,16 @@ Windows は `MatchingDeviceId`）、同じ部品に同じ値を返し、上の 2
 
 ### 7. 古い綴りは凍結して残す。記録は綴り替えない
 
-`LegacyHostClasses` の 3 語は**読むためだけ**に残す。決定 1100 が
-「出荷済みの記録は書き換えない」を settled していることに加えて、
-**参照機の派生キーは実機から読めているが、GPU レーンのそれは読めていない**
-（そのランナーのカードが報告する compute capability を誰も読んでいない）。
-推測で綴り替えれば、記録の顔をした推測になる。
+`LegacyHostClasses` の 3 語は**読むためだけ**に残す。理由は決定 1100 の
+「出荷済みの記録は書き換えない」に尽きる。**2 つの鍵はいずれも分かっている**
+（参照機は実機から `unified-amd-ryzen-ai-max-395`、GPU レーンは L4 なので
+`discrete-nvidia-sm89`）が、**分かっていることは書き換える理由にならない** —
+一括の綴り替えは、測定を伴わずに出自を編集することになる。
+
+> **訂正（2026-09-21）**: この節は当初「GPU レーンの派生キーは読めていない」と
+> 書いていた。レーンの素性は `installtest-inference.yml` に書かれており
+> （L4）、L4 の compute capability は NVIDIA が公開している（8.9）。
+> 綴り替えない結論は変わらないが、理由が違う。
 
 **旧綴りは既存の store の続きには使えるが、新しい store を始めることには
 使えない。** 宣言で凍結したものが、使用によって生き続けるのを防ぐ。
