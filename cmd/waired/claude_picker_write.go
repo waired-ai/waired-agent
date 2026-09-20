@@ -29,22 +29,27 @@ import (
 // user's home is a support ticket. runLinkAllAsUser drops to the invoking user
 // and re-enters this hidden subcommand there, so ownership comes out right.
 //
-// One thing the move loses, deliberately. The cache was read AFTER SessionStart
-// hooks ran, so a hook could refresh it for the session about to start.
-// Settings are read BEFORE the watch that would notice a hook's write is armed,
-// so a row written by the hook first appears in the NEXT session (measured on
-// Claude Code 2.1.261, 2026-09-06: a synchronous hook write and writes at 1 s,
-// 2 s and 3 s are missed; 6 s and 15 s land — a race, not a contract, so the
-// hook does not try to win it). Only the per-peer rows and the presence of the
-// public and 1M rows move with the mesh, so the cost is one relaunch after the
-// fleet changes, and the docs say so.
+// One thing the move changed. The cache was read AFTER SessionStart hooks ran,
+// so a hook could refresh it for the session about to start. Settings are read
+// BEFORE the watch that would notice a hook's write is armed, so the hook's
+// own write reaches only the NEXT session (measured on Claude Code 2.1.261,
+// 2026-09-06 and 2.1.278, 2026-09-20: a synchronous hook write and writes at
+// 1 s, 2 s, 3 s and 4 s are missed; 5 s and later land).
+//
+// Leaving it there cost a whole session: the launch that followed a peer
+// switching model showed the old model name, and only the launch after it was
+// right, so someone who runs `claude` rarely saw a stale row every time
+// (waired-agent#1454). So when the write changes something, this schedules a
+// second one a few seconds later, from a child the hook does not wait for —
+// see claude_picker_republish.go. The hook still returns in about a second and
+// its command string is unchanged.
 
 func newClaudePickerCmd() *cobra.Command {
 	var baseURL string
 	var peerEntries int
 	var fromManaged bool
 	cmd := &cobra.Command{
-		Use:    "_picker <write|remove>",
+		Use:    "_picker <write|remove|republish>",
 		Short:  "Internal: write or remove this user's Waired rows in Claude Code's /model picker",
 		Hidden: true,
 		Args:   cobra.ExactArgs(1),
@@ -72,13 +77,27 @@ func newClaudePickerCmd() *cobra.Command {
 					if pickerHookClears(askDaemonEnrolment(defaultMgmtAddr)) {
 						// Silent, like the write below: Claude Code reads a
 						// hook's stdout as session context.
+						//
+						// No republish is scheduled here, and that is a
+						// decision rather than an omission. `waired logout`
+						// removes the rows in the user's own process, which
+						// is an external write a running session's watch
+						// picks up on its own. This branch only runs on
+						// sessions started AFTER the sign-out, where there
+						// is nothing left to show.
 						_, _ = claudecode.RemovePickerLineup(claudecode.SettingsPath(home))
 						return nil
 					}
 				}
-				path, changed, err := writePickerRows(home, baseURL, peerEntries)
+				path, out, err := writePickerRows(home, baseURL, peerEntries)
 				if err != nil {
 					return err
+				}
+				if pickerRepublishWanted(fromManaged, out) {
+					// Best effort and silent, like the write above. When it
+					// fails, the rows appear at the next launch, which is
+					// what happened before waired-agent#1454.
+					_ = spawnPickerRepublish()
 				}
 				if fromManaged {
 					// Silence. Claude Code reads a hook's stdout as session
@@ -86,18 +105,24 @@ func newClaudePickerCmd() *cobra.Command {
 					// the user's session.
 					return nil
 				}
-				if !changed {
+				if !out.Changed() {
 					fmt.Fprintf(stdout, "Claude Code /model rows already current: %s\n", path)
 					return nil
 				}
 				fmt.Fprintf(stdout, "Wrote Claude Code /model rows: %s\n", path)
 				return nil
+			case "republish":
+				// The child spawnPickerRepublish starts. Hidden like the rest
+				// of _picker, and never written into a settings file: it is
+				// reached by this binary re-execing itself, so there is no
+				// on-disk leftover for the uninstall scripts to know about.
+				return runPickerRepublish(home, pickerRepublishOffsets, time.Sleep)
 			case "remove":
 				removeRetiredUserLeftovers(home)
 				_, err := claudecode.RemovePickerLineup(claudecode.SettingsPath(home))
 				return err
 			default:
-				return fmt.Errorf("waired claude _picker: unknown action %q (write|remove)", args[0])
+				return fmt.Errorf("waired claude _picker: unknown action %q (write|remove|republish)", args[0])
 			}
 		},
 	}
@@ -145,20 +170,21 @@ func pickerWriteGuard(present bool, current, want, managedPath string) error {
 }
 
 // writePickerRows publishes the rows after re-checking, in the user context,
-// that this machine really is routed at the given base URL. changed is false
-// when the lineup already said exactly this: the SessionStart refresh runs on
-// every `claude` launch and the rows are usually the same ones, so rewriting
-// the file each time would be churn and would race two launches starting
-// together.
-func writePickerRows(home, baseURL string, peerEntries int) (path string, changed bool, err error) {
+// that this machine really is routed at the given base URL. LineupChanged is
+// false when the lineup already said exactly this: the SessionStart refresh
+// runs on every `claude` launch and the rows are usually the same ones, so
+// rewriting the file each time would be churn and would race two launches
+// starting together. It is also what decides whether a second write is worth
+// scheduling — see pickerRepublishWanted.
+func writePickerRows(home, baseURL string, peerEntries int) (path string, out pickerWriteOutcome, err error) {
 	_, present, current := claudemanaged.View()
 	if err := pickerWriteGuard(present, current, baseURL, claudemanaged.Path()); err != nil {
-		return "", false, err
+		return "", out, err
 	}
 	path = claudecode.SettingsPath(home)
-	changed, err = claudecode.WritePickerLineup(path, pickerRows(defaultMgmtAddr, peerEntries))
+	out.LineupChanged, err = claudecode.WritePickerLineup(path, pickerRows(defaultMgmtAddr, peerEntries))
 	if err != nil {
-		return path, changed, err
+		return path, out, err
 	}
 	// The upgrade path. Until waired-agent#1185 the rows reached the picker
 	// through Claude Code's own discovery cache, which waired wrote and
@@ -172,9 +198,9 @@ func writePickerRows(home, baseURL string, peerEntries int) (path string, change
 		claudecode.ClaudeConfigDir(), home, baseURL); err != nil {
 		fmt.Fprintf(stderr, "Warning: %v\n", err)
 	} else if gone {
-		changed = true
+		out.CacheRemoved = true
 	}
-	return path, changed, err
+	return path, out, err
 }
 
 // installPickerRowsForInvoker / removePickerRowsForInvoker (un)write the rows
@@ -242,6 +268,20 @@ func removePickerRowsForInvoker() {
 func removeRetiredUserLeftovers(home string) {
 	if _, err := claudecode.RemoveRetiredCacheOwned(claudecode.ClaudeConfigDir(), home); err != nil {
 		fmt.Fprintf(stderr, "Warning: %v\n", err)
+	}
+	// waired-agent#1457: and waired's keys in the settings file this run is
+	// NOT writing. CLAUDE_CONFIG_DIR relocates the config directory, so a
+	// person who sets it after `waired claude enable` leaves rows, a status
+	// line and a default model behind in ~/.claude/settings.json — inert
+	// while the variable is set, and live again the moment they unset it,
+	// pointing at a gateway that is gone.
+	//
+	// Only this direction can be swept: when the variable is unset there is
+	// nowhere to read the directory it used to name.
+	if twin := claudecode.SettingsPathFor("", home); twin != claudecode.SettingsPath(home) {
+		if _, err := claudecode.RemoveWairedSettingsAt(twin); err != nil {
+			fmt.Fprintf(stderr, "Warning: %v\n", err)
+		}
 	}
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {

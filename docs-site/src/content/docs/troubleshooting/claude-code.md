@@ -147,9 +147,10 @@ above, check two things, in this order:
 the Anthropic models, and **Waired public share** once Public Share is on.
 Four things hide them, in the order worth checking:
 
-1. **Claude Code has not been restarted.** The rows are read when Claude Code
-   starts. Reopening `/model` in a running session does not reread them. Quit
-   Claude Code and start it again.
+1. **The rows have not caught up yet.** Waired writes them when Claude Code
+   starts, and again a few seconds later. Wait a few seconds and reopen
+   `/model`. If they are still missing, quit Claude Code and start it again —
+   the rows are read at startup, and a fresh start always has them.
 2. **Routing is not on for this computer.** Check with `waired claude
    status`. The rows are offered only once Claude Code is pointed at Waired.
 

@@ -105,8 +105,27 @@ const (
 	StatusLineForeign
 )
 
-// SettingsPath is the user-global Claude Code settings file.
-func SettingsPath(home string) string { return filepath.Join(home, ".claude", "settings.json") }
+// SettingsPathFor is the user-global Claude Code settings file, under the
+// config directory in force. Pure, like RetiredCachePath: the caller supplies
+// the directory, so a test does not have to own the environment to say which
+// one it means.
+func SettingsPathFor(configDir, home string) string {
+	if configDir != "" {
+		return filepath.Join(configDir, "settings.json")
+	}
+	return filepath.Join(home, ".claude", "settings.json")
+}
+
+// SettingsPath resolves SettingsPathFor against this process's environment.
+//
+// It reads CLAUDE_CONFIG_DIR because the file has to be the one Claude Code
+// reads, and that variable relocates the whole config directory, settings.json
+// included — measured on 2.1.278, 2026-09-20: with it set, a lineup in
+// ~/.claude/settings.json produced no Waired rows at all, and the two files
+// do not merge. waired wrote the fixed path until waired-agent#1457, so a
+// person who set the variable got no rows, no status line and no subagent
+// placement while every surface reported success.
+func SettingsPath(home string) string { return SettingsPathFor(ClaudeConfigDir(), home) }
 
 // statuslineWrapperNameFor names the wrapper script: a POSIX shell script where
 // Claude Code has a POSIX shell, a PowerShell script on Windows.

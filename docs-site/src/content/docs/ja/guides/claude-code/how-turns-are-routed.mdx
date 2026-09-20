@@ -1,6 +1,6 @@
 ---
 title: Claude Codeのターンはどこで実行されるか
-description: /modelの各Wairedの行の意味、どのパソコンが答えるか、ターンが勝手にクラウドへ移らない理由、エラーメッセージの内容を説明します。
+description: /modelの各Wairedの行の意味、どのコンピュータが答えるか、ターンが勝手にクラウドへ移らない理由、エラーメッセージの内容を説明します。
 meta:
   audience: ターンの行き先を知りたいClaude Codeのユーザー
   needs: Wairedに接続済みのClaude Code
@@ -9,19 +9,19 @@ meta:
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Claude Codeのターンは、`/model`で選んだモデルが指す場所で実行されます。ルールはこれだけです。このページでは、そこから導かれることを説明します。どの行がどのパソコンを意味するか、`(1M context)`付きの行は何のためにあるか、ターンを実行できないときに何が表示されるか、です。
+Claude Codeのターンは、`/model`で選んだモデルが指す場所で実行されます。ルールはこれだけです。このページでは、そこから導かれることを説明します。どの行がどのコンピュータを意味するか、`(1M context)`付きの行は何のためにあるか、ターンを実行できないときに何が表示されるか、です。
 
 ## <a id="the-rows-in-model"></a>/modelの行
 
-`/model`では、Anthropicのモデルの下にWairedの行が並びます。各行の2行目に、どのパソコンを指すかが書かれています。
+`/model`では、Anthropicのモデルの下にWairedの行が並びます。各行の2行目に、どのコンピュータを指すかが書かれています。
 
-| 行 | 2行目 | 答えるパソコン |
+| 行 | 2行目 | 答えるコンピュータ |
 |---|---|---|
-| **Waired** | *Any of your computers* | Wairedが選んだ自分のパソコンのどれか。通常はこの行を使います。 |
-| **Waired local** | *This computer* | 常にこのパソコン。推論エンジンのないパソコンでは表示されません。 |
-| **Waired peer** | *Another of your computers* | 常に自分の別のパソコン。このパソコンは使いません。静かにしておきたいノートパソコンで選びます。 |
-| **Waired public share** | *Someone else's computer* | 別のWairedユーザーが貸し出しているパソコン。[パブリック共有](/ja/public-share/)をオンにしたあとでだけ表示されます。 |
-| **Waired peer: studio-desktop** | 動かしているモデル | そのパソコンだけ。いま答えられるパソコンごとに1行ずつ表示されます。 |
+| **Waired** | *Any of your computers* | Wairedが選んだ自分のコンピュータのどれか。通常はこの行を使います。 |
+| **Waired local** | *This computer* | 常にこのコンピュータ。推論エンジンのないコンピュータでは表示されません。 |
+| **Waired peer** | *Another of your computers* | 常に自分の別のコンピュータ。このコンピュータは使いません。静かにしておきたいノート型のコンピュータで選びます。 |
+| **Waired public share** | *Someone else's computer* | 別のWairedユーザーが貸し出しているコンピュータ。[パブリック共有](/ja/public-share/)をオンにしたあとでだけ表示されます。 |
+| **Waired peer: studio-desktop** | 動かしているモデル | そのコンピュータだけ。いま答えられるコンピュータごとに1行ずつ表示されます。 |
 
 Wairedの行に答えるのは、200,704トークン以上のコンテキストウィンドウを持つコンピュータだけです。`(1M context)`付きの行では1,048,576トークン以上です。**Waired local**と**Waired peer: &lt;名前&gt;**の行も同じです。ほとんどのコンピュータはこの条件を満たします。それより小さいコンテキストウィンドウのコンピュータ、たとえば動かしているモデルで200,704トークンをVRAMに保持できないコンピュータは、Wairedのどの行にも答えません。そのコンピュータ自身の**Waired local**も同じで、その行のターンは失敗して理由を表示します。Wairedがコンピュータを選ぶ場合、どれを選ぶかは`waired worker`で決まります。[どのパソコンが答えるかを選ぶ](/ja/guides/routing/)を参照してください。
 
@@ -29,27 +29,27 @@ Wairedの行に答えるのは、200,704トークン以上のコンテキスト�
 
 ## <a id="a-turn-never-crosses-over-on-its-own"></a>ターンが勝手に反対側へ移ることはありません
 
-Wairedの行のターンは、自分のパソコンで実行されるか、失敗するかのどちらかです。Anthropic APIには送られません。Anthropicのモデルのターンは、Anthropic APIに送られ、そのエラーはそのまま届きます。Wairedがどちらの向きにもターンを移すことはありません（プロジェクトの決定記録`docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md`）。
+Wairedの行のターンは、自分のコンピュータで実行されるか、失敗するかのどちらかです。Anthropic APIには送られません。Anthropicのモデルのターンは、Anthropic APIに送られ、そのエラーはそのまま届きます。Wairedがどちらの向きにもターンを移すことはありません（プロジェクトの決定記録`docs/decisions/20260903/0333-no-automatic-crossing-to-or-from-anthropic.md`）。
 
-新しいセッションがAnthropicで始まるのはこのためです。Wairedは既定のモデルを書き込みません。自分のパソコンを指す既定を書くと、推論エンジンもピアもないパソコンでは、すべてのセッションが動かなくなるからです。Wairedの行を一度選べば、`/model`がその選択を記憶します。
+新しいセッションがAnthropicで始まるのはこのためです。Wairedは既定のモデルを書き込みません。自分のコンピュータを指す既定を書くと、推論エンジンもピアもないコンピュータでは、すべてのセッションが動かなくなるからです。Wairedの行を一度選べば、`/model`がその選択を記憶します。
 
-## <a id="the-rows-named-after-your-computers"></a>パソコンの名前を持つ行
+## <a id="the-rows-named-after-your-computers"></a>コンピュータの名前を持つ行
 
-上の4つの行の下に、いま答えられる自分のパソコンごとに1行ずつ表示されます。2行目はそのパソコンが動かしているモデルです。
+上の4つの行の下に、いま答えられる自分のコンピュータごとに1行ずつ表示されます。2行目はそのコンピュータが動かしているモデルです。
 
 ```
 Waired peer: studio-desktop    qwen3.5-35b-a3b
 Waired peer: attic-server      qwen3.5-122b-a10b
 ```
 
-この行を選ぶと、会話はそのパソコンだけに送られます。知っておくことが2つあります。
+この行を選ぶと、会話はそのコンピュータだけに送られます。知っておくことが2つあります。
 
-- **一覧が変わるのはセッションの間で、セッションの途中では変わりません。** WairedはClaude Codeが起動するたびに一覧を書き直すので、1分前に起動したパソコンは、次に起動した`claude`から表示されます。選んだあとにいなくなったパソコンを選ぶと、ターンは失敗し、そのパソコンの名前を表示します。
-- **いま答えられるパソコンだけが表示されます。** 電源が入っていない、まだダウンロード中、推論エンジンがない、コンテキストウィンドウが200,704トークンに満たない、というパソコンは表示されません。
+- **一覧が新しくなるのはClaude Codeの起動時です。** Wairedは起動のたびに一覧を書き直し、内容が変わっていたときは数秒後にもう一度書き直します。1分前に起動したコンピュータは、次に起動した`claude`で最初に見える一覧ではなく、その数秒後に現れるのがふつうです。現れなかったときは、その次の起動で表示されます。`/model`を開き直しても早くはなりません。選んだあとにいなくなったコンピュータを選ぶと、ターンは失敗し、そのコンピュータの名前を表示します。
+- **いま答えられるコンピュータだけが表示されます。** 電源が入っていない、まだダウンロード中、推論エンジンがない、コンテキストウィンドウが200,704トークンに満たない、というコンピュータは表示されません。
 
 ## <a id="the-1m-context-twins"></a>(1M context)付きの行
 
-自分のパソコンのどれかが1Mトークンのコンテキストウィンドウを持つモデルを動かしていると、そのパソコンに届く行のそれぞれが、`(1M context)`を付けてもう一度表示されます。この行を選ぶと、1Mのウィンドウを持つパソコンで、1Mのウィンドウで会話を実行します。そのようなパソコンが答えられない場合、ターンは失敗して理由を表示します。黙って小さいウィンドウで実行することはありません。**Waired public share**にも、自分が使える公開コンピュータが1Mのコンテキストウィンドウを宣言していればこの行が出ます。公開コンピュータもほかのコンピュータと同じようにコンテキストウィンドウを公開しています。所有者が［Serve main conversation］をオフにしたコンピュータは、この行の対象になりません。この行で送られるのはメイン会話だからです。`(1M context)`の付かない行は、答えるコンピュータが1Mを保持していても、200,704トークンのセッションのままです。
+自分のコンピュータのどれかが1Mトークンのコンテキストウィンドウを持つモデルを動かしていると、そのコンピュータに届く行のそれぞれが、`(1M context)`を付けてもう一度表示されます。この行を選ぶと、1Mのウィンドウを持つコンピュータで、1Mのウィンドウで会話を実行します。そのようなコンピュータが答えられない場合、ターンは失敗して理由を表示します。黙って小さいウィンドウで実行することはありません。**Waired public share**にも、自分が使える公開コンピュータが1Mのコンテキストウィンドウを宣言していればこの行が出ます。公開コンピュータもほかのコンピュータと同じようにコンテキストウィンドウを公開しています。所有者が［Serve main conversation］をオフにしたコンピュータは、この行の対象になりません。この行で送られるのはメイン会話だからです。`(1M context)`の付かない行は、答えるコンピュータが1Mを保持していても、200,704トークンのセッションのままです。
 
 ## <a id="long-sessions-get-compacted"></a>長いセッションは要約されます
 
@@ -59,7 +59,7 @@ Waired peer: attic-server      qwen3.5-122b-a10b
 
 ## <a id="when-a-turn-cannot-run"></a>ターンを実行できないとき
 
-自分のパソコンのどれもリクエストを処理できない場合、ターンはClaude Codeの中ですぐにエラーで終わります。別の場所で再試行されることも、Anthropic APIに送られることもありません。エラーは`API Error: 400`に続けて、答えられなかった理由と2つの選択肢を表示します。
+自分のコンピュータのどれもリクエストを処理できない場合、ターンはClaude Codeの中ですぐにエラーで終わります。別の場所で再試行されることも、Anthropic APIに送られることもありません。エラーは`API Error: 400`に続けて、答えられなかった理由と2つの選択肢を表示します。
 
 ```
 API Error: 400 Waired is not set up to answer on this computer, so this turn has nowhere to run. Pick an Anthropic model in /model to send it to the cloud, or run `waired doctor` to see what is missing.
@@ -71,7 +71,7 @@ API Error: 400 Waired is not set up to answer on this computer, so this turn has
 API Error: 400 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-そのターンをクラウドで実行したければ、Anthropicのモデルを選択します。足りないものを直したければ、`waired doctor`を実行します。自分のパソコンのどれも次のターンを受けられないことをWairedが把握している場合は、送信する前にフッターが赤くなります。エラーを見て初めて気づくことはあまりありません。
+そのターンをクラウドで実行したければ、Anthropicのモデルを選択します。足りないものを直したければ、`waired doctor`を実行します。自分のコンピュータのどれも次のターンを受けられないことをWairedが把握している場合は、送信する前にフッターが赤くなります。エラーを見て初めて気づくことはあまりありません。
 
 ```
 ⚠ waired: Waired cannot answer (local disabled, no peer)
@@ -79,25 +79,25 @@ API Error: 400 None of your computers that could take this turn has a context wi
 
 Wairedが500ではなく400で答えるのは意図的で、コンテキストウィンドウを満たさない場合もほかの場合と同じです。Claude Codeは5xxのエラーを最大10回再試行しますが、400は一度だけそのまま表示します。対処を伝えるメッセージには、その動作が適しています。例外は、[固定したパソコンが使用中](#a-pinned-computer-is-never-substituted)の場合だけです。そのターンは503で答えます。再試行が、そのターンを通す手段だからです。
 
-## <a id="a-slow-computer-is-not-a-failure"></a>遅いパソコンは失敗ではありません
+## <a id="a-slow-computer-is-not-a-failure"></a>遅いコンピュータは失敗ではありません
 
-セッションの最初のターンがいちばん重い処理です。会話全体、指示、ファイルの内容を読み終えるまで最初の1語も返ってこず、ノートパソコンや古いGPUでは数分かかることがあります。Wairedはこれを諦めません。このパソコンが答える場合、ターンは推論エンジンが終わるまでいつまでも待ちます。自分の別のパソコンが答える場合、そのパソコンが「処理中」と報告し続けるかぎり待ちます。待つのをやめるのは、そのパソコンが停止を報告したときか、応答が途絶えたときで、ターンはどちらかを示すメッセージで失敗します。
+セッションの最初のターンがいちばん重い処理です。会話全体、指示、ファイルの内容を読み終えるまで最初の1語も返ってこず、ノート型のコンピュータや古いGPUでは数分かかることがあります。Wairedはこれを諦めません。このコンピュータが答える場合、ターンは推論エンジンが終わるまでいつまでも待ちます。自分の別のコンピュータが答える場合、そのコンピュータが「処理中」と報告し続けるかぎり待ちます。待つのをやめるのは、そのコンピュータが停止を報告したときか、応答が途絶えたときで、ターンはどちらかを示すメッセージで失敗します。
 
 ```
 API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
-相手のパソコンがほかの処理、多くの場合はそのパソコンの所有者のターンで手一杯のまま、待ち時間の上限に達することもあります。その場合、ターンは応答が途絶えたと言うのではなく、そのことを示して失敗します。次はサブエージェントのターンの例で、メッセージはサブエージェント向けの選択肢で終わります。
+相手のコンピュータがほかの処理、多くの場合はそのコンピュータの所有者のターンで手一杯のまま、待ち時間の上限に達することもあります。その場合、ターンは応答が途絶えたと言うのではなく、そのことを示して失敗します。次はサブエージェントのターンの例で、メッセージはサブエージェント向けの選択肢で終わります。
 
 ```
 API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and had not started this turn. This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.
 ```
 
-別のパソコンを待つ時間には上限があります。メイン会話は30分、サブエージェントのターンは100秒です。「処理中」と言い続けて実際には動いていない場合のためのものです。同じセッションの後続のターンははるかに速くなります。読み終えた部分を読み直さないからです。
+別のコンピュータを待つ時間には上限があります。メイン会話は30分、サブエージェントのターンは100秒です。「処理中」と言い続けて実際には動いていない場合のためのものです。同じセッションの後続のターンははるかに速くなります。読み終えた部分を読み直さないからです。
 
-## <a id="a-pinned-computer-is-never-substituted"></a>固定したパソコンは代替されません
+## <a id="a-pinned-computer-is-never-substituted"></a>固定したコンピュータは代替されません
 
-`waired worker set --pin`で自分のパソコンを1台に固定していて、そのパソコンが使えない場合、Wairedはこのパソコンで代わりに答えることも、Anthropic APIに送ることもしません。ターンは失敗し、そのパソコンの名前を表示します。
+`waired worker set --pin`で自分のコンピュータを1台に固定していて、そのコンピュータが使えない場合、Wairedはこのコンピュータで代わりに答えることも、Anthropic APIに送ることもしません。ターンは失敗し、そのコンピュータの名前を表示します。
 
 ```
 API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
@@ -111,15 +111,15 @@ API Error: 400 The computer this turn is pinned to, studio-desktop, cannot take 
 
 同じ位置にほかの理由も入ります。`Serve main conversation is turned off on it`、`Serve subagents is turned off on it`、`your Public Share settings do not let this computer use it`、そして**Waired peer: &lt;名前&gt;**の行だけに出る`it is running a model this version of Waired does not know`です。`waired worker`で固定したコンピュータがWairedの知らないモデルを動かしている場合は、これまでどおり別のコンピュータがターンを受けます。
 
-固定したパソコンが起動しているがほかの処理で手一杯、というのがもう1つの場合です。Wairedは会話のどれかが空くのを最長1分ほど待ってから、400ではなく503で答えます。このターンは再試行する価値があるからです。
+固定したコンピュータが起動しているがほかの処理で手一杯、というのがもう1つの場合です。Wairedは会話のどれかが空くのを最長1分ほど待ってから、400ではなく503で答えます。このターンは再試行する価値があるからです。
 
 ```
 API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
 ```
 
-Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。待つのをやめるには、`/model`で別のパソコンを選びます。
+Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。待つのをやめるには、`/model`で別のコンピュータを選びます。
 
-固定したパソコンが応答はするものの、まだ準備ができていない場合も、同じく503で答えます。メッセージには、そのパソコンが何をしているかが入ります。ベンチマークの実行中(参加した直後やモデルを替えた直後の数分間)、モデルをメモリに読み込み中、一時停止中、共有オフのどれかです。Claude Codeが再試行するので、準備ができればターンはそのまま通ります。
+固定したコンピュータが応答はするものの、まだ準備ができていない場合も、同じく503で答えます。メッセージには、そのコンピュータが何をしているかが入ります。ベンチマークの実行中(参加した直後やモデルを替えた直後の数分間)、モデルをメモリに読み込み中、一時停止中、共有オフのどれかです。Claude Codeが再試行するので、準備ができればターンはそのまま通ります。
 
 ```
 API Error: 503 router: the computer this turn is pinned to is not ready (tried "studio-desktop": running its benchmark (takes a few minutes)). This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
@@ -130,7 +130,7 @@ API Error: 503 router: the computer this turn is pinned to is not ready (tried "
 ## <a id="what-next"></a>次のステップ
 
 <CardGrid>
-	<LinkCard title="どのパソコンが答えるかを選ぶ" href="/ja/guides/routing/" description="1台に固定する、優先する、最小のモデルサイズを決める。" />
+	<LinkCard title="どのコンピュータが答えるかを選ぶ" href="/ja/guides/routing/" description="1台に固定する、優先する、最小のモデルサイズを決める。" />
 	<LinkCard title="Wairedのステータス行" href="/ja/guides/claude-code/status-line/" description="フッターのすべての形。" />
 	<LinkCard title="Claude Codeの問題" href="/ja/troubleshooting/claude-code/" description="行がない、クラウドのまま、などの症状。" />
 </CardGrid>

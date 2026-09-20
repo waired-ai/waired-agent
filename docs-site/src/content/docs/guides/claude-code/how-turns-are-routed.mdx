@@ -68,10 +68,13 @@ Waired peer: attic-server      qwen3.5-122b-a10b
 Picking one sends the conversation to that computer and nothing else. Two
 things to know:
 
-- **The list changes between sessions, not during one.** Waired rewrites it
-  each time Claude Code starts, so a computer you switched on a minute ago
-  appears in the next `claude` you start. If you pick a computer that has
-  since gone away, the turn fails and names it.
+- **The list is refreshed when Claude Code starts.** Waired rewrites it at
+  every launch, and when it changed, writes it again a few seconds later — so
+  a computer you switched on a minute ago usually appears a few seconds into
+  the next `claude` you start, rather than in the list you first see. If it
+  has not appeared by then, it is there the launch after. Reopening `/model`
+  does not fetch it any sooner. If you pick a computer that has since gone
+  away, the turn fails and names it.
 - **Only computers that can answer right now are listed.** A computer that is
   off, still downloading, has no engine, or holds less than 200,704 tokens is
   left out.

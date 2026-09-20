@@ -1032,7 +1032,12 @@ func TestOllamaAdapter_Park_DuringStartup(t *testing.T) {
 	// Wait until the spawn happened and the adapter is in Starting.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if a.Health(context.Background()).State == StateStarting && spawner.calls == 1 {
+		// spawnCount, not spawner.calls: the start's leader goroutine is
+		// still running and writing it (#947 detached it), so a bare read is
+		// a data race. It is the one polling site that was left reading the
+		// field directly, and the race detector found it once the previous
+		// engine's exit wait (#1443) widened the window.
+		if a.Health(context.Background()).State == StateStarting && spawner.spawnCount() == 1 {
 			break
 		}
 		time.Sleep(2 * time.Millisecond)
