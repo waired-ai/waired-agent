@@ -254,6 +254,28 @@ func OllamaServedWindows(m catalog.Manifest) []int {
 	return []int{OllamaEffectiveContextFloor(m)}
 }
 
+// OllamaServedWindowsWith is OllamaServedWindows for a host whose person
+// asked for a particular window. chosen == ServingWindow1M opens the 1M
+// rung for a model that documents rope scaling reaching it; every other
+// value, including the 0 that every caller passed before
+// waired-ai/waired#1456, gives exactly what OllamaServedWindows gives.
+//
+// The asking is required, and it is required here rather than left to a
+// caller to remember. Static rope scaling is applied to every prompt the
+// engine sees, short ones included, so a model silently promoted to the
+// long window would be a different model for the person who never asked —
+// which is the opposite of the owner decision this implements (2026-09-20,
+// waired-ai/waired#1456): serve 1M "when 1M is chosen", with a warning.
+func OllamaServedWindowsWith(m catalog.Manifest, chosen int) []int {
+	if chosen == ServingWindow1M && DeclarableExtendedWindow(m) == ServingWindow1M &&
+		m.ContextLength < ServingWindow1M {
+		// A model whose OWN window already reaches 1M is left to
+		// OllamaServedWindows: it needs no scaling and no asking.
+		return []int{ServingWindow1M, ServingWindow200k}
+	}
+	return OllamaServedWindows(m)
+}
+
 // OllamaCeilingWindow is the top rung of OllamaServedWindows: the largest
 // window this product will ever ask an engine to serve this model at. 0
 // when the manifest carries no window, which callers read as "no cap".
@@ -583,7 +605,45 @@ func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor f
 // device-placeable weights the fit would put in system RAM
 // (waired-ai/waired-agent#1337).
 func OllamaPlannedRungFor(m catalog.Manifest, v catalog.Variant, h Host, kvType string, ceiling int) OllamaRungPlan {
-	rungs := OllamaServedWindows(m)
+	return OllamaPlannedRungFrom(OllamaWindowRequest{
+		Manifest: m, Variant: v, Host: h, KVCacheType: kvType, Ceiling: ceiling,
+	})
+}
+
+// OllamaWindowRequest is the input to OllamaPlannedRungFrom. It exists
+// because OllamaPlannedRungFor's signature is published and the additive
+// proto guard will not let an argument be added to it, and because the
+// arguments now include something the older ones never carried: what the
+// person asked for. ProjectModelFrom took the same shape for the same
+// reason.
+type OllamaWindowRequest struct {
+	Manifest    catalog.Manifest
+	Variant     catalog.Variant
+	Host        Host
+	KVCacheType string
+
+	// Ceiling lowers the ladder: the verify path uses it to step a host
+	// DOWN after a rung failed to apply. 0 means no cap.
+	Ceiling int
+
+	// ChosenWindow raises it: ServingWindow1M when a person asked this
+	// computer for the long window and the model documents rope scaling
+	// that reaches it. 0 — the zero value, and what every existing caller
+	// passes — means nobody asked, and the ladder is exactly the one this
+	// package offered before waired-ai/waired#1456.
+	//
+	// Ceiling and ChosenWindow are separate on purpose, and must not be
+	// folded into one number: they point opposite ways. A single field
+	// would let a degrade that lowered the ceiling read as a choice that
+	// re-opened the longer window.
+	ChosenWindow int
+}
+
+// OllamaPlannedRungFrom is OllamaPlannedRungFor with the person's chosen
+// window included. See OllamaWindowRequest.
+func OllamaPlannedRungFrom(r OllamaWindowRequest) OllamaRungPlan {
+	m, v, h, kvType, ceiling := r.Manifest, r.Variant, r.Host, r.KVCacheType, r.Ceiling
+	rungs := OllamaServedWindowsWith(m, r.ChosenWindow)
 	ramMB := 0
 	if h.RAMTotalGB > h.OSMemoryDeductionGB() {
 		ramMB = (h.RAMTotalGB - h.OSMemoryDeductionGB()) * 1024

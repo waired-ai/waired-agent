@@ -1160,6 +1160,25 @@ func DeclarableNativeWindow(m catalog.Manifest) int {
 	}
 }
 
+// DeclarableExtendedWindow is the serving window m could be declared at
+// ONLY IF someone asks for it: the rung the model's published rope scaling
+// reaches (catalog.ExtendedContextLength). ServingWindow1M, or 0 for a
+// model that documents no scaling or whose scaling stops short of it.
+//
+// It never returns ServingWindow200k. The 200k rung is DeclarableNativeWindow's
+// answer, and a caller reading 200k from here would credit the scaling for a
+// window the model already had.
+//
+// Nothing about this is a promise. It says what the MODEL reaches; whether a
+// computer can hold it is OllamaDeclaresWindow's question, and whether anybody
+// asked for it is the agent's.
+func DeclarableExtendedWindow(m catalog.Manifest) int {
+	if catalog.ExtendedContextLength(m) >= ServingWindow1M {
+		return ServingWindow1M
+	}
+	return 0
+}
+
 // ServingWindowKVMB is the KV-cache footprint of window input tokens
 // for the variant, in binary MiB, at the cache type the serve tuning
 // exports by default (OllamaDefaultKVCacheType, priced with ggml's block

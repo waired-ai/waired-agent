@@ -7,6 +7,12 @@
   ],
   "license": "apache-2.0",
   "context_length": 262144,
+  "rope_scaling": {
+    "type": "yarn",
+    "factor": 4,
+    "original_context_length": 262144,
+    "publisher_max_context_length": 1010000
+  },
   "default_variant": {
     "ollama": "q4-gguf",
     "vllm": "bf16"

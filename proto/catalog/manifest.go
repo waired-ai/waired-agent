@@ -33,15 +33,40 @@ var bundledFS embed.FS
 // json tags in sync with both the embedded bundled/*.json files and
 // the future CP /model-manifests endpoint payload.
 type Manifest struct {
-	ModelID       string        `json:"model_id"`
-	DisplayName   string        `json:"display_name,omitempty"`
-	ModelAliases  []string      `json:"model_aliases,omitempty"`
-	License       string        `json:"license,omitempty"`
-	ContextLength int           `json:"context_length"`
-	Capabilities  []string      `json:"capabilities,omitempty"`
-	Runtime       RuntimePolicy `json:"runtime"`
-	Variants      []Variant     `json:"variants"`
-	Security      Security      `json:"security"`
+	ModelID       string   `json:"model_id"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	ModelAliases  []string `json:"model_aliases,omitempty"`
+	License       string   `json:"license,omitempty"`
+	ContextLength int      `json:"context_length"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+
+	// RopeScaling, when set, is how this model reaches a context window
+	// LONGER than ContextLength: the rope scaling its publisher documents
+	// and the engine has to be told about. Nil means the model serves its
+	// own window and nothing else, which is every build that shipped
+	// before waired-ai/waired#1456.
+	//
+	// It is a property of the checkpoint's rope configuration, not of a
+	// quantization, so it sits on the model and not on a Variant.
+	//
+	// None of it can be recovered at serve time, which is why the catalog
+	// carries it:
+	//
+	//   - The GGUF builds of Qwen 3.5 / 3.6 / 3.8 carry no rope.scaling.*
+	//     key at all (checked across every cached size, #451), so the
+	//     engine has no scaling to read and must be given one.
+	//   - The factor cannot be divided out of the publisher's stated
+	//     ceiling: Qwen documents 1,010,000 tokens against a native
+	//     262,144, and 1,010,000/262,144 is 3.85, not the factor 4 its
+	//     own serving recipe passes.
+	//   - OriginalContextLength cannot be read back from the file once the
+	//     product has raised a GGUF's context_length so the engine will
+	//     serve the longer window: the file then reports the extended
+	//     window as if the model had been trained for it.
+	RopeScaling *RopeScaling  `json:"rope_scaling,omitempty"`
+	Runtime     RuntimePolicy `json:"runtime"`
+	Variants    []Variant     `json:"variants"`
+	Security    Security      `json:"security"`
 
 	// InternalOnly, when non-empty, keeps this model out of everything a
 	// person sees or is given: auto-selection, the install picker
@@ -104,6 +129,48 @@ type Manifest struct {
 	// the values arrive with waired-ai/waired-agent#1349. Empty = no
 	// default recorded, and callers keep choosing as they do today.
 	DefaultVariant map[string]string `json:"default_variant,omitempty"`
+}
+
+// RopeScalingYaRN is the only rope scaling method the catalog carries.
+// Spelled as llama.cpp's --rope-scaling and Hugging Face's rope_type spell
+// it, because it is passed straight through to the engine.
+const RopeScalingYaRN = "yarn"
+
+// RopeScaling is how a model reaches a context window past its own
+// ContextLength: the scaling its publisher documents, in the terms the
+// engine is configured with.
+//
+// Every field is the publisher's — not a measurement and not a choice.
+// What the product then DOES with it, meaning which window it asks an
+// engine to serve and when, is not here: that is a decision about one host
+// and one person's choice, and it lives in hostfit and in the agent.
+type RopeScaling struct {
+	// Type is the scaling method. RopeScalingYaRN today.
+	Type string `json:"type"`
+
+	// Factor multiplies OriginalContextLength to give the window the
+	// scaling reaches. Qwen 3.5 / 3.6 / 3.8 publish 4.
+	//
+	// It is carried rather than derived, because the publisher's stated
+	// ceiling is not the product of the other two: Qwen documents
+	// 1,010,000 tokens over a 262,144 original, a ratio of 3.85, while the
+	// serving recipe on the same model card passes factor 4.
+	Factor float64 `json:"factor"`
+
+	// OriginalContextLength is the window the scaling is measured from:
+	// the length the model was trained for, which equals ContextLength for
+	// every build shipped so far. The engine takes it as its own parameter
+	// (llama.cpp --yarn-orig-ctx) and, with the factor, it fixes where
+	// interpolation gives way to extrapolation — so a wrong value here is
+	// a quietly wrong model rather than a refusal to start.
+	OriginalContextLength int `json:"original_context_length"`
+
+	// PublisherMaxContextLength is the longest context the publisher says
+	// the scaling is good for, where they state one. It is a sentence in a
+	// model card: not a limit any engine enforces, and not a window the
+	// product serves. It is here to be quoted to a person and in the docs.
+	// 0 means the publisher stated none.
+	PublisherMaxContextLength int `json:"publisher_max_context_length,omitempty"`
 }
 
 // RuntimePolicy expresses the manifest author's runtime preference.
@@ -707,6 +774,45 @@ func (m *Manifest) Validate() error {
 	// manifests.
 	if m.ContextLength <= 0 {
 		return fmt.Errorf("manifest %s: context_length must be > 0, got %d", m.ModelID, m.ContextLength)
+	}
+	if err := validateRopeScaling(*m); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateRopeScaling holds the publisher's scaling to what it claims to
+// be: a way to reach PAST the model's own window, measured from a length
+// the model was actually trained for. It deliberately says nothing about
+// serving windows — proto/catalog cannot import hostfit, and the rungs are
+// that package's contract, not this one's.
+func validateRopeScaling(m Manifest) error {
+	r := m.RopeScaling
+	if r == nil {
+		return nil
+	}
+	if r.Type != RopeScalingYaRN {
+		return fmt.Errorf("manifest %s: rope_scaling.type %q is not a method this catalog carries (%q)", m.ModelID, r.Type, RopeScalingYaRN)
+	}
+	if r.Factor <= 1 {
+		return fmt.Errorf("manifest %s: rope_scaling.factor must be > 1, got %v", m.ModelID, r.Factor)
+	}
+	if r.OriginalContextLength <= 0 || r.OriginalContextLength > m.ContextLength {
+		return fmt.Errorf("manifest %s: rope_scaling.original_context_length must be in 1..%d (context_length), got %d",
+			m.ModelID, m.ContextLength, r.OriginalContextLength)
+	}
+	reach := ExtendedContextLength(m)
+	if reach <= m.ContextLength {
+		return fmt.Errorf("manifest %s: rope_scaling reaches %d, which is not past context_length %d", m.ModelID, reach, m.ContextLength)
+	}
+	if p := r.PublisherMaxContextLength; p != 0 {
+		if p <= m.ContextLength {
+			return fmt.Errorf("manifest %s: rope_scaling.publisher_max_context_length %d is not past context_length %d", m.ModelID, p, m.ContextLength)
+		}
+		if p > reach {
+			return fmt.Errorf("manifest %s: rope_scaling.publisher_max_context_length %d is past what factor %v over %d reaches (%d)",
+				m.ModelID, p, r.Factor, r.OriginalContextLength, reach)
+		}
 	}
 	return nil
 }
