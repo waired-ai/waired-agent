@@ -250,8 +250,9 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 // inferenceStatusResponse mirrors the subset of management.InferenceStatus
 // this command renders.
 type inferenceStatusResponse struct {
-	SubsystemState string `json:"subsystem_state"`
-	DesiredState   string `json:"desired_state"`
+	SubsystemState      string `json:"subsystem_state"`
+	EngineStoppedReason string `json:"engine_stopped_reason"`
+	DesiredState        string `json:"desired_state"`
 	// Whether DesiredState was WRITTEN or is just the live default. Step 6
 	// needs the difference to know whose choice it would be overriding
 	// (waired#1142); an older daemon omits it, which reads as false — the
@@ -611,6 +612,12 @@ func runInferenceStatus(mgmt string) error {
 	}
 	if s.SubsystemState != "" {
 		fmt.Fprintf(stdout, "Inference engine: %s\n", s.SubsystemState)
+	}
+	// A state with no next action beside it is a dead end for whoever is
+	// reading (owner ruling, 2026-09-21). One remedy, not the whole list:
+	// the rest are in the docs and on the console.
+	if s.EngineStoppedReason != "" {
+		fmt.Fprintf(stdout, "  %s\n", s.EngineStoppedReason)
 	}
 	if line := hostMemoryLine(s.HostMemory); line != "" {
 		fmt.Fprintln(stdout, line)

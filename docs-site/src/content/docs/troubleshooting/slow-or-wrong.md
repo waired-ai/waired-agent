@@ -98,18 +98,19 @@ the GPU's own memory, so a model that fits only by spilling into system RAM
 is one you have to choose deliberately. `waired models ls --detail` shows the
 verdict for every model on this computer.
 
-## This model did not fit in this computer's memory
+## This model did not load on this computer
 
 This is the case where the model never loads at all, as opposed to loading
 and then running out on a long prompt (the next section).
 
 You see it as a warning naming the model, in `waired status`, in
-`waired doctor` and on the Waired icon's menu: `... did not fit in this
-computer's memory`. When the catalog has something smaller that runs here,
+`waired doctor` and on the Waired icon's menu: `... did not load on this computer`. When the catalog has something smaller that runs here,
 the same line offers it.
 
-Waired stops trying. It stopped the load that was running the computer out
-of memory, and it will not start that same load again by itself. That is
+Waired stops trying, and stops the engine. Requests answer at once instead
+of waiting minutes for a load that will fail, and the other computers on your
+account stop sending work here. It will not start that same load again by
+itself. That is
 deliberate: each attempt costs minutes and puts the computer back under the
 memory pressure it just came out of, and on some computers that pressure is
 enough to make the whole machine stop responding.
@@ -125,9 +126,16 @@ What starts it trying again:
   different graphics chip, or more memory. Waired keeps what it learned
   alongside those facts, so when one of them moves the old verdict stops
   applying and the model is fair game again.
+- **turning inference back on** — on the console, or `waired inference engine
+  start` on this computer. Either is you asking for it back, which is enough.
+
+None of these is a timer. Waired does not quietly try again after a while,
+and it does not try again when it restarts: a load that failed does not
+become loadable by waiting, and retrying on a schedule is what made this
+computer unusable in the first place.
 
 Nothing is broken here. The engine is fine and the weights are fine; they
-are fine together on a bigger computer. What does not fit is the choice.
+are fine together on a bigger computer. The choice is what has to change.
 
 ## It says the GPU ran out of memory on a long prompt
 

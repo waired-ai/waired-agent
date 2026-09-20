@@ -82,6 +82,9 @@ func (e *engineController) StopEngine(ctx context.Context) error {
 	if engine == catalog.RuntimeVLLM {
 		err = e.stopVLLM(stopCtx)
 	} else {
+		// A person asked for this one, which is what keeps it from being
+		// cleared by a model switch later (waired-agent#1464).
+		e.p.noteParked(parkCauseOperator)
 		err = e.p.ollama.Park(stopCtx)
 	}
 	if e.logger != nil {
@@ -144,6 +147,7 @@ func (e *engineController) StartEngine(_ context.Context) error {
 	if e.p.ollamaUsable == nil || !e.p.ollamaUsable() {
 		return errEngineNotStartable(errEngineNotInstalled)
 	}
+	e.p.noteParked(parkCauseNone)
 	e.p.ollama.Unpark()
 	// An explicit start is also the documented reset for a crash-recovery
 	// give-up (waired-agent#29): the operator has presumably changed

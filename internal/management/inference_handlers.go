@@ -118,10 +118,20 @@ type InferenceProvider interface {
 // loop alternates between "starting" and "engine_failed" for as long as the
 // budget lasts. Read runtimes[...].failure_latched for that (#310).
 type InferenceStatus struct {
-	SubsystemState  string                   `json:"subsystem_state"`
-	Runtimes        map[string]RuntimeStatus `json:"runtimes"`
-	Models          ModelsSnapshot           `json:"models"`
-	ActiveEndpoints []ActiveEndpoint         `json:"active_endpoints"`
+	SubsystemState string `json:"subsystem_state"`
+	// EngineStoppedReason is one sentence for an operator when this
+	// computer stopped its own engine, and it names ONE thing they can do
+	// (owner ruling, 2026-09-21, waired-agent#1464: do not put a state on
+	// the screen with no next action beside it). Empty whenever the engine
+	// is not stopped, or was stopped by the operator — a person who
+	// stopped it themselves does not need to be told how.
+	//
+	// The local management API only, never the wire: the control plane
+	// reads SubsystemState above and renders its own words.
+	EngineStoppedReason string                   `json:"engine_stopped_reason,omitempty"`
+	Runtimes            map[string]RuntimeStatus `json:"runtimes"`
+	Models              ModelsSnapshot           `json:"models"`
+	ActiveEndpoints     []ActiveEndpoint         `json:"active_endpoints"`
 
 	// Active is the engine + model the agent is committed to serving
 	// (mirrors state.json `active`). nil when no decision has been
