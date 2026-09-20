@@ -601,3 +601,12 @@ func (a sbInfProvider) MeasuredRates() (map[string]router.MeasuredRate, float64)
 	// before anything was measured.
 	return nil, 0
 }
+
+func (a sbInfProvider) LoadFailuresBySHA() map[string]string {
+	// No session means no store to read, and no claim about what this
+	// computer has failed to load — the same shape as MeasuredRates above.
+	if p := a.liveOrNil(); p != nil {
+		return p.LoadFailuresBySHA()
+	}
+	return nil
+}

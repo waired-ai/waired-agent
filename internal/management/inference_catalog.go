@@ -353,6 +353,15 @@ type CatalogFamily struct {
 	// ServingWarning != "" — a working host with the planned #624 spill
 	// has a warning and holds its window fine.
 	ServingDegraded bool `json:"serving_degraded,omitempty"`
+
+	// DidNotLoadHere is why this computer could not put this build in
+	// memory, when it has tried and failed under conditions that still
+	// hold (waired-agent#1453). Empty for every build that has not.
+	//
+	// Not restricted to the active row, unlike ServingWarning above. A
+	// person is warned BEFORE they switch to it, which is the only moment
+	// the warning can change anything.
+	DidNotLoadHere string `json:"did_not_load_here,omitempty"`
 }
 
 // CatalogSpec is the recommended-spec projection of one variant, shared
@@ -464,6 +473,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	// those figures against. Resolved once, beside the pick, because
 	// both the badge and the rows read it.
 	measuredRates, turnBudget := s.inference.MeasuredRates()
+	loadFailures := s.inference.LoadFailuresBySHA()
 
 	// The host's own pick, resolved ONCE for the whole catalog: it is a
 	// property of the list, not of a row, and asking per family would
@@ -518,6 +528,15 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		// REPLACES its candidate set at each rung, so a model excluded
 		// for being slow has no Pick left to carry its figure — and that
 		// is exactly the row that has to explain itself.
+		// What this computer already tried and could not load. Unlike
+		// ServingWarning below, this is NOT limited to the active row: the
+		// whole point is that a person about to switch TO a build should
+		// be told before they do (waired-agent#1453).
+		if fit.Variant.VariantID != "" {
+			if why, ok := loadFailures[catalog.VariantSHA(fit.Variant)]; ok {
+				f.DidNotLoadHere = why
+			}
+		}
 		if fit.Variant.VariantID != "" {
 			if r, ok := measuredRates[catalog.VariantSHA(fit.Variant)]; ok {
 				f.MeasuredTokps = r.Tokps

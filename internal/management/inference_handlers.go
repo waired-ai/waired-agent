@@ -93,6 +93,11 @@ type InferenceProvider interface {
 	// A zero line means this host makes no speed claim, and the ranking
 	// then ignores the figures entirely.
 	MeasuredRates() (rates map[string]router.MeasuredRate, turnBudgetSeconds float64)
+
+	// LoadFailuresBySHA is what this host could not put in memory, keyed
+	// by variant digest, with one sentence each. Only records that still
+	// apply to this computer (waired-agent#1453).
+	LoadFailuresBySHA() map[string]string
 }
 
 // InferenceStatus is the body of GET /waired/v1/inference/status.

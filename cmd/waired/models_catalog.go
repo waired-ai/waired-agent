@@ -101,6 +101,11 @@ type catalogDetailFamily struct {
 	// the only row there is evidence about (waired-agent#1038).
 	ServingWarning string `json:"serving_warning"`
 
+	// DidNotLoadHere is why this computer could not put this build in
+	// memory, when it has tried and failed under conditions that still
+	// hold (waired-agent#1453). Empty for every build that has not.
+	DidNotLoadHere string `json:"did_not_load_here"`
+
 	// ServingDegraded is the engine's own verdict that it could not be
 	// made to hold the configuration the rest of this row predicts.
 	//
