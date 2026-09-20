@@ -269,6 +269,19 @@ type GPU struct {
 	// for.
 	Integrated      bool `json:"integrated,omitempty"`
 	IntegratedKnown bool `json:"integrated_known,omitempty"`
+
+	// PCIID is the accelerator's PCI vendor:device pair, lowercase hex
+	// ("1002:1586"), or "" on a part that is not on a PCI bus (Apple
+	// Silicon) or whose pair could not be read.
+	//
+	// It is the one identity of a part that is the SAME on every
+	// operating system — see internal/hardware/pciid.go for why the
+	// model strings are not, and for why a pair is safe in a public
+	// repository where a serial would not be. The catalog's provenance
+	// records carry it beside the readable host key so an importer can
+	// tell two machines apart without trusting a label
+	// (waired-agent#1455).
+	PCIID string `json:"pci_id,omitempty"`
 }
 
 // GPUSummary is the minimal per-device shape suitable for inclusion in
@@ -602,6 +615,14 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 				known:      prof.GPUs[i].IntegratedKnown,
 			}.merge(p.integratedFn(&prof, i))
 			prof.GPUs[i].Integrated, prof.GPUs[i].IntegratedKnown = got.integrated, got.known
+		}
+	}
+	// The PCI pair, where the detector did not already have it in hand
+	// (Windows reads MatchingDeviceId for its vendor filter and fills it
+	// there; Linux needs a sysfs pass; Apple Silicon has no PCI bus).
+	for i := range prof.GPUs {
+		if prof.GPUs[i].PCIID == "" {
+			prof.GPUs[i].PCIID = pciIDFromOS(&prof, i)
 		}
 	}
 
