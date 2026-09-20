@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // An engine that is held off can be held off for two different reasons, and
@@ -182,4 +184,31 @@ func (p *agentInferenceProvider) engineStoppedReason() string {
 	}
 	return "Waired stopped the engine because this computer ran out of memory " +
 		"loading the model. Choose a different model to start it again."
+}
+
+// PublishedEngineStoppedCause is why this computer's engine is not running,
+// in the shape the control plane reads (waired-agent#1480).
+//
+// The same judgement the local surfaces already use — parkedBecause — sent
+// as a CODE rather than the sentence engineStoppedReason builds. The control
+// plane writes its own words from it, for a reader looking at a fleet rather
+// than at the machine in front of them.
+//
+// Empty for an engine that is running, and for one that is down for a reason
+// nothing here decided: a crashed runner, an exhausted recovery budget, an
+// engine that never came up. Those are all `engine_failed` too, and saying
+// nothing about them is the point — a remedy named for the wrong one of the
+// four would be worse than no remedy at all.
+func (p *agentInferenceProvider) PublishedEngineStoppedCause() string {
+	if p == nil {
+		return ""
+	}
+	switch p.parkedBecause() {
+	case parkCauseOperator:
+		return signer.EngineStoppedCauseOperator
+	case parkCauseOutOfMemory:
+		return signer.EngineStoppedCauseOutOfMemory
+	default:
+		return ""
+	}
 }

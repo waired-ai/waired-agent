@@ -369,20 +369,6 @@ var producedInProto = []exemption{
 // somewhere in this repo, and by the name-matching rule above the guard
 // would have taken one of those writes for this field's producer.
 var producerPending = []exemption{
-	// waired-ai/waired-agent#1480. Why this device's engine is not running.
-	// SubsystemState returns `engine_failed` for four different situations,
-	// so no reader of it alone can name a remedy without being wrong about
-	// three of them; this says which one it is. The agent already knows —
-	// parkedBecause decides it, and the local management API carries a
-	// sentence built from it — and the producer that puts the code on the
-	// wire lands with the agent half. The contract had to go first on its
-	// own (docs/decisions/20260719/0000-concurrent-proto-development.md §2).
-	//
-	// Until then it is empty on every push, which reads as "this device has
-	// not said" and is exactly the behaviour before the field existed.
-	// Delete this entry in the PR that writes it.
-	{reflect.TypeFor[signer.InferenceState](), "EngineStoppedCause",
-		"waired-ai/waired-agent#1480 lands the agent-side producer"},
 	// waired-ai/waired#1456. ChosenWindow was here too and is paid: the
 	// serve tuning now passes a person's chosen window into the sizing.
 	// What is left is the picker side — a row priced at the window being
