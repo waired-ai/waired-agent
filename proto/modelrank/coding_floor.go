@@ -104,11 +104,46 @@ func EffectiveContextFloor(m catalog.Manifest) int {
 //
 // Permissive on unknown sizing inputs, like the rest of this package.
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, host hostfit.Host) (bool, float64) {
-	plan := hostfit.OllamaPlannedRungFor(m, v, host, hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, host, nil, ""), 0)
+	return OllamaServesContextFloorAt(m, v, host, 0)
+}
+
+// OllamaServesContextFloorAt is OllamaServesContextFloor asked about a
+// named serving window: would this host serve (m, v) at the window a
+// person picked, rather than at the model's effective floor?
+//
+// window is hostfit.ServingWindow1M for the long window, or 0 /
+// hostfit.ServingWindow200k for the coding one, which is what
+// OllamaServesContextFloor passes and what every caller asked before
+// waired-ai/waired#1456.
+//
+// Two things change together and neither works alone. The rung plan is
+// asked with ChosenWindow set, so the ladder offers the long rung at all
+// (hostfit.OllamaServedWindowsWith only returns it when someone asked);
+// and the floor it is compared against becomes the chosen window, so a
+// host that lands on 200,704 after asking for 1,048,576 reports false
+// instead of passing on a rung nobody asked for.
+//
+// A window the model cannot reach leaves the floor at the model's own,
+// because the ladder will not offer the long rung for it either — the two
+// halves agree by construction rather than by two matching comments.
+func OllamaServesContextFloorAt(
+	m catalog.Manifest, v catalog.Variant, host hostfit.Host, window int,
+) (bool, float64) {
+	plan := hostfit.OllamaPlannedRungFrom(hostfit.OllamaWindowRequest{
+		Manifest:     m,
+		Variant:      v,
+		Host:         host,
+		KVCacheType:  hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, host, nil, ""),
+		ChosenWindow: window,
+	})
 	if plan.ContextLength <= 0 {
 		return true, 0
 	}
-	return plan.Fits && plan.ContextLength >= EffectiveContextFloor(m), plan.ExpectedSpillFraction
+	floor := EffectiveContextFloor(m)
+	if window == hostfit.ServingWindow1M && hostfit.ReachesWindow(m, window) {
+		floor = window
+	}
+	return plan.Fits && plan.ContextLength >= floor, plan.ExpectedSpillFraction
 }
 
 // VLLMServesContextFloor is hostfit.VLLMServesContextFloor: the host gate

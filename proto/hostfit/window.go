@@ -753,6 +753,42 @@ func OllamaDeclaresWindowFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 	return plan.Fits && plan.ContextLength >= window
 }
 
+// OllamaDeclaresWindowFrom is OllamaDeclaresWindowFor asked about a window
+// someone CHOSE: would this host declare r.ChosenWindow for (m, v)?
+//
+// It differs from OllamaDeclaresWindowFor in exactly the two places the
+// long window needs, and in no others:
+//
+//   - reachability is ReachesWindow, not DeclarableNativeWindow, so a model
+//     that gets there through its publisher's rope scaling counts. The
+//     older predicate answers "the model was TRAINED this long", which is
+//     the right question only while the rope scaling does not exist.
+//   - the rung plan is asked with ChosenWindow set, because
+//     OllamaServedWindowsWith only puts the long rung on the ladder when
+//     somebody asked for it. Without this the plan tops out at 200,704 and
+//     the answer is no on every host, however large.
+//
+// At the coding window the two agree by construction and not by intent:
+// DeclarableExtendedWindow never returns ServingWindow200k, and a
+// ChosenWindow that is not ServingWindow1M leaves the ladder untouched. A
+// test pins that, because "agree by construction" is a claim about code
+// that can stop being true.
+//
+// The permissiveness asymmetry of OllamaDeclaresWindowFor is inherited
+// deliberately and for the same reason: being permissive about a refusal
+// costs nothing, being permissive about a DECLARATION publishes a window
+// this node cannot hold.
+func OllamaDeclaresWindowFrom(r OllamaWindowRequest) bool {
+	if r.ChosenWindow <= 0 {
+		return true
+	}
+	if !ReachesWindow(r.Manifest, r.ChosenWindow) {
+		return false
+	}
+	plan := OllamaPlannedRungFrom(r)
+	return plan.Fits && plan.ContextLength >= r.ChosenWindow
+}
+
 // OllamaRecommendModel decides whether (m, v) is what this host should be
 // POINTED AT by default. Since the 2026-08-03 owner decision that is one
 // question, spelled out in waired-ai/waired#1056 decision 3: can this
@@ -812,6 +848,34 @@ func OllamaRecommendModel(m catalog.Manifest, v catalog.Variant, h Host) Verdict
 // (rung rule 2) takes no part here. A host with no accelerator keeps the
 // earlier clause: the serve tuning's own sizing reaches the coding window.
 func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvType string) Verdict {
+	return OllamaRecommendModelAt(m, v, h, kvType, 0)
+}
+
+// OllamaRecommendModelAt is OllamaRecommendModelFor asked about a named
+// serving window instead of the coding one.
+//
+// window is ServingWindow1M where a person picked the long window, or 0 /
+// ServingWindow200k for the coding window — which is what
+// OllamaRecommendModelFor passes and what every caller asked before
+// waired-ai/waired#1456.
+//
+// It took a new entry point rather than a parameter because the older
+// signature is published. It took a new entry point AT ALL because the
+// owner's 2026-09-20 ruling on waired-ai/waired#1359 is that the tiers and
+// the recommendation are compared WITHIN the window a person chose, and
+// that question is not answerable by a function with no window in it: the
+// same host recommends different models at 200,704 and at 1,048,576,
+// because the KV cache is more than five times the size at the second one.
+//
+// Only the two window clauses move. Clause 1 — do the weights alone spill
+// — is window-independent and is asked exactly as before.
+//
+// A window the model cannot reach is NOT refused here; it collapses to the
+// coding window, the same way ModelProjection.pricingWindow does. A verdict
+// is a description of a row, and declining a window is ReachesWindow's job
+// at the point of choice.
+func OllamaRecommendModelAt(m catalog.Manifest, v catalog.Variant, h Host, kvType string, window int) Verdict {
+	want := recommendationWindow(m, window)
 	out := Verdict{Fits: true}
 	budget := h.OllamaVRAMBudgetMB()
 	accelerated := h.HasGPU() && budget > 0 && v.EstimatedWeightGB > 0
@@ -831,22 +895,60 @@ func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 		}
 
 	case accelerated && v.KVBytesPerTokenFP16 > 0 &&
-		OllamaPlannedRungFor(m, v, h, kvType, 0).NoSpillCapacityTokens < ServingWindow200k:
+		OllamaPlannedRungFor(m, v, h, kvType, 0).NoSpillCapacityTokens < want:
 		out = Verdict{
 			Reason: ReasonWindowExceedsMemory,
-			NeedMB: OllamaEstimateMemory(v, h, kvType, ServingWindow200k, 1).DeviceMB(),
+			NeedMB: OllamaEstimateMemory(v, h, kvType, want, 1).DeviceMB(),
 			HaveMB: budget,
 		}
 
-	case !accelerated && !OllamaDeclaresWindowFor(m, v, h, kvType, ServingWindow200k):
+	case !accelerated && !OllamaDeclaresWindowFrom(OllamaWindowRequest{
+		Manifest: m, Variant: v, Host: h, KVCacheType: kvType, ChosenWindow: want,
+	}):
 		out = Verdict{
 			Reason: ReasonWindowExceedsMemory,
-			NeedMB: OllamaEstimateMemory(v, h, kvType, ServingWindow200k, 1).TotalMB(),
+			NeedMB: OllamaEstimateMemory(v, h, kvType, want, 1).TotalMB(),
 			HaveMB: h.TotalMemoryMB(),
 		}
 	}
 	out.Estimate = EstimateOllamaDecode(v, h)
 	return out
+}
+
+// recommendationWindow is the window the two window clauses above are
+// asked about: the long one when it was named AND the model reaches it,
+// the coding window otherwise.
+//
+// ServingWindow200k and not OllamaEffectiveContextFloor(m) in the default
+// arm, deliberately: that is the constant the clauses carried before this
+// function existed, and a recommendation that quietly asked about a
+// smaller window on some models would be a behaviour change smuggled in
+// under a refactor.
+func recommendationWindow(m catalog.Manifest, window int) int {
+	if window == ServingWindow1M && ReachesWindow(m, ServingWindow1M) {
+		return ServingWindow1M
+	}
+	return ServingWindow200k
+}
+
+// EngineServesWindow reports whether engine serves window on the hardware
+// this product ships against today.
+//
+// Both engines serve ServingWindow200k. Only ollama serves ServingWindow1M:
+// that rung is reached by handing llama.cpp the rope scaling the publisher
+// documents and raising the stored window to let it through
+// (docs/decisions/20260920/2300-the-long-window-is-asked-for-and-the-stored-file-is-raised-to-allow-it.md),
+// and the vLLM equivalent — --max-model-len with --hf-overrides — has not
+// been measured on any host in the fleet, because none of them can hold it.
+// So the rung stays shut there rather than be offered on a guess.
+//
+// A RECORD of today's behaviour, not a contract: it opens as soon as a vLLM
+// host is measured at the long window.
+func EngineServesWindow(engine string, window int) bool {
+	if window <= ServingWindow200k {
+		return engine == catalog.RuntimeOllama || engine == catalog.RuntimeVLLM
+	}
+	return engine == catalog.RuntimeOllama && window == ServingWindow1M
 }
 
 // VLLMRecommendModel is OllamaRecommendModel's counterpart for the vLLM

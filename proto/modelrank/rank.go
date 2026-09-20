@@ -37,6 +37,17 @@ import (
 var (
 	ErrModelNotFound        = errors.New("modelrank: model not found in catalog")
 	ErrHardwareInsufficient = errors.New("modelrank: hardware does not meet variant requirements")
+
+	// ErrWindowNotServed is PickInput.Window's answer when nothing can be
+	// ranked at it: either the engine does not serve that window at all
+	// (hostfit.EngineServesWindow), or no catalog entry reaches it
+	// (hostfit.ReachesWindow).
+	//
+	// Separate from ErrHardwareInsufficient because a caller must not
+	// answer it the same way. "This computer is too small" invites a
+	// smaller model; "nothing here serves that window" invites the other
+	// window, and buying a larger machine would change neither.
+	ErrWindowNotServed = errors.New("modelrank: nothing serves the chosen context window")
 )
 
 // PickInput is everything the ladder reads. Every field is an input a
@@ -73,8 +84,10 @@ type PickInput struct {
 	// catalog cannot serve the long one at all (hostfit.ReachesWindow) and
 	// the ones that can cost a different amount of memory there.
 	//
-	// The gating is not here yet: every caller passes 0 today, which ranks
-	// the coding window exactly as this package always has.
+	// 0 ranks the coding window exactly as this package always has, which
+	// is what every caller outside the window choice passes. A non-zero
+	// window is a hard filter — see step 1.6 in RankModels — and is
+	// answered with ErrWindowNotServed when nothing reaches it.
 	Window int `json:"-"`
 
 	// EngineVersion is the SERVING engine's version, used against
@@ -290,6 +303,46 @@ func RankModels(in PickInput) ([]Pick, error) {
 		return nil, fmt.Errorf("%w: every candidate is manual_only (engine=%s)",
 			ErrHardwareInsufficient, in.Engine)
 	}
+
+	// Step 1.6: the chosen serving window (waired-ai/waired#1456; owner
+	// ruling of 2026-09-20 on waired-ai/waired#1359). A person picks an
+	// engine, then a window, and the tiers and the recommendation are
+	// compared WITHIN that window — so a model that cannot reach it is not
+	// a worse candidate, it is not a candidate.
+	//
+	// A hard filter and deliberately NOT a narrow() pass below, for the
+	// same reason manual_only is not: narrow falls through when a pass
+	// would empty the set, which here would serve the coding window to
+	// someone who asked for the long one and say nothing. The window is the
+	// one input where falling through is worse than answering "nothing".
+	//
+	// It also runs BEFORE variant expansion, because reaching a window is a
+	// property of the checkpoint's rope configuration and not of the
+	// quantization: every variant of a model reaches exactly the windows the
+	// model reaches.
+	//
+	// PreferredModelID does not bypass this, and that is the one place this
+	// differs from step 1.5. An explicit pin says which MODEL, and the
+	// window is a separate, equally explicit statement made at the same
+	// moment; honouring the first by silently dropping the second would
+	// serve a window nobody chose.
+	if in.Window > 0 {
+		if !hostfit.EngineServesWindow(in.Engine, in.Window) {
+			return nil, fmt.Errorf("%w: engine %s serves no %d-token window",
+				ErrWindowNotServed, in.Engine, in.Window)
+		}
+		reaching := make([]catalog.Manifest, 0, len(manifests))
+		for _, m := range manifests {
+			if hostfit.ReachesWindow(m, in.Window) {
+				reaching = append(reaching, m)
+			}
+		}
+		if len(reaching) == 0 {
+			return nil, fmt.Errorf("%w: no candidate reaches %d tokens (engine=%s)",
+				ErrWindowNotServed, in.Window, in.Engine)
+		}
+		manifests = reaching
+	}
 	capable := manifests
 
 	// Steps 2+3: variant expansion + host-fit filter.
@@ -342,11 +395,22 @@ func RankModels(in PickInput) ([]Pick, error) {
 			// pass acts on it is a separate question — see the passes.
 			c.floorOK = true
 			if in.Engine == catalog.RuntimeOllama {
-				hostOK, spill := OllamaServesContextFloor(m, v, in.Host)
+				// Both sides take in.Window: the floor is "does this host
+				// reach the window that was asked for", and the
+				// recommendation prices the KV cache at that same window.
+				// Passing it to one and not the other would rank a model
+				// against one window and describe it against another.
+				hostOK, spill := OllamaServesContextFloorAt(m, v, in.Host, in.Window)
 				c.spill = spill
 				c.floorOK = hostOK
 				c.est = hostfit.EstimateOllamaDecode(v, in.Host)
-				c.rec = hostfit.OllamaRecommendModel(m, v, in.Host)
+				// nil GPUs, not in.GPUs: that is what OllamaRecommendModel
+				// resolves the type with, and passing the list here would
+				// change which cache the CODING window is priced against
+				// too — a behaviour change smuggled in under a refactor.
+				c.rec = hostfit.OllamaRecommendModelAt(m, v, in.Host,
+					hostfit.ResolveKVCacheType(catalog.RuntimeOllama, v, in.Host, nil, ""),
+					in.Window)
 			}
 			if in.Engine == catalog.RuntimeVLLM {
 				c.floorOK = VLLMServesContextFloor(m, v, in.GPUs)
