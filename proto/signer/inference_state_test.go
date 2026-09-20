@@ -1088,3 +1088,82 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// waired-agent#1453 added LoadFailures: what a device could not put in
+// memory. Push-only, so it never rides the signed map on a peer entry — but
+// the byte-identity rule applies for the other reason it always does, that a
+// device declaring nothing has to encode exactly as it did before the field
+// existed.
+func TestInferenceState_LoadFailures_CanonicalJSON(t *testing.T) {
+	none := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"qwen3:8b-q4_K_M"},
+		LastCheck: "2026-08-02T12:00:00Z",
+	}
+	const wantNone = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z"}`
+	data, err := json.Marshal(&none)
+	if err != nil {
+		t.Fatalf("marshal without failures: %v", err)
+	}
+	if got := string(data); got != wantNone {
+		t.Errorf("a device reporting no failed load changed the encoding:\n got %s\nwant %s",
+			got, wantNone)
+	}
+
+	// The reference host of waired-agent#1443, and the load that failed
+	// there: f16 KV at 131,072 tokens.
+	reported := none
+	reported.LoadFailures = []ModelLoadFailure{{
+		ModelID: "qwen3.5-122b-a10b", VariantID: "q5-k-s-gguf",
+		VariantSHA:    "sha256:0fbaae8d",
+		EngineKind:    "ollama",
+		EngineVersion: "0.34.0",
+		GPUModel:      "AMD Radeon 8060S Graphics",
+		DriverVersion: "32.0.21029.1001",
+		VRAMTotalMB:   98304,
+		RAMTotalMB:    130199,
+		ContextLength: 131072,
+		KVCacheType:   "f16",
+		NumParallel:   1,
+		Backend:       "vulkan",
+		FailedAt:      "2026-09-20T04:21:26Z",
+	}}
+	const wantReported = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"load_failures":[{"model_id":"qwen3.5-122b-a10b","variant_id":"q5-k-s-gguf",` +
+		`"variant_sha":"sha256:0fbaae8d","engine_kind":"ollama","engine_version":"0.34.0",` +
+		`"gpu_model":"AMD Radeon 8060S Graphics","driver_version":"32.0.21029.1001",` +
+		`"vram_total_mb":98304,"ram_total_mb":130199,"context_length":131072,` +
+		`"kv_cache_type":"f16","num_parallel":1,"backend":"vulkan",` +
+		`"failed_at":"2026-09-20T04:21:26Z"}]}`
+	data, err = json.Marshal(&reported)
+	if err != nil {
+		t.Fatalf("marshal with a failure: %v", err)
+	}
+	if got := string(data); got != wantReported {
+		t.Errorf("load-failure encoding drifted:\n got %s\nwant %s", got, wantReported)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&reported, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", reported, out)
+	}
+
+	// A payload from an agent that predates the field leaves it nil, and
+	// nil has to mean "this device has not told us", never "this device has
+	// nothing that failed" — the second would let a consumer conclude a
+	// build is fine everywhere on the strength of silence.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantNone), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.LoadFailures != nil {
+		t.Errorf("LoadFailures = %v on a pre-addition payload, want nil", pre.LoadFailures)
+	}
+}

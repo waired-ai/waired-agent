@@ -802,6 +802,30 @@ type InferenceState struct {
 	// missing).
 	ModelMeasurements []ModelMeasurement `json:"model_measurements,omitempty"`
 
+	// LoadFailures is what this device could not put in memory, so the
+	// control plane can rank on the same facts the device does.
+	//
+	// The negative sibling of ModelMeasurements above. That one says how
+	// fast a build ran here; this one says a build never ran here at all.
+	// A device that has learned that stops recommending the build to
+	// itself (waired-agent#1453), and the control plane should be able to
+	// reach the same conclusion without waiting for every device to find
+	// out the same way — on a unified-memory host, finding out costs
+	// minutes and puts the machine under the memory pressure that taught
+	// it.
+	//
+	// FIGURES, NOT VERDICTS, on the same terms as ModelMeasurements: the
+	// facts of the attempt travel, and what to do about them is the
+	// reader's. Neither the operator-facing sentence nor the engine's own
+	// words travel — the engine's text names blob paths and other things
+	// particular to one machine, and a consumer ranking builds has no use
+	// for prose.
+	//
+	// Push-only: the device sends it, and effectiveInferenceState strips
+	// it from the served NetworkMap. It therefore needs no capability
+	// gate, exactly as ModelMeasurements and HostSpeed need none.
+	LoadFailures []ModelLoadFailure `json:"load_failures,omitempty"`
+
 	// ServingEngineVersion is the version of the engine this host serves
 	// with, reported whether or not the host has ever been benchmarked.
 	//
@@ -913,6 +937,50 @@ type ModelMeasurement struct {
 	DepthTokens      int     `json:"depth_tokens,omitempty"`
 	TurnSeconds      float64 `json:"turn_seconds,omitempty"`
 	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+}
+
+// ModelLoadFailure is one build that a device could not load, with the facts
+// that say which computer could not load it.
+//
+// The tuple mirrors what the device keys its own record on
+// (internal/catalog.VariantLoadFailure): the build, the machine, and the
+// shape of the load. A reader may only apply the record where all of those
+// still hold — a new engine build, a new driver, a different GPU or more
+// memory makes it a fact about a computer that no longer exists.
+type ModelLoadFailure struct {
+	// ModelID and VariantID name the build. VariantSHA is the variant's
+	// content digest and is the identity that matters: a re-quantized or
+	// re-tagged build is a different artifact, and its predecessor's
+	// failure says nothing about it.
+	ModelID    string `json:"model_id,omitempty"`
+	VariantID  string `json:"variant_id,omitempty"`
+	VariantSHA string `json:"variant_sha,omitempty"`
+
+	// The engine that tried. A load is only comparable within an engine
+	// build, for the reason ModelMeasurement.EngineVersion gives.
+	EngineKind    string `json:"engine_kind,omitempty"`
+	EngineVersion string `json:"engine_version,omitempty"`
+
+	// The machine. GPUModel and DriverVersion because what ran out was
+	// device memory; VRAMTotalMB and RAMTotalMB because the same build can
+	// fail on one size of a machine and load on another.
+	GPUModel      string `json:"gpu_model,omitempty"`
+	DriverVersion string `json:"driver_version,omitempty"`
+	VRAMTotalMB   int    `json:"vram_total_mb,omitempty"`
+	RAMTotalMB    int    `json:"ram_total_mb,omitempty"`
+
+	// What was asked of the engine. A failure at one shape says nothing
+	// about a smaller one — a shorter window or a cheaper cache is a
+	// different load, and stepping down to it is the point.
+	ContextLength int    `json:"context_length,omitempty"`
+	KVCacheType   string `json:"kv_cache_type,omitempty"`
+	NumParallel   int    `json:"num_parallel,omitempty"`
+	Backend       string `json:"backend,omitempty"`
+
+	// FailedAt is when it failed, RFC3339Nano — a string rather than
+	// time.Time for the reason given at the top of this file: the
+	// canonical JSON form has to be byte-deterministic.
+	FailedAt string `json:"failed_at,omitempty"`
 }
 
 // HostSpeed is one coding-agent turn's cost on a host, measured at
