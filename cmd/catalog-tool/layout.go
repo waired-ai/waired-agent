@@ -268,12 +268,49 @@ func layoutFromHeader(out layoutResult, h gguf.Header, verbose bool) (layoutResu
 	return out, nil
 }
 
+// swaDefaultPeriod is the window/full period of a sliding-window
+// architecture whose GGUF names no sliding_window_pattern, as llama.cpp
+// decides it. laguna repeats full, SWA, SWA, SWA starting with a full
+// block (src/models/laguna.cpp @b10760, the default of swa_period); its
+// GGUFs carry only attention.sliding_window, and reading them as
+// alternating counted 24 full blocks where the engine allocates 12. An
+// architecture not listed alternates, which is gpt-oss.
+var swaDefaultPeriod = map[string]int{"laguna": 4}
+
+// swaFullLayers counts the full-attention blocks of a sliding-window
+// model. A per-layer sliding_window_pattern array marks every windowed
+// block non-zero (step35 writes one), a scalar one is the period with a
+// full block first, and without either the architecture's default
+// period applies.
+func swaFullLayers(h gguf.Header, blocks int) int {
+	arch := h.Architecture()
+	if arr, ok := h.Arrays[arch+".attention.sliding_window_pattern"]; ok && len(arr) > 0 {
+		n := 0
+		for i, v := range arr {
+			if i >= blocks {
+				break
+			}
+			if v == 0 {
+				n++
+			}
+		}
+		return n
+	}
+	period := 2
+	if p, ok := h.ArchUint("attention.sliding_window_pattern"); ok && p > 0 {
+		period = int(p)
+	} else if p, ok := swaDefaultPeriod[arch]; ok {
+		period = p
+	}
+	return (blocks + period - 1) / period
+}
+
 // manifestFromLayout derives the catalog.Variant fields from the header.
 //
 // Full-attention blocks: a per-layer head_count_kv array names them (a
 // zero is a linear block); a scalar with full_attention_interval spaces
-// them evenly; a sliding_window model (gpt-oss) alternates window and full
-// blocks; anything else is all full attention.
+// them evenly; a sliding_window model counts them the way llama.cpp does
+// (swaFullLayers); anything else is all full attention.
 //
 // Recurrent state (qwen35 / qwen35moe / qwen4exp gated DeltaNet), per
 // sequence, f32: R = n_linear·(conv_kernel−1)·(2·group_count·state_size +
@@ -289,7 +326,7 @@ func manifestFromLayout(l layoutResult, h gguf.Header) manifestLayout {
 			full = blocks / int(interval)
 		default:
 			if _, swa := h.ArchUint("attention.sliding_window"); swa {
-				full = blocks / 2
+				full = swaFullLayers(h, blocks)
 			} else {
 				full = blocks
 			}

@@ -111,6 +111,46 @@ func TestManifestFromLayout(t *testing.T) {
 		}
 	})
 
+	// Laguna S 2.1 (dhiltgen/laguna-s-2.1:118b-a8b-q4_K_M) carries only
+	// attention.sliding_window; llama.cpp puts a full block first in every
+	// four, and its runner allocated the non-SWA cache for 12 of 48 blocks
+	// on the reference host (waired-ai/waired#1427, 2026-09-19).
+	t.Run("a sliding-window architecture's own period counts the full layers", func(t *testing.T) {
+		h := gguf.Header{
+			Scalars: map[string]any{
+				"general.architecture":            "laguna",
+				"laguna.block_count":              uint64(48),
+				"laguna.attention.sliding_window": uint64(512),
+				"laguna.attention.head_count_kv":  uint64(8),
+			},
+			Arrays:  map[string][]int64{},
+			Tensors: []gguf.Tensor{{Name: "token_embd.weight", Shape: []uint64{3072, 100352}, Type: 12}},
+		}
+		out, _ := layoutFromHeader(layoutResult{}, h, false)
+		if g := out.Manifest.GGUF; g.FullAttentionLayers != 12 {
+			t.Errorf("full %d, want 12 (full, SWA, SWA, SWA from block 0)", g.FullAttentionLayers)
+		}
+
+		h.Scalars["laguna.attention.sliding_window_pattern"] = uint64(3)
+		out, _ = layoutFromHeader(layoutResult{}, h, false)
+		if g := out.Manifest.GGUF; g.FullAttentionLayers != 16 {
+			t.Errorf("full %d, want 16: a scalar pattern is the period", g.FullAttentionLayers)
+		}
+
+		delete(h.Scalars, "laguna.attention.sliding_window_pattern")
+		pattern := make([]int64, 48)
+		for i := range pattern {
+			if i%6 != 5 {
+				pattern[i] = 1
+			}
+		}
+		h.Arrays["laguna.attention.sliding_window_pattern"] = pattern
+		out, _ = layoutFromHeader(layoutResult{}, h, false)
+		if g := out.Manifest.GGUF; g.FullAttentionLayers != 8 {
+			t.Errorf("full %d, want 8: a per-layer pattern names each full block with a zero", g.FullAttentionLayers)
+		}
+	})
+
 	t.Run("a per-layer embedding table is host-resident", func(t *testing.T) {
 		h := qwen35Header()
 		h.Scalars["general.architecture"] = "qwen4exp"
