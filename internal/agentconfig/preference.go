@@ -35,6 +35,18 @@ type Preference struct {
 	VariantID   string `json:"variant_id,omitempty"`
 	KVCacheType string `json:"kv_cache_type,omitempty"`
 
+	// ContextWindow is the serving window chosen with ModelID:
+	// hostfit.ServingWindow1M for the long window, 0 or absent for the
+	// coding window (waired-ai/waired#1456). Like the two above it is
+	// meaningful only beside ModelID and is cleared with it.
+	//
+	// It is recorded rather than inferred from the model, because a model
+	// that CAN serve the long window is not a model anyone asked to. Static
+	// rope scaling applies to every prompt the engine sees, so a host that
+	// took the long window because it could would be a different model for
+	// an owner who never chose it.
+	ContextWindow int `json:"context_window,omitempty"`
+
 	// None records that the operator chose to run WITHOUT a local model
 	// (install-flow "don't download a model now", waired-agent#586;
 	// owner-ruled 2026-08-08, waired-ai/waired#1067). Mutually exclusive
@@ -178,4 +190,5 @@ func ApplyPreferenceOverride(c *InferenceConfig, p Preference) {
 	c.PreferredModelID = p.ModelID
 	c.PreferredVariantID = p.VariantID
 	c.PreferredKVCacheType = p.KVCacheType
+	c.PreferredContextWindow = p.ContextWindow
 }

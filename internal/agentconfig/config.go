@@ -400,6 +400,18 @@ type InferenceConfig struct {
 	PreferredVariantID   string `json:"-"`
 	PreferredKVCacheType string `json:"-"`
 
+	// PreferredContextWindow is the serving window chosen with
+	// PreferredModelID: hostfit.ServingWindow1M where a person asked this
+	// computer for the long window, 0 for the coding window
+	// (waired-ai/waired#1456). Never read from agent.json, for the same
+	// reason as the two above: it is a choice, and choices live in
+	// preferred-model.json.
+	//
+	// 0 is not "unset pending a default" — it IS the coding window, which
+	// is what every host served before the choice existed and what one
+	// serves when nobody has asked for anything else.
+	PreferredContextWindow int `json:"-"`
+
 	// InteractiveFloorTokps is RETIRED (waired-ai/waired-agent#1341;
 	// decision 3 of docs/decisions/20260913/2245). It was the decode rate
 	// below which the agent recommended a lighter model; the verdict is now

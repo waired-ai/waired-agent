@@ -955,7 +955,7 @@ func degradeStep(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardw
 		// No observation is carried in: a degrade lands on a different
 		// window than the one the runner answered for, so grantedFor would
 		// reject it anyway (waired-ai/waired-agent#846).
-		next := computeOllamaTuningOpts(m, v, hw, "f16", t.ContextLength, 0, ollamaObservedServe{})
+		next := computeOllamaTuningOpts(m, v, hw, ollamaTuningOpts{KVCacheType: "f16", CeilingCtx: t.ContextLength})
 		return next, fmt.Sprintf(
 			"this model runs its KV cache at f16 (%s needs flash attention, which it doesn't support); context window sized accordingly at %d tokens",
 			t.KVCacheType, next.ContextLength), stepEnv
@@ -974,7 +974,7 @@ func degradeStep(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardw
 			}
 			return t, "model spills to system RAM even at the minimum context window on this host; inference will be slower (" + detail + ")", stepNone
 		}
-		next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, below, 0, ollamaObservedServe{})
+		next := computeOllamaTuningOpts(m, v, hw, ollamaTuningOpts{KVCacheType: t.KVCacheType, CeilingCtx: below})
 		if verdict == tuningVRAMExhausted {
 			return next, fmt.Sprintf(
 				"a %d-token window left this computer's GPU with no room to serve a request; context window reduced to %d tokens",

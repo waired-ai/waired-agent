@@ -184,6 +184,27 @@ type engineProvenance struct {
 // give-up sentence, the raw failure and up to 4 KiB of engine log; the
 // first line is the part that names the cause, which is the whole point
 // of waired-agent#1069.
+// ollamaStoredContextLength is the context_length a pulled build's GGUF must
+// claim, so that this computer CAN serve the long window if someone asks for
+// it. 0 for a model that documents no way past its own window.
+//
+// ollama clamps num_ctx to the file's own value and passes -c on the command
+// line, so a build whose file says 262,144 cannot be asked for more however
+// the product is configured (waired-ai/waired#1456). Raising it is therefore
+// a precondition of the choice, not the choice: the window actually served
+// is whatever the serve tuning exports, and the rope scaling is passed only
+// for the long one.
+//
+// It is the model's reach and not the person's choice on purpose. Editing the
+// file when the choice is made would mean editing it underneath a running
+// engine, and a switch to the long window would then depend on a file write
+// succeeding at the worst moment. The cost is that a stored file stops
+// matching the publisher's bytes for someone who never picks the long window;
+// the decision log carries that trade.
+func ollamaStoredContextLength(m catalog.Manifest) int {
+	return catalog.ExtendedContextLength(m)
+}
+
 func (p *agentInferenceProvider) servingFailureReason(ctx context.Context) string {
 	if p == nil {
 		return ""
@@ -629,7 +650,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
 		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
-			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequestFor(cfg, tm, tv, hwProfile), ollamaObservedServe{})
+			win, winWarn := ollamaWindowRequestFor(cfg, tm, tv, bundledOllamaModels)
+			ollamaTune = computeOllamaTuningOpts(tm, tv, hwProfile, ollamaTuningOpts{
+				KVCacheType:   ollamaKVRequestFor(cfg, tm, tv, hwProfile),
+				ChosenWindow:  win,
+				WindowWarning: winWarn,
+			})
 			ollamaTuned = true
 			if ms, found := tuneState.Models[tm.ModelID]; found && ms.OllamaTag != "" {
 				ollamaTuneTag = ms.OllamaTag
@@ -670,7 +696,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			return nil, infruntime.ModelTuning{}, false
 		}
 		tune := applyModelDecisionReasons(cfg, tm,
-			computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequestFor(cfg, tm, tv, hwProfile), ollamaObservedServe{}), logger)
+			func() ollamaTuning {
+				win, winWarn := ollamaWindowRequestFor(cfg, tm, tv, bundledOllamaModels)
+				return computeOllamaTuningOpts(tm, tv, hwProfile, ollamaTuningOpts{
+					KVCacheType:   ollamaKVRequestFor(cfg, tm, tv, hwProfile),
+					ChosenWindow:  win,
+					WindowWarning: winWarn,
+				})
+			}(), logger)
 		logger.Info("ollama serve tuning computed at spawn",
 			"model", tune.ModelID, "variant", tune.VariantID,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
@@ -683,25 +716,35 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the binary through ollamaResolver on every pull rather than freezing
 	// the boot-time path: on a fresh install that path is empty, and the
 	// puller's own fallback cannot see a state-dir install (#304).
+	//
+	// The model store is handed over separately because a pull may have to
+	// finish the job on the file it fetched: ollama will not serve a window
+	// past a GGUF's own context_length, so a build asked for the long window
+	// has that one value raised in place (Rendering.ContextLength,
+	// waired-ai/waired#1456). The puller is the only thing that knows a
+	// fetch just happened, which is why the edit lives there.
 	puller := download.NewResolvingPuller(ollamaResolver, download.DefaultRunner{},
-		fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", cfg.ResolvedOllamaPort()))
+		fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", cfg.ResolvedOllamaPort())).
+		WithModelStore(bundledOllamaModels).
+		WithLogger(func(format string, args ...any) { logger.Info("ollama store: " + fmt.Sprintf(format, args...)) })
 
 	provider := &agentInferenceProvider{
-		cfg:            cfg,
-		logger:         logger,
-		agentCtx:       ctx,
-		manifests:      manifests,
-		store:          store,
-		profiler:       profiler,
-		registry:       registry,
-		ollama:         ollama,
-		engineExits:    engineExits,
-		puller:         puller,
-		notices:        deps.Notices,
-		stateDir:       stateDir,
-		preferencePath: deps.PreferencePath,
-		dlProgress:     newDownloadProgress(),
-		ollamaUsable:   func() bool { _, e := ollamaResolver(); return e == nil },
+		cfg:             cfg,
+		logger:          logger,
+		agentCtx:        ctx,
+		manifests:       manifests,
+		store:           store,
+		profiler:        profiler,
+		registry:        registry,
+		ollama:          ollama,
+		engineExits:     engineExits,
+		puller:          puller,
+		notices:         deps.Notices,
+		stateDir:        stateDir,
+		ollamaModelsDir: bundledOllamaModels,
+		preferencePath:  deps.PreferencePath,
+		dlProgress:      newDownloadProgress(),
+		ollamaUsable:    func() bool { _, e := ollamaResolver(); return e == nil },
 		// The one rule, not the cached profile (#225). engineViable and
 		// setupEngineState already ask this way; this was the site that
 		// did not.
@@ -1317,8 +1360,12 @@ type agentInferenceProvider struct {
 	// vLLM venv installed after this process started, which no restart-free
 	// path could reach while the boot decision was frozen.
 	stateDir string
-	engine   atomic.Pointer[string]
-	vllm     atomic.Pointer[infruntime.Adapter]
+	// ollamaModelsDir is the engine's model store, needed to read a stored
+	// build's own context_length before asking for a window past it
+	// (ollamaWindowRequestFor, waired-ai/waired#1456).
+	ollamaModelsDir string
+	engine          atomic.Pointer[string]
+	vllm            atomic.Pointer[infruntime.Adapter]
 	// vllmParked is the operator's hard engine-power latch for the vLLM
 	// engine (#881). Reach it through setVLLMParked / vllmIsParked; see
 	// engine_power.go for why it lives here rather than on the adapter, the
@@ -2592,13 +2639,16 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// (waired-ai/waired-agent#846). grantedFor drops it when the target
 		// or the window moved, so an operator switch starts from the
 		// arithmetic again.
-		tune := computeOllamaTuningOpts(tm, tv, hw, kvType, 0, want,
-			ollamaObservedServe{
+		tune := computeOllamaTuningOpts(tm, tv, hw, ollamaTuningOpts{
+			KVCacheType:      kvType,
+			OperatorParallel: want,
+			Observed: ollamaObservedServe{
 				ModelID:       cur.ModelID,
 				VariantID:     cur.VariantID,
 				ContextLength: cur.ContextLength,
 				NumParallel:   cur.ObservedNumParallel,
-			})
+			},
+		})
 		// The third caller of the decision reasons, and until now the one
 		// that had none: a model switched in process (#812) served with no
 		// decision warning at all — including the below-context-floor one —
@@ -2762,6 +2812,13 @@ func (p *agentInferenceProvider) restampDraft(tag string, v catalog.Variant, dra
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// No ContextLength here, and it is not an omission. This is a re-pull of
+	// a tag that is already present, which rewrites the manifest and leaves
+	// the weights blob alone — so a ceiling raised by the download path is
+	// still raised. A blob that predates waired-ai/waired#1456 is not
+	// raised by this either, and must not be: the serve path checks the
+	// file before it asks for the long window, which is the only place that
+	// knows the window is about to change.
 	want := download.Rendering{Renderer: v.Renderer, Parser: v.Parser, DraftNumPredict: draft}
 	p.logger.Info("the model runner's MTP draft is not the one this computer should run; pulling the tag again",
 		"tag", tag, "variant_id", v.VariantID, "draft_num_predict", draft)
@@ -2791,7 +2848,10 @@ func (p *agentInferenceProvider) ollamaDraftToWrite(ctx context.Context, m catal
 		return 0
 	}
 	hw := p.profiler.Profile(ctx)
-	t := computeOllamaTuning(m, v, hw, ollamaKVRequestFor(p.cfg, m, v, hw), ollamaObservedServe{})
+	win, _ := ollamaWindowRequestFor(p.cfg, m, v, p.ollamaModelsDir)
+	t := computeOllamaTuningOpts(m, v, hw, ollamaTuningOpts{
+		KVCacheType: ollamaKVRequestFor(p.cfg, m, v, hw), ChosenWindow: win,
+	})
 	return hostfit.OllamaDraftTokens(v, hw.HostFit(), t.KVCacheType, t.ContextLength)
 }
 
@@ -3548,10 +3608,16 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 		return 0
 	}
 	win := t.ContextLength
-	// Never claim past the model's own window, whatever the engine was
-	// told: a tuning above native is a misconfiguration, not a capability.
-	if m.ContextLength > 0 && win > m.ContextLength {
-		win = m.ContextLength
+	// Never claim past a window this model can REACH, whatever the engine
+	// was told: a tuning above that is a misconfiguration, not a capability.
+	//
+	// Reach, not the trained length, since waired-ai/waired#1456: a model
+	// whose publisher documents rope scaling serves the longer window when
+	// someone asks for it, and a host serving it has to be able to say so or
+	// no Waired [1m] row can ever be answered. A model that documents no
+	// scaling is clamped exactly as before.
+	if reach := max(m.ContextLength, catalog.ExtendedContextLength(m)); reach > 0 && win > reach {
+		win = reach
 	}
 	return declaredTier(win)
 }
@@ -4871,7 +4937,8 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 		var want download.Rendering
 		if v, ok := variantByID(manifest, variantID); ok {
 			want = download.Rendering{Renderer: v.Renderer, Parser: v.Parser,
-				DraftNumPredict: p.ollamaDraftToWrite(dlCtx, manifest, v)}
+				DraftNumPredict: p.ollamaDraftToWrite(dlCtx, manifest, v),
+				ContextLength:   ollamaStoredContextLength(manifest)}
 		}
 		// Give the bar its whole total before the first byte moves. Once
 		// per tag: a retry of the same tag already has the figure, and the

@@ -367,19 +367,16 @@ var producedInProto = []exemption{
 // somewhere in this repo, and by the name-matching rule above the guard
 // would have taken one of those writes for this field's producer.
 var producerPending = []exemption{
-	// waired-ai/waired#1456. The two inputs that carry a person's chosen
-	// serving window into the pure sizing: the agent's serve tuning passes
-	// ChosenWindow, and the pickers pass Window so a row is priced at the
-	// window being looked at. Both writers land with the agent half of
-	// #1456; the contract had to go first on its own
-	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2).
+	// waired-ai/waired#1456. ChosenWindow was here too and is paid: the
+	// serve tuning now passes a person's chosen window into the sizing.
+	// What is left is the picker side — a row priced at the window being
+	// looked at — which lands with the surfaces that offer the choice
+	// (waired-ai/waired#1359).
 	//
-	// Until then both are 0 everywhere, which is exactly the behaviour
-	// this package had before the fields existed — the coding window for
-	// every host and every row — so the published contract is inert, not
-	// wrong. Delete these two entries in the PR that writes them.
-	{reflect.TypeFor[hostfit.OllamaWindowRequest](), "ChosenWindow",
-		"the serving window a person chose; the serve tuning writes it with the agent half of waired-ai/waired#1456"},
+	// Until then it is 0 everywhere, which is exactly the behaviour this
+	// package had before the field existed: the coding window for every
+	// row. The published contract is inert, not wrong. Delete this entry
+	// in the PR that writes it.
 	{reflect.TypeFor[hostfit.ModelProjection](), "Window",
 		"the window a catalog row is priced at; the pickers write it with the agent half of waired-ai/waired#1456"},
 	{reflect.TypeFor[modelrank.PickInput](), "Window",
