@@ -162,9 +162,26 @@ func availFloorMB(totalMB uint64) uint64 {
 	return floor
 }
 
-// shortOfMemory reports whether what is left has fallen under availFloorMB.
-// Unknown numbers are not a shortage: a reading nobody has cannot be low.
-func shortOfMemory(f Facts) bool {
+// shortOfMemory reports whether this host has run short.
+//
+// On linux and windows that is what is left against availFloorMB. Unknown
+// numbers are not a shortage: a reading nobody has cannot be low.
+//
+// macOS is asked a different question, because its availability figure does
+// not answer this one. kern.memorystatus_level is jetsam's accounting, and
+// it does not fall the way MemAvailable and AvailPhys do: measured on
+// 2026-09-20, a 16 GiB mac mini with 40 GB allocated and swapping at
+// 300-500 MB/s still reported 36% available, five times the floor. A gate on
+// that number can never close, so on macOS the shortage is the system's own
+// statement that it has started reclaiming — pressure level WARN or above.
+//
+// That is a weaker gate than the other two, and it is why the surge term
+// carries more of the decision there. It is still a real gate: the same host
+// at rest reports level 1 with 70% free, and level 1 never reaches here.
+func shortOfMemory(goos string, f Facts) bool {
+	if goos == "darwin" {
+		return f.DarwinErr == nil && f.DarwinLevel >= 2
+	}
 	if f.TotalMB == 0 || f.AvailMB == 0 {
 		return false
 	}
@@ -249,7 +266,7 @@ func levelFrom(goos string, f Facts) (Level, error) {
 	if reported == LevelCritical {
 		return LevelCritical, nil
 	}
-	if shortOfMemory(f) {
+	if shortOfMemory(goos, f) {
 		if swapSurging(f) {
 			return LevelCritical, nil
 		}

@@ -60,6 +60,17 @@ func TestLevelFrom(t *testing.T) {
 			Facts{AvailMB: 900, TotalMB: macTotal, DarwinLevel: 2,
 				SwapOutTotalMB: 3282.8, SwapOutMBPerSec: 0},
 			LevelWarn, false},
+		// Measured on 2026-09-20: a 16 GiB mac mini 40 GB into a squeeze,
+		// swapping at 300-500 MB/s, still reporting 36% available. The
+		// availability figure cannot gate anything on macOS, so the gate
+		// there is the system's own WARN.
+		{"darwin: 40 GB allocated on a 16 GiB host, swapping hard", "darwin",
+			Facts{AvailMB: 5898, TotalMB: macTotal, DarwinLevel: 2, SwapOutMBPerSec: 430},
+			LevelCritical, false},
+		// And the same rate at rest, where macOS says level 1, must not fire.
+		{"CONTRACT: darwin, swapping hard but the system says it is fine", "darwin",
+			Facts{AvailMB: macAvail, TotalMB: macTotal, DarwinLevel: 1, SwapOutMBPerSec: 430},
+			LevelNormal, false},
 		// CONTRACT: the busiest healthy host measured - 84% of memory in use,
 		// and the highest page-out rate any healthy host reached.
 		{"CONTRACT: windows, 84% used and paging a little", "windows",
