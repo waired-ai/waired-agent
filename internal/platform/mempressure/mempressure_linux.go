@@ -3,6 +3,7 @@ package mempressure
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -57,18 +58,77 @@ func selfCgroupPressurePath() string {
 }
 
 func (s *linuxSampler) facts() Facts {
+	f := Facts{SwapOutTotalMB: swapOutTotalMB(), SwapOutMBPerSec: -1}
+	f.AvailMB, f.TotalMB = availTotalMB()
 	if s.err != nil {
-		return Facts{LinuxErr: s.err}
+		f.LinuxErr = s.err
+		return f
 	}
 	b, err := os.ReadFile(s.path)
 	if err != nil {
-		return Facts{LinuxErr: fmt.Errorf("mempressure: read %s: %w", s.path, err)}
+		f.LinuxErr = fmt.Errorf("mempressure: read %s: %w", s.path, err)
+		return f
 	}
 	some, full, err := parsePressure(b)
 	if err != nil {
-		return Facts{LinuxErr: err}
+		f.LinuxErr = err
+		return f
 	}
-	return Facts{LinuxSomeAvg10: some, LinuxFullAvg10: full}
+	f.LinuxSomeAvg10, f.LinuxFullAvg10 = some, full
+	return f
+}
+
+// availTotalMB reads MemAvailable and MemTotal. MemAvailable rather than
+// MemFree: free memory on Linux is the memory nobody has found a use for,
+// and a host with 80 GB of page cache has almost none of it.
+func availTotalMB() (avail, total uint64) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		key, rest, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		kb, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "MemAvailable":
+			avail = kb / 1024
+		case "MemTotal":
+			total = kb / 1024
+		}
+	}
+	return avail, total
+}
+
+// swapOutTotalMB is pswpout, the pages written to swap since boot, in MB.
+// Monotonic, which is what the rate wants: swap freed later does not undo
+// the writing. -1 when /proc/vmstat cannot be read.
+func swapOutTotalMB() float64 {
+	b, err := os.ReadFile("/proc/vmstat")
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		name, rest, ok := strings.Cut(line, " ")
+		if !ok || name != "pswpout" {
+			continue
+		}
+		pages, err := strconv.ParseUint(strings.TrimSpace(rest), 10, 64)
+		if err != nil {
+			return -1
+		}
+		return float64(pages) * float64(os.Getpagesize()) / (1 << 20)
+	}
+	return -1
 }
 
 func (s *linuxSampler) close() error { return nil }
