@@ -158,6 +158,9 @@ func (p *agentInferenceProvider) resumeAfterOutOfMemory(because string) bool {
 	if p.servingEngine() == catalog.RuntimeVLLM {
 		p.noteParked(parkCauseNone)
 		p.setVLLMParked(false)
+		// The bootstrap names the build again if it is still the one
+		// that does not fit; a new choice has no record yet.
+		p.vllmBlocked.Store(nil)
 		if a, ok := p.vllmAdapter().(interface{ ClearFailure() }); ok {
 			a.ClearFailure()
 		}

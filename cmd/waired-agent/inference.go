@@ -1987,6 +1987,9 @@ type agentInferenceProvider struct {
 	// (vllm_switch.go, waired-agent#1515).
 	vllmServing    atomic.Pointer[vllmServingModel]
 	vllmDispatched vllmDispatched
+	// vllmBlocked is the build whose failed start holds the vLLM engine
+	// off (vllm_load_failure.go, waired-agent#1515).
+	vllmBlocked atomic.Pointer[vllmBlockedLoad]
 	// engineBootstrapOnce latches once the post-start bootstrap (bundled /
 	// preferred model, backend probe, tuning verify) has run. The engine
 	// START stays re-entrant — that is what adopts a late install — but the

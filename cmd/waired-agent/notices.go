@@ -146,7 +146,7 @@ func (p *agentInferenceProvider) publishLoadFailureNotices(ctx context.Context) 
 // different model — the notice stops being published and lapses with nothing
 // having to notice.
 func (p *agentInferenceProvider) loadFailureNotices(ctx context.Context) []notice.Notice {
-	rec, blocked := p.loadIsBlocked()
+	rec, blocked := p.engineLoadIsBlocked()
 	if !blocked {
 		return nil
 	}

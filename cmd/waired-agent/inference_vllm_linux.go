@@ -725,7 +725,7 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		if rec, blocked := p.vllmLoadBlocked(ctx, manifest, variant, shape); blocked {
 			p.logger.Info("vllm bootstrap: this computer already could not start this model in this configuration; not starting it again",
 				"model", manifest.ModelID, "variant", variant.VariantID, "reason", rec.Reason, "failed_at", rec.FailedAt)
-			p.parkVLLMForOutOfMemory(rec.Reason)
+			p.parkVLLMForOutOfMemory(p.vllmBlockKey(manifest, variant, shape), rec.Reason)
 			release()
 			return
 		}
