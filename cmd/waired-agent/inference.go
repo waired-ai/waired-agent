@@ -3174,8 +3174,10 @@ type inferenceSubsystemFacts struct {
 	// catalog has a row for it". ModelState is that row's lifecycle
 	// state, meaningless unless ModelKnown.
 	// WeightsDownloading: no adapter yet, on a vLLM host whose chosen
-	// model is downloading (waired-agent#1515).
+	// model is downloading (waired-agent#1515). ChosenAbsent: the chosen
+	// model's weights are not on disk, downloading or not.
 	WeightsDownloading bool
+	ChosenAbsent       bool
 	HasActive          bool
 	ModelKnown         bool
 	ModelState         string
@@ -3290,6 +3292,12 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// as "downloading or loading its model"; `starting` said a start
 		// was imminent for the length of a 23 GB download.
 		return signer.SubsystemStateLoading
+	case f.EngineInstalledNoAdapter && f.HasActive && f.ChosenAbsent:
+		// Chosen, not on disk, and nothing fetching it — its download was
+		// cancelled, and nothing else here can answer (waired-agent#1515).
+		// No start is coming, so `starting` would wait for ever;
+		// awaiting_model is this state's definition word for word.
+		return signer.SubsystemStateAwaitingModel
 	case f.EngineInstalledNoAdapter && f.HasActive:
 		// The engine is installed and a model is chosen, and the adapter
 		// has not been built yet — a bootstrap is expected, which is what
@@ -3347,6 +3355,7 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 		// (waired-agent#1298).
 		f.EngineInstalledNoAdapter = engineUsableOnHost(p.servingEngine(), hw, p.ollamaUsable, p.vllmUsable)
 		f.WeightsDownloading = p.vllmTargetDownloading()
+		f.ChosenAbsent = p.vllmChosenAbsent()
 	}
 	if st.Active != nil {
 		f.HasActive = true

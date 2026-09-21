@@ -178,6 +178,24 @@ func (d *vllmDispatched) forget(model string) {
 	}
 }
 
+// vllmChosenAbsent reports whether, on a vLLM host, the model chosen for this
+// computer is not on disk.
+func (p *agentInferenceProvider) vllmChosenAbsent() bool {
+	if p.servingEngine() != catalog.RuntimeVLLM || p.store == nil {
+		return false
+	}
+	m, ok := p.preferredManifest()
+	if !ok {
+		return false
+	}
+	st, err := p.store.Load()
+	if err != nil {
+		return false
+	}
+	ms := st.Models[m.ModelID]
+	return ms.State != catalog.ModelStateReady || ms.LocalPath == "" || !dirExists(ms.LocalPath)
+}
+
 // vllmTargetDownloading reports whether the model chosen for this computer
 // is downloading right now on a vLLM host — the state that reads "loading"
 // while nothing answers yet.
