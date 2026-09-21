@@ -129,6 +129,12 @@ type Manifest struct {
 	// the values arrive with waired-ai/waired-agent#1349. Empty = no
 	// default recorded, and callers keep choosing as they do today.
 	DefaultVariant map[string]string `json:"default_variant,omitempty"`
+
+	// Provenance says where the manifest came from. Empty is the bundled
+	// catalog; ProvenanceCustom is a model a person imported through the
+	// console (waired-ai/waired#1473), which reaches the agent from the
+	// control plane and is held to ValidateCustomManifest.
+	Provenance string `json:"provenance,omitempty"`
 }
 
 // RopeScalingYaRN is the only rope scaling method the catalog carries.
@@ -351,6 +357,16 @@ type Variant struct {
 	// (waired-ai/waired-agent#1423). Only a build ollama serves carries
 	// one: vLLM batches the same models.
 	MaxParallel int `json:"max_parallel,omitempty"`
+
+	// VLLMToolCallParser and VLLMReasoningParser name the parsers vLLM is
+	// started with (--tool-call-parser / --reasoning-parser) for this
+	// build. Only a custom model sets them today: the bundled builds' tool
+	// parser is chosen by model id in the agent, and a custom model has no
+	// row there. vLLM chooses no parser by itself (vllm-project/vllm#33894
+	// is not planned), and without one a request carrying tools gets a
+	// 400. Empty = none. waired-ai/waired#1480.
+	VLLMToolCallParser  string `json:"vllm_tool_call_parser,omitempty"`
+	VLLMReasoningParser string `json:"vllm_reasoning_parser,omitempty"`
 }
 
 // MTPDraftTokens is the number of tokens the MTP draft proposes per step
@@ -649,6 +665,19 @@ func LookupByAlias(name string, manifests []Manifest) (Manifest, bool) {
 //   - max_parallel ≥ 0, and nonzero only on a build ollama alone serves (waired-ai/waired-agent#1423)
 //   - context_length > 0
 func (m *Manifest) Validate() error {
+	return m.validate(false)
+}
+
+// validate is Validate's body. relaxed allows the three numbers a person
+// cannot supply for a model they import — quality_tier, param_count and
+// quantization_tier — to be 0, which every reader already takes as
+// "unknown", ranked lowest. ValidateCustomManifest is its only caller with
+// relaxed set; the bundled catalog is always held to the full rule.
+func (m *Manifest) validate(relaxed bool) error {
+	minTier := 1
+	if relaxed {
+		minTier = 0
+	}
 	if m.ModelID == "" {
 		return errors.New("manifest: model_id required")
 	}
@@ -659,14 +688,14 @@ func (m *Manifest) Validate() error {
 		if len(v.RuntimeSupport) == 0 {
 			return fmt.Errorf("manifest %s variant %d: runtime_support must list at least one engine", m.ModelID, i)
 		}
-		if v.QualityTier < 1 || v.QualityTier > 100 {
-			return fmt.Errorf("manifest %s variant %s: quality_tier must be in [1, 100], got %d", m.ModelID, v.VariantID, v.QualityTier)
+		if v.QualityTier < minTier || v.QualityTier > 100 {
+			return fmt.Errorf("manifest %s variant %s: quality_tier must be in [%d, 100], got %d", m.ModelID, v.VariantID, minTier, v.QualityTier)
 		}
-		if v.ParamCount <= 0 {
-			return fmt.Errorf("manifest %s variant %s: param_count must be > 0, got %d", m.ModelID, v.VariantID, v.ParamCount)
+		if v.ParamCount < int64(minTier) {
+			return fmt.Errorf("manifest %s variant %s: param_count must be ≥ %d, got %d", m.ModelID, v.VariantID, minTier, v.ParamCount)
 		}
-		if v.QuantizationTier < 1 || v.QuantizationTier > 8 {
-			return fmt.Errorf("manifest %s variant %s: quantization_tier must be in [1, 8], got %d", m.ModelID, v.VariantID, v.QuantizationTier)
+		if v.QuantizationTier < minTier || v.QuantizationTier > 8 {
+			return fmt.Errorf("manifest %s variant %s: quantization_tier must be in [%d, 8], got %d", m.ModelID, v.VariantID, minTier, v.QuantizationTier)
 		}
 		switch v.Format {
 		case FormatSafetensors:
