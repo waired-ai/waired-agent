@@ -6,8 +6,10 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 	"github.com/waired-ai/waired-agent/proto/disco"
 	"github.com/waired-ai/waired-agent/proto/frame"
+	"github.com/waired-ai/waired-agent/proto/gguf"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/modelrank"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -178,6 +180,40 @@ var receiveOnly = []exemption{
 		"CP-injected per recipient at map assembly from the per-model routing choice (waired-ai/waired#1477)"},
 	{reflect.TypeFor[signer.InferenceState](), "CustomModelsRevision",
 		"CP-injected on the self entry from the account's and team's custom-model sets (waired-ai/waired#1476)"},
+	// scoring.ArchConfig moved into proto for custom-model import
+	// (waired-ai/waired#1476). It is the subset of a Hugging Face
+	// config.json the formulas read: decoded from the model's own file, never
+	// assembled field by field.
+	{reflect.TypeFor[scoring.ArchConfig](), "FullAttentionInterval",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "HeadDim",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "HiddenSize",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "IndexerHeadDim",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "IndexerKVHeads",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "LayerTypes",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "MTPNumHiddenLayers",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "MaxPositionEmbeddings",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumAttentionHeads",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumExperts",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumExpertsPerTok",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumHiddenLayers",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumLocalExperts",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "SlidingWindow",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "VocabSize",
+		"decoded from a Hugging Face config.json"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -186,6 +222,25 @@ var receiveOnly = []exemption{
 // its own parsed structs. guard() verifies the claim: an entry here
 // whose field nothing under proto/ writes fails.
 var producedInProto = []exemption{
+	// The GGUF reader and the catalog formulas moved into proto for
+	// custom-model import (waired-ai/waired#1476); these are what they
+	// compute.
+	{reflect.TypeFor[scoring.ArchConfig](), "NumKeyValueHeads",
+		"decoded from config.json, and defaulted to the attention heads by EstimateKVFromConfig"},
+	{reflect.TypeFor[scoring.KVEstimate](), "BytesPerTokenFP16",
+		"the estimate EstimateKVFromConfig / EstimateKVFromGGUF compute"},
+	{reflect.TypeFor[scoring.KVEstimate](), "FullAttnLayers",
+		"the estimate EstimateKVFromConfig / EstimateKVFromGGUF compute"},
+	{reflect.TypeFor[scoring.Quant](), "BPW",
+		"the quantization table in quant.go"},
+	{reflect.TypeFor[scoring.Quant](), "Tier",
+		"the quantization table in quant.go"},
+	{reflect.TypeFor[gguf.Header](), "Complete",
+		"set by the header decoder"},
+	{reflect.TypeFor[gguf.Header](), "Tensors",
+		"set by the header decoder"},
+	{reflect.TypeFor[gguf.ValueLocation](), "Offset",
+		"set by the header decoder"},
 	{reflect.TypeFor[hostfit.Presentation](), "PricedWindow",
 		"the window a projected row was priced at, written by ProjectModelFrom (waired-ai/waired#1456)"},
 	{reflect.TypeFor[hostfit.Verdict](), "NeedMB",

@@ -214,7 +214,7 @@ func renderCatalogBlock(manifests []catalog.Manifest) string {
 	b.WriteString("### 全バリアント（数値）\n\n")
 	b.WriteString("vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。")
 	b.WriteString("weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM で動かす場合、min RAM は ollama で動かす場合の下限。")
-	b.WriteString("数値の導出根拠は dev-docs の「推論層」と `internal/catalog/scoring/` を参照。\n\n")
+	b.WriteString("数値の導出根拠は dev-docs の「推論層」と `proto/catalog/scoring/` を参照。\n\n")
 	for _, es := range engineSections {
 		fmt.Fprintf(&b, "#### %s\n\n", es.head)
 		b.WriteString("**Dense**\n\n")

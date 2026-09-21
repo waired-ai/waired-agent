@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 // VariantTier is one variant's tier assignment plus the inputs behind it, so a

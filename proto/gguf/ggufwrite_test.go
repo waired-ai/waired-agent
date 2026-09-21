@@ -85,13 +85,3 @@ func (b *headerBuilder) bytes() []byte {
 	out.Write(b.tensors.Bytes())
 	return out.Bytes()
 }
-
-// The GGUF value type codes this writer emits, as numbered by the
-// specification. The reader that defines them moved to proto/gguf; the
-// writer is test-only and keeps its own copy.
-const (
-	typeInt32   = 5
-	typeFloat32 = 6
-	typeString  = 8
-	typeArray   = 9
-)

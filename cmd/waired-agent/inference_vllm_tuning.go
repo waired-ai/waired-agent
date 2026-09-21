@@ -18,11 +18,11 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/version"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 

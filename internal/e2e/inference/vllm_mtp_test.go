@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 // TestVLLMSpeculativeMTP (waired-ai/waired#1432): a catalog build with

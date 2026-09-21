@@ -78,3 +78,60 @@ func TestReadRejectsWhatIsNotAHeader(t *testing.T) {
 		t.Error("a truncated header must be an error")
 	}
 }
+
+// TestReadPrefix covers the control plane's use: the first few kilobytes of
+// a GGUF, fetched with a Range request, cut somewhere inside the tokenizer
+// arrays (waired-ai/waired#1476).
+func TestReadPrefix(t *testing.T) {
+	var b headerBuilder
+	b.text("general.architecture", "llama")
+	b.u32("llama.block_count", 28)
+	b.u32("llama.context_length", 40960)
+	b.u32("llama.attention.head_count_kv", 8)
+	b.strs("tokenizer.ggml.tokens", []string{strings.Repeat("x", 4000), strings.Repeat("y", 4000)})
+	b.u32("llama.after_tokens", 1)
+	b.tensor("token_embd.weight", 12, 2048, 151936)
+	full := b.bytes()
+
+	h, err := ReadPrefix(bytes.NewReader(full))
+	if err != nil || !h.Complete {
+		t.Fatalf("whole header: complete=%v err=%v", h.Complete, err)
+	}
+	if full, err := Read(bytes.NewReader(full)); err != nil || !full.Complete {
+		t.Fatalf("Read of a whole header: complete=%v err=%v", full.Complete, err)
+	}
+
+	cut := full[:2048] // inside the first token string
+	h, err = ReadPrefix(bytes.NewReader(cut))
+	if err != nil {
+		t.Fatalf("ReadPrefix of a cut header: %v", err)
+	}
+	if h.Complete {
+		t.Error("a cut header reported complete")
+	}
+	if h.Architecture() != "llama" {
+		t.Errorf("architecture = %q", h.Architecture())
+	}
+	if n, ok := h.ArchUint("context_length"); !ok || n != 40960 {
+		t.Errorf("context_length = %d, %v", n, ok)
+	}
+	if n, ok := h.ArchUint("attention.head_count_kv"); !ok || n != 8 {
+		t.Errorf("head_count_kv = %d, %v", n, ok)
+	}
+	if _, ok := h.ArchUint("after_tokens"); ok {
+		t.Error("a key past the cut was reported")
+	}
+	if len(h.Tensors) != 0 {
+		t.Errorf("tensors = %d, want none from a cut header", len(h.Tensors))
+	}
+
+	if _, err := Read(bytes.NewReader(cut)); err == nil {
+		t.Error("Read accepted a cut header")
+	}
+	if _, err := ReadPrefix(strings.NewReader("NOTAGGUF")); !errors.Is(err, ErrNotGGUF) {
+		t.Errorf("wrong magic: %v, want ErrNotGGUF", err)
+	}
+	if _, err := ReadPrefix(bytes.NewReader(full[:3])); err == nil {
+		t.Error("a stream shorter than the magic was accepted")
+	}
+}
