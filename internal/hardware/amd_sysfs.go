@@ -36,9 +36,9 @@ import (
 // /sys/class/drm it finds nothing, which is also why it needs no build
 // tag: on Windows and macOS the paths simply are not there.
 
-// amdSysfsRoot is where readAMDSysfs looks. A variable only so a test of
-// detectAMD can point it at a fake tree.
-var amdSysfsRoot = "/"
+// sysfsRoot is where the sysfs readers look. A variable only so a test of
+// a detector can point it at a fake tree.
+var sysfsRoot = "/"
 
 // readAMDSysfs lists every GPU bound to the amdgpu driver.
 func readAMDSysfs(root string) []GPU {

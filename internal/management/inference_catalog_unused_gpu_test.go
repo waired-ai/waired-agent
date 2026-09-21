@@ -25,3 +25,17 @@ func TestHostFromProfile_UnusedGPUs(t *testing.T) {
 		t.Errorf("UnusedGPUModels = %v, want %v", host.UnusedGPUModels, want)
 	}
 }
+
+// A card whose memory was not read goes to its own list (#1483): the
+// engine may use it, and the surfaces word the two differently.
+func TestHostFromProfile_UnreadGPUs(t *testing.T) {
+	host := hostFromProfile(hardware.Profile{
+		RAMTotalGB: 64,
+		UnusedGPUs: []hardware.UnusedGPU{
+			{GPU: hardware.GPU{Vendor: "intel", Model: "Intel GPU 8086:e20b"}, MemoryUnread: true},
+		},
+	})
+	if len(host.UnusedGPUModels) != 0 || !reflect.DeepEqual(host.UnreadGPUModels, []string{"Intel GPU 8086:e20b"}) {
+		t.Errorf("Unused=%v Unread=%v, want the card in the unread list only", host.UnusedGPUModels, host.UnreadGPUModels)
+	}
+}

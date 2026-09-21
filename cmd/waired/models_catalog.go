@@ -58,6 +58,11 @@ type catalogDetailHost struct {
 	// that does not contradict the user's own device list.
 	UnusedGPUModels []string `json:"unused_gpu_models"`
 
+	// UnreadGPUModels are GPUs whose memory size was not read, so models
+	// are sized for the CPU although the engine may use them
+	// (waired-agent#1483).
+	UnreadGPUModels []string `json:"unread_gpu_models"`
+
 	// UnifiedMemory says RAMTotalGB and VRAMTotalMB are the same bytes,
 	// so a sentence must never add them.
 	UnifiedMemory bool `json:"unified_memory"`
@@ -208,9 +213,21 @@ func formatCatalogDetail(c catalogDetailResp) string {
 			fmt.Fprintf(&b, " %d GB VRAM", (c.Host.VRAMTotalMB+512)/1024)
 		}
 		fmt.Fprintf(&b, " / %d GB RAM", c.Host.RAMTotalGB)
-	} else if len(c.Host.UnusedGPUModels) > 0 {
-		fmt.Fprintf(&b, "%d GB RAM (runs on the CPU; the engine does not use %s by default)",
-			c.Host.RAMTotalGB, strings.Join(c.Host.UnusedGPUModels, ", "))
+	} else if len(c.Host.UnusedGPUModels)+len(c.Host.UnreadGPUModels) > 0 {
+		// "runs on the CPU" only where it is true: a GPU whose memory was
+		// not read may still be used by the engine, so the sizing is what
+		// the line can promise.
+		clauses := []string{"runs on the CPU"}
+		if len(c.Host.UnreadGPUModels) > 0 {
+			clauses[0] = "models sized for the CPU"
+		}
+		if len(c.Host.UnusedGPUModels) > 0 {
+			clauses = append(clauses, fmt.Sprintf("the engine does not use %s by default", strings.Join(c.Host.UnusedGPUModels, ", ")))
+		}
+		if len(c.Host.UnreadGPUModels) > 0 {
+			clauses = append(clauses, fmt.Sprintf("the memory size of %s is not known", strings.Join(c.Host.UnreadGPUModels, ", ")))
+		}
+		fmt.Fprintf(&b, "%d GB RAM (%s)", c.Host.RAMTotalGB, strings.Join(clauses, "; "))
 	} else {
 		fmt.Fprintf(&b, "%d GB RAM (no GPU)", c.Host.RAMTotalGB)
 	}

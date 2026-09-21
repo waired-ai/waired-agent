@@ -58,6 +58,14 @@ Accepted。waired-agent#1485。
    KFD はそれを報告する。これを BIOS の UMA 上限で抑えた値を予算とする。
    加算するのはカーブアウトだけ。KFD が無いときは今までどおりカーブアウト。
 
+7. **Intel も同じ形にする**（#1483、2026-09-21 に追記）。単体カードの chip は
+   カーネルのプラットフォーム名（`bmg`、`dg2`）で、NVIDIA の compute capability や
+   AMD の ISA ターゲットに当たる。内蔵か単体かは、カーネルの PCI ID 表の両側
+   （単体の群と内蔵の群）を写して決める。表に無い ID は「未知」のまま残す。
+   単体カードのメモリ容量は、ドライバのクエリ ioctl を `sudo waired init` が読んで
+   永続化する。読めていないカードは、ホストの記述には入れない
+   （docs/knowledges/20260921/1700-intel-gpu-facts-and-where-they-live.md）。
+
 ## Consequences
 
 - AMD のディスクリート機の鍵が CPU の名前でなくなる。既存の store に AMD の

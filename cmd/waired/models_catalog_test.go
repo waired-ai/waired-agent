@@ -76,6 +76,22 @@ func TestFormatCatalogDetail_UnusedIGPUIsNamed(t *testing.T) {
 	}
 }
 
+// A card whose memory was not read may still be used by the engine, so
+// the host line promises the sizing, not where it runs (waired-agent#1483).
+func TestFormatCatalogDetail_UnreadGPUIsNotSaidToBeUnused(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 64
+	c.Host.UnreadGPUModels = []string{"Intel GPU 8086:e20b"}
+	out := formatCatalogDetail(c)
+	want := "Host: 64 GB RAM (models sized for the CPU; the memory size of Intel GPU 8086:e20b is not known)"
+	if !strings.Contains(out, want) {
+		t.Errorf("host line missing %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "runs on the CPU") {
+		t.Errorf("host line says the host runs on the CPU, which the engine may not:\n%s", out)
+	}
+}
+
 func TestFormatCatalogDetail_OllamaHostShowsRAM(t *testing.T) {
 	c := catalogDetailResp{Engine: "ollama"}
 	c.Host.RAMTotalGB = 16

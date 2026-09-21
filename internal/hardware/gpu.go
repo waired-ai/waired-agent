@@ -41,7 +41,7 @@ var vendorDetectors = []VendorDetector{
 	detectNvidia, // gpu_nvidia.go (nvidia-smi chain + NVML / OS inventory)
 	detectAMD,    // gpu_amd.go (rocm-smi + Windows registry fallback)
 	detectApple,  // gpu_apple_darwin.go (system_profiler) + gpu_apple_other.go (stub)
-	// Future: detectIntel (xpu-smi) — append here.
+	detectIntel,  // gpu_intel.go (sysfs + render-node query on Linux, registry on Windows)
 }
 
 // composeDetectors runs every detector and OR-merges their results.

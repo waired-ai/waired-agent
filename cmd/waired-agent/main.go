@@ -1275,7 +1275,9 @@ func run(ctx context.Context, args []string) error {
 					// behind, which this process cannot take for itself
 					// (waired-agent#459).
 					hardware.WithPersistedIntegration(
-						persistedGPUIntegration(filepath.Dir(agentJSONPath))))
+						persistedGPUIntegration(filepath.Dir(agentJSONPath))),
+					hardware.WithPersistedVRAM(
+						persistedGPUVRAM(filepath.Dir(agentJSONPath))))
 				_ = hwProfiler.Profile(ctx)
 			}
 

@@ -80,9 +80,17 @@ func TestChipSlug(t *testing.T) {
 			want:     "sm100",
 		},
 		{
-			name:   "an Intel part falls back to the CPU string",
+			// INVERTED by waired-agent#1483. This row expected the CPU
+			// string. An Intel GPU that reaches a key is a card in use,
+			// and the engine uses no Intel iGPU by default, so it is a
+			// discrete card — named by the kernel's platform where the
+			// PCI pair is known (TestChipSlug_Intel) and "unknown" where,
+			// as here, nothing names it. The CPU string would name the
+			// processor under a "discrete-intel-" key, the defect #1485
+			// removed for AMD.
+			name:   "an unnamed Intel card is unknown, not the CPU",
 			vendor: "intel", cpuModel: "Intel(R) Core(TM) Ultra 9 285H",
-			want: "intel-r-core-tm-ultra-9-285h",
+			want: "unknown",
 		},
 		{
 			name: "nothing to name", vendor: "amd", cpuModel: "",

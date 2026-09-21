@@ -198,6 +198,12 @@ type CatalogHost struct {
 	// the user can see in their own device manager.
 	UnusedGPUModels []string `json:"unused_gpu_models,omitempty"`
 
+	// UnreadGPUModels names the GPUs whose memory size could not be read,
+	// so nothing was sized against them (waired-agent#1483 — an Intel
+	// card on Linux before `sudo waired init`). The engine may use them;
+	// a surface must not say the host runs on the CPU.
+	UnreadGPUModels []string `json:"unread_gpu_models,omitempty"`
+
 	// UnifiedMemory says the two figures above are backed by the SAME
 	// bytes. A surface that adds them on such a host counts the memory
 	// twice, which is the double-count waired-ai/waired#1056 decision 1
@@ -701,6 +707,10 @@ func hostFromProfile(hw hardware.Profile) CatalogHost {
 		host.GPUModel = hw.GPUs[0].Model
 	}
 	for _, u := range hw.UnusedGPUs {
+		if u.MemoryUnread {
+			host.UnreadGPUModels = append(host.UnreadGPUModels, gpuLabel(u.GPU))
+			continue
+		}
 		host.UnusedGPUModels = append(host.UnusedGPUModels, gpuLabel(u.GPU))
 	}
 	return host

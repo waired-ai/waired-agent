@@ -54,7 +54,8 @@ func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInfe
 	// (#568).
 	prof := hardware.NewProfiler("",
 		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)),
-		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir))).
+		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir)),
+		hardware.WithPersistedVRAM(persistedGPUVRAM(stateDir))).
 		Profile(context.Background())
 	sel, err := setup.SelectBundledModel(setup.BundledModelInputs{
 		Hardware:      prof,

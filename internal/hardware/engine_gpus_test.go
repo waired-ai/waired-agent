@@ -25,10 +25,15 @@ func TestEngineUsesByDefault(t *testing.T) {
 		// Silence keeps a device in use: dropping a GPU on no evidence is
 		// how a GPU host gets profiled as CPU-only (#67).
 		{"amd, nothing read", GPU{Vendor: "amd", Model: "AMD Radeon 780M Graphics"}, "", true},
-		{"intel, nothing read", GPU{Vendor: "intel"}, "", true},
+		{"intel, nothing read, memory known", GPU{Vendor: "intel", VRAMTotalMB: 12288}, "", true},
 		{"amd, evidence but no knowing source", evidenceOnly(GPU{Vendor: "amd"}), "", true},
 		{"amd, known discrete", known(GPU{Vendor: "amd", GFXTarget: "gfx1100"}, false), "", true},
-		{"intel, known discrete", known(GPU{Vendor: "intel"}, false), "", true},
+		{"intel, known discrete, memory known (B580)", known(GPU{Vendor: "intel", PCIID: "8086:e20b", VRAMTotalMB: 12288}, false), "", true},
+		// An Intel card whose memory was not read is left out rather than
+		// described as a GPU with no limit (waired-agent#1483). On Linux
+		// that is the daemon before `sudo waired init` has read it.
+		{"intel, known discrete, memory unread", known(GPU{Vendor: "intel", PCIID: "8086:e20b"}, false), "", false},
+		{"intel, nothing read, memory unread", GPU{Vendor: "intel"}, "", false},
 
 		// Integrated devices the engine uses by default.
 		{"apple silicon", known(GPU{Vendor: "apple"}, true), "Apple M4 Max", true},
@@ -54,8 +59,8 @@ func TestEngineUsesByDefault(t *testing.T) {
 			if got && why != "" {
 				t.Errorf("a used device carries reason %q", why)
 			}
-			if !got && !strings.Contains(why, "OLLAMA_IGPU_ENABLE") {
-				t.Errorf("reason %q does not say how to override", why)
+			if !got && !strings.Contains(why, "OLLAMA_IGPU_ENABLE") && !strings.Contains(why, "sudo waired init") {
+				t.Errorf("reason %q does not say how to change it", why)
 			}
 		})
 	}

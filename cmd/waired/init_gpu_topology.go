@@ -51,6 +51,9 @@ func gpuTopologyFrom(prof hardware.Profile, now func() time.Time) (state.GPUTopo
 		devices = append(devices, state.GPUTopologyDevice{
 			PCIID:      g.PCIID,
 			Integrated: g.Integrated,
+			// Carried for the parts whose size is also behind the render
+			// node: an Intel discrete card on Linux (waired-agent#1483).
+			VRAMTotalMB: g.VRAMTotalMB,
 		})
 	}
 	if len(devices) == 0 {

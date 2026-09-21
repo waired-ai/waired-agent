@@ -70,6 +70,14 @@ type GPUTopologyDevice struct {
 	// finding that the part is discrete, which is why the record holds
 	// entries rather than only a list of integrated pairs.
 	Integrated bool `json:"integrated"`
+
+	// VRAMTotalMB is the device's own memory as read under the elevated
+	// run, 0 where it was not read. It exists for the parts whose size is
+	// behind the render node too: an Intel discrete card on Linux, whose
+	// drivers publish it only through their query ioctls
+	// (waired-agent#1483). The daemon uses it only where its own reading
+	// found nothing.
+	VRAMTotalMB int `json:"vram_total_mb,omitempty"`
 }
 
 // GPUTopologyPath is the on-disk location of the reading.
@@ -121,4 +129,18 @@ func (r GPUTopologyRecord) IntegratedFor(pciID string) (integrated, ok bool) {
 		}
 	}
 	return false, false
+}
+
+// VRAMFor reports the memory the record holds for the device with this
+// PCI pair. ok is false where the record holds none.
+func (r GPUTopologyRecord) VRAMFor(pciID string) (mb int, ok bool) {
+	if pciID == "" {
+		return 0, false
+	}
+	for _, d := range r.Devices {
+		if d.PCIID == pciID && d.VRAMTotalMB > 0 {
+			return d.VRAMTotalMB, true
+		}
+	}
+	return 0, false
 }
