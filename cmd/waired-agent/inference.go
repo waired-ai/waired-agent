@@ -587,7 +587,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		GOOS:             runtime.GOOS,
 		PrimaryGPUVendor: gpuVendor,
 		PrimaryGPUModel:  gpuModel,
-		StrixHaloAPU:     hardware.IsStrixHaloAPU(hwProfile.CPU.Model),
+		StrixHaloAPU:     hardware.StrixHaloHost(&hwProfile),
 	})
 	// The GPUs the engine leaves off by default are out of the list the
 	// plan read (waired-agent#1484); say so once, so a host that runs on

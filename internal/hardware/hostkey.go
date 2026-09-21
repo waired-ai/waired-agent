@@ -129,11 +129,23 @@ func ChipSlug(gpu GPU, cpuModel string) string {
 		// "unified-apple-apple-m4-max".
 		return slugOrUnknown(strings.TrimPrefix(normalizeChipName(cpuModel), "apple "))
 	case "amd":
-		// "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S" -> "ryzen-ai-max-395".
-		// The "+" is a marketing distinction between bins of one part
-		// and disappears with the other punctuation.
-		m := amdGraphicsSuffix.ReplaceAllString(normalizeChipName(cpuModel), "")
-		return slugOrUnknown(strings.TrimPrefix(m, "amd "))
+		// An APU is named by its CPU, because the iGPU IS part of that
+		// part: "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S" ->
+		// "ryzen-ai-max-395" (the "+" is a marketing distinction between
+		// bins of one part and disappears with the other punctuation).
+		//
+		// A discrete card is named by its ISA target, the AMD counterpart
+		// of NVIDIA's compute capability: "gfx1100" for an RX 7900 XTX,
+		// "gfx1201" for an RX 9070 XT. It used to take the CPU string here
+		// too, so an AMD card in an Intel box keyed as
+		// "discrete-amd-intel-r-core-…" and two cards 1.5x apart on
+		// bandwidth shared one key (waired-agent#1485). The PCI pair runs
+		// beside the key and separates the dies further.
+		if amdNamedByCPU(gpu) {
+			m := amdGraphicsSuffix.ReplaceAllString(normalizeChipName(cpuModel), "")
+			return slugOrUnknown(strings.TrimPrefix(m, "amd "))
+		}
+		return slugOrUnknown(gpu.GFXTarget)
 	case "nvidia":
 		// A named single-pool part first. Compute capability is an
 		// ARCHITECTURE, not a part, and for these it is not even one
@@ -164,6 +176,38 @@ func ChipSlug(gpu GPU, cpuModel string) string {
 		return slugOrUnknown(normalizeChipName(cpuModel))
 	}
 }
+
+// amdNamedByCPU reports whether an AMD device is named by the CPU (an
+// APU) rather than by its ISA target (a discrete card).
+//
+// It is named by the gfx target only when something SAYS it is discrete:
+// a known discrete reading, or a target that is not an APU's. Silence
+// keeps today's spelling, the CPU string — which is also what keeps the
+// reference host's key, unified-amd-ryzen-ai-max-395, the same whether
+// or not its integration reading has been taken.
+func amdNamedByCPU(g GPU) bool {
+	if g.IntegratedKnown {
+		return g.Integrated
+	}
+	if g.GFXTarget == "" {
+		return true
+	}
+	_, apu := amdAPUTargets[g.GFXTarget]
+	return apu
+}
+
+// amdAPUTargets are the ISA targets of the GC versions the kernel marks
+// as APUs — derived from the two kernel tables in amd_sysfs.go rather
+// than kept as a third list that could disagree with them.
+var amdAPUTargets = func() map[string]struct{} {
+	out := map[string]struct{}{}
+	for gc := range apuGCVersions {
+		if t := gfxTargetName(gfxTargetVersionForGC[gc]); t != "" {
+			out[t] = struct{}{}
+		}
+	}
+	return out
+}()
 
 // slugOrUnknown reduces a already-normalised name to slug characters.
 func slugOrUnknown(s string) string {

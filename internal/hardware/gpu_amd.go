@@ -9,11 +9,12 @@ import (
 	"time"
 )
 
-// detectAMD probes for AMD GPUs by shelling out to `rocm-smi`. The
-// CSV output is parsed by parseROCmSMICSV. When rocm-smi is not on
-// PATH the function falls back to amdWindowsFallback (which probes
-// the registry on Windows and is a no-op stub on Linux/Darwin) — see
-// gpu_amd_windows.go / gpu_amd_other.go.
+// detectAMD probes for AMD GPUs: first from the kernel's sysfs
+// (amd_sysfs.go — Linux only in practice), then by shelling out to
+// `rocm-smi`, whose CSV output is parsed by parseROCmSMICSV. When
+// neither answers the function falls back to amdWindowsFallback (which
+// probes the registry on Windows and is a no-op stub on Linux/Darwin) —
+// see gpu_amd_windows.go / gpu_amd_unix.go.
 //
 // Falling back to the registry is important for the Windows + Ollama
 // case: Ollama ships its own HIP runtime and most desktop users with
@@ -26,6 +27,14 @@ import (
 // As with detectNvidia, "no device detected" is not an error —
 // nil/zero/nil is returned so CPU-only hosts build a Profile cleanly.
 func detectAMD(ctx context.Context) ([]GPU, Accelerators, error) {
+	// What the kernel publishes comes first: it needs no ROCm install and
+	// no privilege, and it carries the facts rocm-smi's CSV never did
+	// (the gfx target, whether the part is an APU, the KFD pool) —
+	// waired-agent#1485. It finds nothing where there is no
+	// /sys/class/drm, so Windows and macOS go on to the paths below.
+	if gpus := readAMDSysfs(amdSysfsRoot); len(gpus) > 0 {
+		return gpus, Accelerators{ROCm: true}, nil
+	}
 	if _, err := exec.LookPath("rocm-smi"); err == nil {
 		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()

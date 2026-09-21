@@ -148,11 +148,30 @@ func unifiedBandwidthFor(prof *Profile) float64 {
 		return bw
 	}
 	if len(prof.GPUs) > 0 {
-		if p, ok := nvidiaUnifiedPartFor(prof.GPUs[0].Model); ok {
+		g := prof.GPUs[0]
+		if p, ok := nvidiaUnifiedPartFor(g.Model); ok {
 			return p.bandwidthGBs
+		}
+		// The AMD counterpart of the NVIDIA table, keyed on the ISA target
+		// the kernel (or the PCI table) named — for a Strix Halo whose CPU
+		// string does not carry the family name (waired-agent#1485).
+		if strings.EqualFold(g.Vendor, "amd") {
+			if bw, ok := amdUnifiedBandwidthGBs[g.GFXTarget]; ok {
+				return bw
+			}
 		}
 	}
 	return 0
+}
+
+// amdUnifiedBandwidthGBs is the published peak of each AMD integrated
+// part's pool, keyed on its ISA target. Strix Halo is the only entry: it
+// is the only integrated AMD part the engine uses by default
+// (engine_gpus.go), and every Strix Halo SKU shares the 256-bit
+// LPDDR5X-8000 bus (strixHaloBandwidthGBs). Other APUs have no entry on
+// purpose — their bandwidth depends on the RAM installed, not on the part.
+var amdUnifiedBandwidthGBs = map[string]float64{
+	strixHaloGFXTarget: strixHaloBandwidthGBs,
 }
 
 // normalizeChipName lowercases and collapses runs of whitespace so the

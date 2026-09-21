@@ -67,11 +67,37 @@ func TestStrixHaloUMA(t *testing.T) {
 		name         string
 		goos         string
 		amdVRAMMB    int
+		kfdPoolMB    int
 		ramTotalGB   int
 		ramAvailGB   int
 		want         int
 		wantCarveOut int
 	}{
+		// The KFD pool (waired-agent#1485). On Linux 6.15+ an APU whose
+		// GTT is larger than its carve-out puts compute allocations in
+		// GTT, and KFD reports that. AMD's own Linux guidance is exactly
+		// this configuration, and the carve-out alone would publish a
+		// 512 MB budget for a machine that can hold far more.
+		{
+			name: "linux: small carve-out, KFD reports the GTT -> the GTT is the budget, only the carve-out adds",
+			goos: "linux", amdVRAMMB: 512, kfdPoolMB: 60 * 1024, ramTotalGB: 127,
+			want: 60 * 1024, wantCarveOut: 512,
+		},
+		{
+			name: "linux: 96 GB carve-out, KFD reports the carve-out -> unchanged",
+			goos: "linux", amdVRAMMB: 96 * 1024, kfdPoolMB: 96 * 1024, ramTotalGB: 31,
+			want: capMB, wantCarveOut: capMB,
+		},
+		{
+			name: "linux: a KFD pool past the BIOS UMA ceiling is clamped",
+			goos: "linux", amdVRAMMB: 512, kfdPoolMB: 110 * 1024, ramTotalGB: 127,
+			want: capMB, wantCarveOut: 512,
+		},
+		{
+			name: "windows: the KFD figure is a Linux reading and changes nothing",
+			goos: "windows", amdVRAMMB: 512, kfdPoolMB: 60 * 1024, ramTotalGB: 127,
+			want: capMB, wantCarveOut: 0,
+		},
 		{
 			// The real Ryzen AI Max+ 395 carve-out: 96 GB to the iGPU,
 			// only ~31 GB left to the OS.
@@ -163,10 +189,10 @@ func TestStrixHaloUMA(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, carveOut := strixHaloUMA(c.goos, c.amdVRAMMB, c.ramTotalGB, c.ramAvailGB)
+			got, carveOut := strixHaloUMA(c.goos, c.amdVRAMMB, c.kfdPoolMB, c.ramTotalGB, c.ramAvailGB)
 			if got != c.want || carveOut != c.wantCarveOut {
-				t.Errorf("strixHaloUMA(%q, %d, %d, %d) = (%d, %d), want (%d, %d)",
-					c.goos, c.amdVRAMMB, c.ramTotalGB, c.ramAvailGB,
+				t.Errorf("strixHaloUMA(%q, %d, %d, %d, %d) = (%d, %d), want (%d, %d)",
+					c.goos, c.amdVRAMMB, c.kfdPoolMB, c.ramTotalGB, c.ramAvailGB,
 					got, carveOut, c.want, c.wantCarveOut)
 			}
 		})
@@ -183,8 +209,8 @@ func TestStrixHaloUMA_WindowsDivergesFromLinux(t *testing.T) {
 	const carveOutMB = 96 * 1024
 	const ramGB = 31
 
-	linuxUsable, linuxCarveOut := strixHaloUMA("linux", carveOutMB, ramGB, 0)
-	winUsable, winCarveOut := strixHaloUMA("windows", carveOutMB, ramGB, 0)
+	linuxUsable, linuxCarveOut := strixHaloUMA("linux", carveOutMB, 0, ramGB, 0)
+	winUsable, winCarveOut := strixHaloUMA("windows", carveOutMB, 0, ramGB, 0)
 
 	if linuxUsable == winUsable {
 		t.Errorf("both OSes returned usable=%d; the Windows branch is not reached", winUsable)

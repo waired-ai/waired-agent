@@ -308,6 +308,20 @@ type GPU struct {
 	// single-pool part it is the pool, which can be smaller than RAM less
 	// the OS reserve, so it caps the budget.
 	CUDATotalMemMB int `json:"cuda_total_mem_mb,omitempty"`
+
+	// GTTTotalMB is the system memory an AMD device may map through its
+	// GART (amdgpu's mem_info_gtt_total), 0 where not read. Reported for
+	// diagnosis; the budget reads KFDMemMB, which already folds it in.
+	GTTTotalMB int `json:"gtt_total_mb,omitempty"`
+
+	// KFDMemMB is the size of the memory bank the kernel's KFD driver
+	// reports for an AMD device (/sys/class/kfd/.../mem_banks/0), which is
+	// the pool the ROCm stack allocates from, 0 where KFD is absent. On a
+	// discrete card it is the VRAM. On an APU it is the carve-out — or,
+	// on Linux 6.15 and later when the GTT is the larger of the two, the
+	// GTT (amdgpu's apu_prefer_gtt) — so it is the kernel's own answer to
+	// how much of the shared pool the GPU can hold (waired-agent#1485).
+	KFDMemMB int `json:"kfd_mem_mb,omitempty"`
 }
 
 // GPUSummary is the minimal per-device shape suitable for inclusion in
@@ -665,6 +679,11 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 			if d, ok := cudaFactsFor(&prof, i, cudaDevs); ok {
 				prof.GPUs[i].CUDATotalMemMB = d.totalMB
 			}
+		}
+		// An AMD part whose detector read no ISA target (Windows always;
+		// Linux without KFD) is named from its device ID (amd_pci_gfx.go).
+		if prof.GPUs[i].GFXTarget == "" && strings.EqualFold(prof.GPUs[i].Vendor, "amd") {
+			prof.GPUs[i].GFXTarget = amdGFXTargetForPCIID(prof.GPUs[i].PCIID)
 		}
 	}
 	// The per-device "is this one pool?" reading runs before the UMA
