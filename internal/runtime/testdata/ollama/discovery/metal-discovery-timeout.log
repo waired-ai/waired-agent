@@ -1,0 +1,7 @@
+# provenance: verbatim from ollama 0.34.2's engine.log on a Mac mini (M4, 16 GB), 2026-09-21, the first start right after the bundled engine moved from 0.33.3 to 0.34.2: its GPU discovery timed out and it kept no GPU, although the model it then loaded ran on Metal. Nothing here is synthetic.
+time=2026-09-21T21:31:31.060+09:00 level=INFO source=routes.go:2000 msg="Listening on 127.0.0.1:9475 (version 0.34.2)"
+time=2026-09-21T21:31:31.062+09:00 level=INFO source=runner.go:60 msg="discovering available GPUs..."
+time=2026-09-21T21:32:01.065+09:00 level=WARN source=runner.go:584 msg="llama-server GPU discovery watchdog timed out" OLLAMA_LIBRARY_PATH="[/Library/Application Support/waired/runtimes/ollama/bin]" extra_envs=map[] error="context deadline exceeded"
+time=2026-09-21T21:32:01.065+09:00 level=INFO source=runner.go:522 msg="failure during llama-server GPU discovery" OLLAMA_LIBRARY_PATH="[/Library/Application Support/waired/runtimes/ollama/bin]" extra_envs=map[] error="context deadline exceeded" detail=""
+time=2026-09-21T21:32:01.066+09:00 level=INFO source=types.go:50 msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu libdirs=ollama driver="" pci_id="" type="" total="16.0 GiB" available="9.2 GiB"
+time=2026-09-21T21:32:01.066+09:00 level=INFO source=routes.go:2050 msg="vram-based default context" total_vram="0 B" default_num_ctx=4096

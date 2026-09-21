@@ -1,0 +1,5 @@
+# provenance: verbatim from ollama 0.34.2's engine.log on a Mac mini (M4, 16 GB), 2026-09-21, the second start after the bundled engine moved from 0.33.3 to 0.34.2. Nothing here is synthetic.
+time=2026-09-21T21:34:36.503+09:00 level=INFO source=routes.go:2000 msg="Listening on 127.0.0.1:9475 (version 0.34.2)"
+time=2026-09-21T21:34:36.504+09:00 level=INFO source=runner.go:60 msg="discovering available GPUs..."
+time=2026-09-21T21:34:36.802+09:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=Metal compute=0.0 name=MTL0 description="Apple M4" libdirs="" driver=0.0 pci_id="" type=iGPU total="11.8 GiB" available="11.8 GiB"
+time=2026-09-21T21:34:36.802+09:00 level=INFO source=routes.go:2050 msg="vram-based default context" total_vram="11.8 GiB" default_num_ctx=4096

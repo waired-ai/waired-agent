@@ -356,7 +356,17 @@ package runtime
 // that rule so the host is described by the GPUs the engine will actually
 // run on (waired-agent#1484); if upstream admits another gfx target, add
 // it to ollamaDefaultIntegratedROCmGFXTargets there, and if it starts
-// admitting Vulkan iGPUs, the copy has to change shape.
+// admitting Vulkan iGPUs, the copy has to change shape. The engine's own
+// start-up log is now checked against that copy (waired-agent#1513): a
+// "differs from waired's prediction" WARN on a host after a bump points at
+// this rule.
+//
+// AT EVERY BUMP, also re-read what ParseInferenceCompute
+// (ollama_discovery_log.go) reads: server/routes.go Serve's "Listening on"
+// and "vram-based default context" lines and their order around the
+// device block, discover/types.go LogDetails's "inference compute" fields,
+// and discover/runner.go's "dropping integrated GPU" message. A change
+// there makes the check report "not read" rather than compare.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
 const OllamaPinnedVersion = "0.34.2"

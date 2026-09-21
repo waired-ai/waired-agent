@@ -773,7 +773,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// without its cache (#361).
 		engineVersionProbe: engineVersionProbe,
 		bootPlan: engineBootstrapPlan{
-			backend:      backendPlan,
+			backend: backendPlan,
+			prediction: enginePrediction{
+				gpus:        append([]hardware.GPU(nil), hwProfile.GPUs...),
+				setAside:    append([]hardware.UnusedGPU(nil), hwProfile.UnusedGPUs...),
+				igpuEnable:  igpuEnableFor(backendPlan.Env, os.Getenv),
+				rocmOverlay: infruntime.WantsROCmOverlay(setup.OllamaBackendInputs(runtime.GOOS, hwProfile)),
+			},
 			tuned:        ollamaTuned,
 			tune:         ollamaTune,
 			tuneTag:      ollamaTuneTag,
