@@ -3732,17 +3732,19 @@ func (t *tray) applyCatalogEntries(prev, next []CatalogEntryView) {
 		var prevLabel, nextLabel string
 		var prevTooltip, nextTooltip string
 		prevOn, nextOn := true, true
+		// The custom models' header row is greyed as a section header;
+		// a model row only for the window in force.
 		if i < len(prev) {
 			prevHas = true
 			prevLabel = prev[i].Label
 			prevTooltip = prev[i].Tooltip
-			prevOn = prev[i].WindowWall == WindowReachable
+			prevOn = prev[i].WindowWall == WindowReachable && !prev[i].Header
 		}
 		if i < len(next) {
 			nextHas = true
 			nextLabel = next[i].Label
 			nextTooltip = next[i].Tooltip
-			nextOn = next[i].WindowWall == WindowReachable
+			nextOn = next[i].WindowWall == WindowReachable && !next[i].Header
 		}
 		t.setVisible(mi, prevHas, nextHas)
 		t.setTitle(mi, prevLabel, nextLabel)

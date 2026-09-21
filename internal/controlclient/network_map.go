@@ -250,6 +250,17 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// instruction the device silently ignores, which is worse than
 			// not being sent it at all.
 			signer.CapabilityWindowChoiceV1,
+			// custom-models-v1 declares that this BUILD understands the
+			// custom-model fields (waired-ai/waired#1473, #1475): the
+			// revision on its own entry, which it answers by fetching the
+			// account's set; ExcludeUnpinned on peer entries, which the
+			// router honours for requests that name neither a model nor a
+			// computer; and CustomModelWindow. Unconditional for the
+			// byte-identity reason the rest are, and because a host with
+			// local AI off still routes to a teammate's custom model.
+			// Declaring it is also what lets the control plane accept a
+			// custom model as this device's desired model.
+			signer.CapabilityCustomModelsV1,
 		}
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2

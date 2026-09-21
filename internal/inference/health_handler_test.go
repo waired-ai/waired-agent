@@ -282,3 +282,40 @@ func TestHealthz_PublicConsumerSeesPublicCapacityOnly(t *testing.T) {
 		t.Errorf("mesh peer CapacityTotal = %d, want the real total 8", owner.CapacityTotal)
 	}
 }
+
+// TestHealthz_PublicConsumerNeverSeesACustomModel pins
+// waired-ai/waired#1473 ruling 4 on the one surface a guest can read
+// directly: while this computer serves a custom model, a public consumer
+// gets no model id, no speed, and share_enabled=false; a same-network peer
+// still sees all of it.
+func TestHealthz_PublicConsumerNeverSeesACustomModel(t *testing.T) {
+	const custom = "custom-tiny-0123abcd"
+	gw := newFakeGateway()
+	srv, ownerPriv, guestPriv, at := newPublicOverlayServer(t, gw, func(c *Config) {
+		c.Capacity = 8
+		c.PublicCapacity = 2
+		c.IsPublicShareDenied = func() bool { return false }
+		c.EngineReadyFn = func() (bool, string) { return true, custom }
+		c.Speed = func() *SpeedReading { return &SpeedReading{VariantID: "q4-k-m", TurnSeconds: 3} }
+	})
+	healthz := func(ip, deviceID string, priv ed25519.PrivateKey) HealthSnapshot {
+		t.Helper()
+		req := newSignedGetRequest(t, "/waired/v1/inference/healthz", deviceID, priv, at)
+		req.RemoteAddr = ip + ":54321"
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		var snap HealthSnapshot
+		if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+			t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+		}
+		return snap
+	}
+	guest := healthz(publicOverlayIP, "dev-guest-1", guestPriv)
+	if guest.ModelID != "" || guest.Speed != nil || guest.ShareEnabled {
+		t.Errorf("a guest saw the custom model: %+v", guest)
+	}
+	owner := healthz(peerOverlayIP, "dev-owner", ownerPriv)
+	if owner.ModelID != custom || owner.Speed == nil || !owner.ShareEnabled {
+		t.Errorf("a same-network peer lost the model: %+v", owner)
+	}
+}

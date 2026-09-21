@@ -26,6 +26,10 @@ func TestMain(m *testing.M) {
 	tagSizeFn = func(context.Context, string) (int64, error) {
 		return 0, errors.New("tagSizeFn: sealed in TestMain; swap it in the test that wants a size")
 	}
+	// The disk check before a pull reads this machine's free space; a
+	// nearly full runner must not fail pull tests that are about something
+	// else.
+	freeDiskFn = func(string) (int64, error) { return 1 << 50, nil }
 	// The digest read is the same kind of request, for a pinned tag.
 	tagDigestFn = func(context.Context, string) (string, error) {
 		return "", errors.New("tagDigestFn: sealed in TestMain; swap it in the test that wants a digest")

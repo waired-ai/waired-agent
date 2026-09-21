@@ -147,7 +147,18 @@ type FallbackEntry struct {
 // TestCatalogCapCoversBundledManifests fails the build the moment the
 // bundled count catches up with this constant, and applyCatalog never
 // drops the active/preferred row even when a cap does bite.
-const MaxCatalogEntries = 32
+//
+// Custom models (waired-ai/waired#1473) share the list: at most
+// MaxCustomModelEntries of them, plus the one header row above them, so
+// the cap is the bundled headroom plus those.
+const MaxCatalogEntries = 32 + MaxCustomModelEntries + 1
+
+// MaxCustomModelEntries is the control plane's per-account limit on custom
+// models (owner ruling 9 on waired-ai/waired#1473, 2026-09-22).
+const MaxCustomModelEntries = 10
+
+// customModelsHeader heads the custom models' group in the Models submenu.
+const customModelsHeader = "Custom models"
 
 // MaxWorkerPinEntries caps the pin group's pre-allocation in the
 // "Inference routing" submenu. Mirrors MaxPeerRows so the
@@ -417,6 +428,10 @@ type CatalogEntryView struct {
 	// it, so the capability is gone from the type rather than merely
 	// unused: a future row cannot re-introduce a block by setting a flag.
 	UnfitReason string
+	// Header marks the row that heads the custom models' group
+	// (waired-ai/waired#1473): not a model, never clickable, and greyed
+	// as a section header. ModelID is empty on it.
+	Header bool
 	// UnfitKind is what KIND of verdict UnfitReason came from, so the
 	// click's question can be worded from the verdict instead of by
 	// matching the rendered string (waired-agent#850).
@@ -1760,8 +1775,15 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	}
 
 	retained := retainedFamilies(c.Families)
-	entries := make([]CatalogEntryView, 0, len(retained))
+	entries := make([]CatalogEntryView, 0, len(retained)+1)
+	headed := false
 	for _, f := range retained {
+		// The daemon sorts custom models after the catalog's
+		// (waired-ai/waired#1473); one header row names the group.
+		if f.Custom && !headed {
+			entries = append(entries, CatalogEntryView{Label: customModelsHeader, Name: customModelsHeader, Header: true})
+			headed = true
+		}
 		e := formatCatalogEntry(f, c.Engine, c.Host)
 		// Applied over the formatted row rather than inside
 		// formatCatalogEntry, which stays a function of the family alone:
@@ -2155,10 +2177,15 @@ func pinPresent(pins []WorkerPinEntryView, deviceID string) bool {
 // has headroom, so this path is dormant on bundled manifests; it exists so
 // a future external manifest source cannot resurrect the same class.
 func retainedFamilies(families []management.CatalogFamily) []management.CatalogFamily {
-	if len(families) <= MaxCatalogEntries {
+	// One slot is kept for the custom models' header row.
+	limit := MaxCatalogEntries
+	if slices.ContainsFunc(families, func(f management.CatalogFamily) bool { return f.Custom }) {
+		limit--
+	}
+	if len(families) <= limit {
 		return families
 	}
-	out := append([]management.CatalogFamily(nil), families[:MaxCatalogEntries]...)
+	out := append([]management.CatalogFamily(nil), families[:limit]...)
 	// Each rescued row consumes one slot from the end, so an active AND a
 	// preferred family past the cap both survive rather than overwriting
 	// each other.
@@ -2170,8 +2197,8 @@ func retainedFamilies(families []management.CatalogFamily) []management.CatalogF
 		if slot < 0 || familyIndex(out, keep) >= 0 {
 			continue // no room left, or already inside the retained window
 		}
-		if i := familyIndex(families[MaxCatalogEntries:], keep); i >= 0 {
-			out[slot] = families[MaxCatalogEntries+i]
+		if i := familyIndex(families[limit:], keep); i >= 0 {
+			out[slot] = families[limit+i]
 			slot--
 		}
 	}

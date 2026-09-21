@@ -80,8 +80,11 @@ type catalogDetailHost struct {
 }
 
 type catalogDetailFamily struct {
-	ModelID      string             `json:"model_id"`
-	DisplayName  string             `json:"display_name"`
+	ModelID     string `json:"model_id"`
+	DisplayName string `json:"display_name"`
+	// Custom marks a model the account imported (waired-ai/waired#1473).
+	// The daemon lists custom models after the catalog's.
+	Custom       bool               `json:"custom"`
 	Fits         bool               `json:"fits"`
 	Active       bool               `json:"active"`
 	Preferred    bool               `json:"preferred"`
@@ -255,7 +258,13 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	// Writes target a strings.Builder-backed tabwriter, so they never
 	// error; ignore the returns to satisfy errcheck.
 	_, _ = fmt.Fprintln(tw, "  MODEL\tPARAMS\tSIZE\tNEEDS\tFIT")
+	headed := false
 	for _, f := range c.Families {
+		if f.Custom && !headed {
+			// Tabs keep the heading inside the table's column block.
+			_, _ = fmt.Fprintln(tw, "  Custom models\t\t\t\t")
+			headed = true
+		}
 		params := "-"
 		if f.Recommended != nil {
 			params = formatParamCount(f.Recommended.ParamCount, f.Recommended.ActiveParams)

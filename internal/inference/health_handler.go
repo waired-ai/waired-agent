@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/waired-ai/waired-agent/proto/catalog"
 )
 
 // HealthSnapshot is the JSON body returned by /waired/v1/inference/healthz.
@@ -200,6 +202,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 			// (waired-agent#1387). It discloses nothing a refusal would
 			// not: the owner's own load stays out of these numbers.
 			snap.CapacityUsed = snap.CapacityTotal
+		}
+		if catalog.IsCustomModelID(snap.ModelID) {
+			// A custom model is the owner's account's alone
+			// (waired-ai/waired#1473 ruling 4): a guest learns neither
+			// its name nor its speed, and is told this computer is not
+			// shared with it — which the public gate enforces anyway.
+			snap.ModelID = ""
+			snap.Speed = nil
+			snap.ShareEnabled = false
 		}
 	case s.inflight != nil:
 		snap.CapacityTotal = int(s.inflight.capacity.Load())

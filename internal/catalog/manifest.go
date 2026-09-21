@@ -25,7 +25,19 @@ type (
 	VariantSource        = protocatalog.VariantSource
 	Security             = protocatalog.Security
 	GGUFLayout           = protocatalog.GGUFLayout
+	CustomModelSet       = protocatalog.CustomModelSet
 )
+
+// Re-exported custom-model rules — see proto/catalog/custom.go.
+var (
+	IsCustomModelID          = protocatalog.IsCustomModelID
+	ValidCustomModelID       = protocatalog.ValidCustomModelID
+	ValidateCustomManifest   = protocatalog.ValidateCustomManifest
+	ValidateCustomProjection = protocatalog.ValidateCustomProjection
+)
+
+// ProvenanceCustom is Manifest.Provenance for a model a person imported.
+const ProvenanceCustom = protocatalog.ProvenanceCustom
 
 // Re-exported identifier constants — see proto/catalog.
 const (

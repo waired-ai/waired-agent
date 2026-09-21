@@ -409,6 +409,15 @@ type Inputs struct {
 	// a request with nowhere else to go gets ErrLocalInferenceOff.
 	LocalServingOff bool
 
+	// LocalActiveOnly limits the local candidate to the model this host is
+	// serving (LocalState.Active). The overlay listener sets it for every
+	// request from another computer: a model that is only on disk is not
+	// offered, because serving it would swap the engine off what the owner
+	// runs, and could hand a Public Share guest a model imported for the
+	// owner's account only (waired-ai/waired#1473 ruling 4,
+	// waired-ai/waired#1477).
+	LocalActiveOnly bool
+
 	// LocalNode, when non-nil, reports what THIS device is serving right
 	// now, so its own engine is ranked in the same ordered list as the mesh
 	// instead of short-circuiting around it (waired-agent#1302; owner
@@ -585,6 +594,11 @@ var (
 	// so a client that only ever saw that error still sees it — but now
 	// only when the mesh really had nothing.
 	ErrLocalInferenceOff = errors.New("router: local inference is turned off on this host")
+	// ErrModelNotActive is returned under Inputs.LocalActiveOnly when the
+	// request names a model this host is not serving. It is returned as a
+	// *ModelNotActiveError, which also matches ErrModelNotReady so the
+	// listeners answer it the way they answer a model nobody here serves.
+	ErrModelNotActive = errors.New("router: model is not the one this computer is serving")
 	// ErrNoEndpointForWindow is returned when Request.MinContextWindow is
 	// set and no endpoint — local or mesh — declares a window that reaches
 	// it (waired#1031). Distinct from ErrModelNotReady ("nobody has the
@@ -826,6 +840,21 @@ var arrivingModelStates = map[string]bool{
 	catalog.ModelStateDownloading: true,
 	catalog.ModelStateVerifying:   true,
 }
+
+// ModelNotActiveError is ErrModelNotActive with the two ids. The message
+// names only the model asked for: it is the body of the answer to another
+// computer, and what this one runs is not that computer's to learn from a
+// refusal.
+type ModelNotActiveError struct {
+	ModelID string
+	Active  string // "" when nothing is active; for logs, not the message
+}
+
+func (e *ModelNotActiveError) Error() string {
+	return fmt.Sprintf("%v: %q", ErrModelNotActive, e.ModelID)
+}
+
+func (e *ModelNotActiveError) Unwrap() []error { return []error{ErrModelNotActive, ErrModelNotReady} }
 
 // ModelIsArriving reports whether a not-ready error describes a model
 // that is on its way here, as opposed to one no host is serving and none
@@ -1392,6 +1421,15 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	// branch below reads localReady, so the fact lands in one place and
 	// the mesh branches keep working exactly as they did.
 	localReady := present && modelState.State == catalog.ModelStateReady && !s.in.LocalServingOff
+	if s.in.LocalActiveOnly {
+		active := ""
+		if s.in.LocalState.Active != nil {
+			active = s.in.LocalState.Active.ModelID
+		}
+		if active != manifest.ModelID {
+			return nil, &ModelNotActiveError{ModelID: manifest.ModelID, Active: active}
+		}
+	}
 	// The operator's routing floor applies to this device's own engine as
 	// well as to peers — "ローカルと peer は区別しない" (owner ruling,
 	// 2026-08-29, waired-agent#1128). Excluding only peers would make the
@@ -1860,7 +1898,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// buildMeshCandidates, only if a grant-tagged peer actually appears.
 	gate := s.publicGateFor(req.Class)
 
-	raw, drops := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
+	raw, drops := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate, modelIsUnspecified(req.Model))
 	// This device's own engine, in the same list and through the same
 	// filters (waired-agent#1302). The zero LocalNode yields nothing, which
 	// is what every arm but the ranked auto one passes.
@@ -2226,7 +2264,7 @@ func (s *Selector) pinnedNodeCandidates(snap inferencemesh.Snapshot, req Request
 		return nil, meshDrops{}
 	}
 	o, v := wantSetsFor(s.in.Manifests)
-	return s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate)
+	return s.buildMeshCandidates(only, req.Class, req.MinContextWindow, o, v, gate, false)
 }
 
 // pinDeclined is the refusal for a reachable pin that yielded no candidate,
@@ -2650,6 +2688,7 @@ func (s *Selector) buildMeshCandidates(
 	minWindow int,
 	wantOllama, wantVLLM map[string]wantEntry,
 	gate *publicGate,
+	unnamed bool,
 ) (cands []meshCandidate, drops meshDrops) {
 	minSize := s.in.MinModelSize
 	var (
@@ -2788,6 +2827,16 @@ func (s *Selector) buildMeshCandidates(
 				drops.declaredWindow = p.InferenceState.ContextWindow
 				break
 			}
+			// A custom model the request did not name, on a computer it
+			// did not name: the account's switch for the rows that name
+			// neither (Waired / Waired peer) decides, resolved for this
+			// recipient by the control plane (waired-ai/waired#1473 ruling
+			// 5). A pin to this computer names it.
+			if unnamed && e.manifest.Provenance == catalog.ProvenanceCustom && p.InferenceState.ExcludeUnpinned &&
+				(s.in.RoutingMode != state.RoutingModePinned || p.DeviceID != s.in.PinnedPeerDeviceID) {
+				drops.excludedUnpinned++
+				break
+			}
 			v := e.variant
 			// The operator's minimum model class (waired-agent#1128).
 			// EXCLUDES rather than demotes — owner ruling, 2026-08-29 —
@@ -2865,6 +2914,9 @@ type meshDrops struct {
 	excludedMain   int
 	excludedSub    int
 	publicDeclined int
+	// excludedUnpinned counts peers serving a custom model that the rows
+	// naming no computer may not land on (InferenceState.ExcludeUnpinned).
+	excludedUnpinned int
 }
 
 // acquireSlot returns (release, true) when the candidate is eligible

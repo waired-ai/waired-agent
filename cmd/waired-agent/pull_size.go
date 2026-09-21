@@ -8,6 +8,8 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/catalog/ollamaregistry"
+	"github.com/waired-ai/waired-agent/internal/download"
+	"github.com/waired-ai/waired-agent/internal/hardware"
 )
 
 // pullSizeBudget bounds the one registry request a pull makes before it
@@ -37,9 +39,11 @@ var tagSizeFn = func(ctx context.Context, tag string) (int64, error) {
 // Failures are logged and dropped. There is nothing to recover: the
 // aggregate falls back to summing what it sees, which is what every
 // release before this one did.
-func (p *agentInferenceProvider) seedPullTotal(ctx context.Context, modelID, tag string) {
+//
+// It returns the total, 0 when unknown, for the disk check that follows.
+func (p *agentInferenceProvider) seedPullTotal(ctx context.Context, modelID, tag string) int64 {
 	if p == nil || p.dlProgress == nil || tag == "" {
-		return
+		return 0
 	}
 	sizeCtx, cancel := context.WithTimeout(ctx, pullSizeBudget)
 	defer cancel()
@@ -47,10 +51,47 @@ func (p *agentInferenceProvider) seedPullTotal(ctx context.Context, modelID, tag
 	if err != nil {
 		p.logger.Debug("could not read the pull's total size from the registry; the bar will add it up as it goes",
 			"model", modelID, "tag", tag, "err", err)
-		return
+		return 0
 	}
 	p.dlProgress.seedTotal(modelID, total)
+	return total
 }
+
+// freeDiskFn is the seam tests swap; sealed in TestMain, because the real
+// one reads this machine's disk.
+var freeDiskFn = hardware.FreeDiskBytes
+
+// diskShortfall is the failure to record when the filesystem holding the
+// engine's models has less free space than the pull's whole size; ""
+// means go ahead, and so does anything unknown — the size, the store, the
+// free space. It runs before a byte is fetched, for bundled and imported
+// models alike (waired-ai/waired#1480): a multi-GB download that ends in a
+// full disk costs the time and leaves the disk full.
+//
+// The whole size, not the size still to fetch: a pull resumed after a
+// restart already holds part of it and may be refused while it would have
+// fitted. The message names both figures, and the fix is the same.
+func (p *agentInferenceProvider) diskShortfall(total int64) string {
+	if p == nil || total <= 0 || p.ollamaModelsDir == "" {
+		return ""
+	}
+	free, err := freeDiskFn(p.ollamaModelsDir)
+	if err != nil {
+		return ""
+	}
+	if err := download.CheckDiskSpace(free, total); err != nil {
+		// "insufficient disk space" is one of diskFullMarkers, so setup
+		// reports this as disk_full, as it does the engine's own ENOSPC.
+		// "only … is free" is the shape the vLLM rebuild check already uses
+		// (runtime.VLLMConvergeDecision), so the two disk refusals read alike.
+		return "insufficient disk space for this model: it needs " + download.HumanBytes(total) +
+			" and only " + download.HumanBytes(free) + " is free"
+	}
+	return ""
+}
+
+// errDiskShort is a pull refused before it started for want of disk.
+var errDiskShort = errors.New("insufficient disk space for this model")
 
 // tagDigestFn is the seam tests swap for the registry digest read; sealed
 // in TestMain like tagSizeFn.

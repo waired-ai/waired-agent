@@ -250,7 +250,14 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 		writePrompt(out, "model this computer would run if you add an engine later.")
 	}
 	writePrompt(out)
+	headed := false
 	for i, f := range cat.Families {
+		// The account's custom models come last (the daemon's order,
+		// waired-ai/waired#1473), under one heading; the numbering runs on.
+		if f.Custom && !headed {
+			writePrompt(out, "  Custom models")
+			headed = true
+		}
 		writePromptf(out, "  %d) %s\n", i+1, modelPickerRow(cat.Host, f))
 	}
 	writePrompt(out, "  0) Don't download a model now")

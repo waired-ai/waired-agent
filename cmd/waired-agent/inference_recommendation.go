@@ -116,7 +116,7 @@ func (p *agentInferenceProvider) currentRecommendation(ctx context.Context) *man
 	}
 	hw := p.profiler.Profile(ctx)
 	engineVersion := p.servingEngineVersion(ctx)
-	return recommendationFromBench(*last, p.store, hw, p.manifests, p.cfg, engineVersion)
+	return recommendationFromBench(*last, p.store, hw, p.catalogManifests(), p.cfg, engineVersion)
 }
 
 // benchDescribes reports whether a stored benchmark is evidence about
@@ -584,7 +584,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(mode string, done chan struct{}
 		// the figure and the name cannot come from different models
 		// (waired-agent#1027).
 		ModelID: deps.ModelID,
-		Lighter: recommendationFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
+		Lighter: recommendationFromBench(bench, p.store, hw, p.catalogManifests(), p.cfg, engineVersion),
 		// Carried, not dropped: a failed run's outcome was the only place
 		// these were lost — which is what let the handler answer 200 for a
 		// run that failed (waired-agent#29).
@@ -630,7 +630,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(mode string, done chan struct{}
 	// was filed when it was measured, with that date.
 	measuredSHA, measurement := "", catalog.VariantMeasurement{}
 	if !bench.Cached {
-		measuredSHA, measurement = benchMeasurement(bench, p.manifests, deps)
+		measuredSHA, measurement = benchMeasurement(bench, p.catalogManifests(), deps)
 	}
 	if ranAtAll {
 		if err := p.store.Update(func(s *catalog.State) {
@@ -987,7 +987,7 @@ func (p *agentInferenceProvider) recommendationForRunningBound(floor float64) *m
 		ModelID:          p.activeModelID(),
 		VariantID:        p.activeVariantID(),
 	}
-	return recommendationFromBench(bound, p.store, p.profiler.Profile(ctx), p.manifests, p.cfg, p.servingEngineVersion(ctx))
+	return recommendationFromBench(bound, p.store, p.profiler.Profile(ctx), p.catalogManifests(), p.cfg, p.servingEngineVersion(ctx))
 }
 
 // modelSpeedStatus is InferenceStatus.ModelSpeed: the measurement running
@@ -1056,7 +1056,7 @@ func (p *agentInferenceProvider) DismissRecommendation(_ /*fromVariantID*/, toVa
 		}
 		to = rec.ToVariantID
 	}
-	sha := activeVariantSHA(p.manifests, st.Active.ModelID, st.Active.VariantID)
+	sha := activeVariantSHA(p.catalogManifests(), st.Active.ModelID, st.Active.VariantID)
 	if sha == "" {
 		// Fall back to the variant ID so the dismissal still sticks for
 		// this active selection (a switch changes the ID and clears it).

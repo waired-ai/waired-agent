@@ -389,6 +389,13 @@ func run(ctx context.Context, args []string) error {
 	// answers with an empty list before enrollment rather than 404ing.
 	noticeReg := notice.NewRegistry(0, nil)
 
+	// The account's custom models (waired-ai/waired#1473). Daemon state:
+	// the kept set is loaded at boot so that a start without the control
+	// plane still resolves a model imported earlier, and every surface —
+	// the management routes, the inference subsystem, the session's sync —
+	// reads the one source.
+	customModels := newCustomModelSource(*stateDir, logger)
+
 	mgmtSrv := management.New(sb, sb).
 		WithIdentity(sb).
 		WithNotices(noticeProvider{reg: noticeReg}).
@@ -490,6 +497,7 @@ func run(ctx context.Context, args []string) error {
 				// delegated the same way as the switch above.
 				ApplyNoModelSelected:   sbModelSwapControl{sb}.ApplyNoModelSelected,
 				NoteModelChoicePending: sbModelSwapControl{sb}.NoteModelChoicePending,
+				Custom:                 customModels,
 			})
 	}
 	// Integration endpoints are state-dir / port based, not identity
@@ -542,6 +550,9 @@ func run(ctx context.Context, args []string) error {
 		if id == nil {
 			return fmt.Errorf("activate: no identity at %s", *stateDir)
 		}
+		// A device enrolled again into another network drops the set it
+		// kept for the old one.
+		customModels.SetNetwork(id.NetworkID)
 
 		paths, err := identity.PathsFor(*stateDir)
 		if err != nil {
@@ -1124,6 +1135,15 @@ func run(ctx context.Context, args []string) error {
 		// delegation; like engCtl it needs the concrete provider the subsystem
 		// owns and is stored in the session.
 		var swapCtl *modelSwapController
+		// Custom models: fetched when the revision on this device's own
+		// map entry is one it does not hold (waired-ai/waired#1473).
+		cmSync := newCustomModelsSync(customModels, infPushClient, id.DeviceID, mk.Private,
+			func(modelID string) bool { return customModelInUse(inferenceSub, modelID) }, logger)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cmSync.Run(cpCtx)
+		}()
 		if !*disableInference {
 			sub, ip, err := startInferenceSubsystem(ctx, &wg, logger, *stateDir, cfgRoot.Inference, inferenceSubsystemDeps{
 				IsPaused:            pm.IsPaused,
@@ -1153,6 +1173,7 @@ func run(ctx context.Context, args []string) error {
 				ServingInflight:     localAdmit.InflightCount,
 				ServingAdmitted:     localAdmit.AdmittedCount,
 				OnPeerOutcome:       errorWindow.Record,
+				CustomModels:        customModels,
 			})
 			if err != nil {
 				return fmt.Errorf("inference subsystem: %w", err)
@@ -1376,6 +1397,7 @@ func run(ctx context.Context, args []string) error {
 					// (waired-agent#1205).
 					go runNoticeLoop(ctx, noticeRepublish, prov.publishRecommendationNotices)
 					go runNoticeLoop(ctx, noticeRepublish, prov.publishLoadFailureNotices)
+					go runNoticeLoop(ctx, noticeRepublish, prov.publishCustomModelNotices)
 					go runNoticeLoop(ctx, noticeRepublish, prov.reviewOutOfMemoryPark)
 					// And what the serving engine has to say about
 					// itself. Its own producer, so a version warning and
@@ -1622,6 +1644,8 @@ func run(ctx context.Context, args []string) error {
 		var setupRec *setupReconciler
 		if inferenceSub != nil && inferenceSub.provider != nil {
 			setupRec = newSetupReconciler(inferenceSub.provider, infPushClient, id.DeviceID, mk.Private, logger)
+			setupRec.customModelKnown = inferenceSub.provider.knowsModel
+			setupRec.fetchCustomModels = cmSync.Kick
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -1678,7 +1702,14 @@ func run(ctx context.Context, args []string) error {
 						return !shareCtl.IsSharing() || publicShareCtl.IsPublicShareDenied()
 					}
 				}
-				cfg.IsPublicShareDenied = publicDenied
+				// A third: this computer serves, or is moving to, a custom
+				// model — imported for the owner's account and team only
+				// (waired-ai/waired#1473 ruling 4). The console also stops
+				// offering it; this holds for the frames before it does.
+				consoleOrMachine := publicDenied
+				cfg.IsPublicShareDenied = func() bool {
+					return consoleOrMachine() || customModelServedOrChosen(inferenceSub)
+				}
 			}
 			if teamShareCtl != nil {
 				// The same two reasons, for teammates (team share spec
@@ -1723,6 +1754,10 @@ func run(ctx context.Context, args []string) error {
 			// surfaces count the engine work they dispatch locally
 			// against this server's admission counter.
 			localAdmit.Set(infSrv)
+			if inferenceSub != nil && inferenceSub.provider != nil {
+				abortPublic := infSrv.AbortPublicInFlight
+				inferenceSub.provider.onCustomModelChosen.Store(&abortPublic)
+			}
 			if publicShareCtl != nil {
 				// Kill switch (§8.3 step 1): turning Public Share OFF
 				// terminates in-flight public streams immediately.
@@ -1821,6 +1856,7 @@ func run(ctx context.Context, args []string) error {
 		go func() {
 			defer wg.Done()
 			applySelf := func(st *signer.InferenceState) {
+				cmSync.NoteRevision(st.CustomModelsRevision)
 				// Admission gate (non-disruptive) reads Capacity; the ollama
 				// engine parallelism (restart-on-change) reads DesiredParallel,
 				// which is non-zero only under an explicit admin override — so a

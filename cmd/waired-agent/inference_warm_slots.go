@@ -134,7 +134,7 @@ func (p *agentInferenceProvider) ServingMaxParallel() int {
 		return 0
 	}
 	t := p.ollama.AppliedTuning()
-	return catalog.ServedMaxParallelIn(p.manifests, catalog.RuntimeOllama, t.ModelID, t.VariantID)
+	return catalog.ServedMaxParallelIn(p.catalogManifests(), catalog.RuntimeOllama, t.ModelID, t.VariantID)
 }
 
 // RecommendedMaxParallel is the largest concurrency this host can be set
