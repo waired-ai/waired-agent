@@ -47,7 +47,7 @@ func livePowerEngine(t *testing.T, venv string, parked func() bool, onUnhealthy 
 		Spawner:              infruntime.DefaultSpawner{},
 		HealthInterval:       2 * time.Second,
 		HealthSuccess:        2,
-		HealthMaxFails:       150,
+		StartTimeout:         5 * time.Minute,
 		StopTimeout:          10 * time.Second,
 		Parked:               parked,
 		OnUnhealthy:          onUnhealthy,
