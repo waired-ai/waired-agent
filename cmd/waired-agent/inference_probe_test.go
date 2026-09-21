@@ -1347,7 +1347,7 @@ func TestActiveEngineTag(t *testing.T) {
 			name: "vllm repo resolves",
 			state: catalog.State{
 				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: "qwen3-8b", VariantID: "fp16"},
-				Models: map[string]catalog.ModelState{
+				VLLMModels: map[string]catalog.ModelState{
 					"qwen3-8b": {VariantID: "fp16", HFRepo: "Qwen/Qwen3-8B"},
 				},
 			},

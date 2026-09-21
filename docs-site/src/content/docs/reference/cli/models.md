@@ -41,6 +41,9 @@ waired models check-agent         # will this model work with a coding agent?
 **`ls`** shows what each model weighs on disk under **SIZE**, which is how
 you find what `rm` would give you back. The figure comes from the inference
 engine, so a model that is downloaded but whose engine is stopped shows `-`.
+Ollama and vLLM each keep their own downloads, and **STATE** is for the
+engine this computer runs. A model downloaded only for the other engine
+shows `not_present`, and `pull` downloads it for this one.
 With `--detail`, every model in the catalog is listed with the memory it
 needs, whether it fits this computer, and which one Waired would choose.
 Models imported from Hugging Face in the Waired console come last, under a
@@ -97,7 +100,7 @@ stays your choice and applies when the weights arrive.
 **`rm`** deletes a model's files and confirms first, or takes `--yes`. It
 stops a download of that model first if one is running. If another model on
 this computer shares the same files, they are kept and only the entry is
-removed.
+removed. It deletes the model for both engines when both have downloaded it.
 
 **`refresh`** says whether a better model pick is available for this
 computer than the one it runs.

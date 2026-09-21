@@ -242,7 +242,7 @@ func (p *agentInferenceProvider) resolveVLLMStart(ctx context.Context, engineUp 
 	}
 	r := vllmStartResolution{puller: puller, venv: venv, release: release, target: manifest, variant: variant}
 	st, _ := p.store.Load()
-	if ms := st.Models[manifest.ModelID]; ms.State == catalog.ModelStateReady && ms.LocalPath != "" &&
+	if ms := st.VLLMModels[manifest.ModelID]; ms.State == catalog.ModelStateReady && ms.LocalPath != "" &&
 		(ms.VariantID == "" || ms.VariantID == variant.VariantID) && dirExists(ms.LocalPath) {
 		r.targetPath = ms.LocalPath
 	}
@@ -354,9 +354,9 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	// serving down (#614); skip the downloading/verifying downgrades.
 	if !refresh {
 		_ = p.store.Update(func(s *catalog.State) {
-			m := s.Models[modelID]
+			m := s.VLLMModels[modelID]
 			m.State = catalog.ModelStateDownloading
-			s.Models[modelID] = m
+			s.VLLMModels[modelID] = m
 		})
 	}
 	defer p.dlProgress.forget(modelID)
@@ -415,9 +415,9 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 		p.dlProgress.observe(modelID, pr)
 		if pr.State == download.StateVerifying && !refresh {
 			_ = p.store.Update(func(s *catalog.State) {
-				m := s.Models[modelID]
+				m := s.VLLMModels[modelID]
 				m.State = catalog.ModelStateVerifying
-				s.Models[modelID] = m
+				s.VLLMModels[modelID] = m
 			})
 		}
 	})
@@ -438,27 +438,27 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 		}
 		p.logger.Warn("hf pull failed", "model", modelID, "repo", variant.Source.RepoID, "err", err, "refresh", refresh)
 		_ = p.store.Update(func(s *catalog.State) {
-			m := s.Models[modelID]
+			m := s.VLLMModels[modelID]
 			// A failed refresh pull keeps the model ready — the on-disk
 			// weights still serve; record the error for observability only.
 			if !refresh {
 				m.State = catalog.ModelStateFailed
 			}
 			m.Error = err.Error()
-			s.Models[modelID] = m
+			s.VLLMModels[modelID] = m
 		})
 		return "", err
 	}
 
 	_ = p.store.Update(func(s *catalog.State) {
-		m := s.Models[modelID]
+		m := s.VLLMModels[modelID]
 		m.State = catalog.ModelStateReady
 		m.Error = ""
 		m.HFRepo = variant.Source.RepoID
 		m.LocalPath = localDir
 		m.VariantID = variant.VariantID
 		m.PulledAt = time.Now().UTC()
-		s.Models[modelID] = m
+		s.VLLMModels[modelID] = m
 
 		epID := "ep_local_vllm_" + sanitiseModelID(modelID)
 		s.Endpoints[epID] = catalog.EndpointState{
@@ -489,11 +489,11 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJo
 	// keeps it ready (#614). Mirrors the ollama path in PullModel.
 	refresh := false
 	if err := p.store.Update(func(s *catalog.State) {
-		if s.Models[manifest.ModelID].State == catalog.ModelStateReady {
+		if s.VLLMModels[manifest.ModelID].State == catalog.ModelStateReady {
 			refresh = true
 			return
 		}
-		s.Models[manifest.ModelID] = catalog.ModelState{
+		s.VLLMModels[manifest.ModelID] = catalog.ModelState{
 			VariantID: variant.VariantID,
 			HFRepo:    variant.Source.RepoID,
 			State:     catalog.ModelStateQueued,

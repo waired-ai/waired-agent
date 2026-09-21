@@ -156,6 +156,9 @@ func ensureMaps(st *State) {
 	if st.Models == nil {
 		st.Models = map[string]ModelState{}
 	}
+	if st.VLLMModels == nil {
+		st.VLLMModels = map[string]ModelState{}
+	}
 	if st.Endpoints == nil {
 		st.Endpoints = map[string]EndpointState{}
 	}

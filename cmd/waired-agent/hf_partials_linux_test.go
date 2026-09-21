@@ -123,7 +123,7 @@ func TestDownloadHFWeights_LeavesNoPartialFiles(t *testing.T) {
 		t.Errorf("%d partial files remain after the download stopped, want 0", n)
 	}
 	st, _ := p.store.Load()
-	if got := st.Models[m.ModelID].State; got != catalog.ModelStateFailed {
+	if got := st.VLLMModels[m.ModelID].State; got != catalog.ModelStateFailed {
 		t.Errorf("state = %q after a failed download, want failed", got)
 	}
 }
@@ -136,7 +136,7 @@ func TestDownloadHFWeights_ARequestedStopRecordsNoFailure(t *testing.T) {
 	p, m, v := hfPartialsProvider(t)
 	dir := p.hfLocalDir(v.Source.RepoID)
 	if err := p.store.Update(func(s *catalog.State) {
-		s.Models[m.ModelID] = catalog.ModelState{VariantID: v.VariantID, State: catalog.ModelStateQueued}
+		s.VLLMModels[m.ModelID] = catalog.ModelState{VariantID: v.VariantID, State: catalog.ModelStateQueued}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestDownloadHFWeights_ARequestedStopRecordsNoFailure(t *testing.T) {
 		t.Errorf("hf ran %d times, want once: a stopped download must not be retried", len(r.args))
 	}
 	st, _ := p.store.Load()
-	if ms := st.Models[m.ModelID]; ms.State == catalog.ModelStateFailed || ms.Error != "" {
+	if ms := st.VLLMModels[m.ModelID]; ms.State == catalog.ModelStateFailed || ms.Error != "" {
 		t.Errorf("a requested stop was recorded as a failure: state=%q error=%q", ms.State, ms.Error)
 	}
 	if n := countPartials(t, dir); n != 0 {

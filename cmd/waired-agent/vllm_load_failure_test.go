@@ -109,7 +109,7 @@ func TestSwapPreferredModel_VLLMClearsTheModelsLoadFailures(t *testing.T) {
 	shape := vllmLoadShape(infruntime.ModelTuning{ContextLength: 200704}, "fp8", 4)
 	p.recordVLLMLoadFailure(context.Background(), m, m.Variants[1], shape, "CUDA out of memory", "")
 	if err := p.store.Update(func(s *catalog.State) {
-		s.Models = map[string]catalog.ModelState{
+		s.VLLMModels = map[string]catalog.ModelState{
 			"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
 		}
 	}); err != nil {

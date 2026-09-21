@@ -46,10 +46,8 @@ func seedActive(t *testing.T, p *agentInferenceProvider, runtime, modelID, varia
 	t.Helper()
 	if err := p.store.Update(func(s *catalog.State) {
 		s.Active = &catalog.ActiveSelection{Runtime: runtime, ModelID: modelID, VariantID: variantID}
-		if s.Models == nil {
-			s.Models = map[string]catalog.ModelState{}
-		}
-		s.Models[modelID] = ms
+		// The record goes where that engine keeps it (waired-agent#1520).
+		s.SetModel(runtime, modelID, ms)
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

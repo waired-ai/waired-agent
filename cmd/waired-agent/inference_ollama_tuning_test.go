@@ -722,6 +722,32 @@ func TestResolveTuningTarget(t *testing.T) {
 		}
 	})
 
+	// waired-agent#1520: the tuning is sized for the build ollama serves.
+	// vLLM's record of the model — a vLLM host's speed probe writes one — is
+	// not that build, and neither is a vLLM build named in ollama's own
+	// records, which a state file written before they were split can hold.
+	t.Run("another engine's build is not what ollama serves", func(t *testing.T) {
+		dual := catalog.Manifest{
+			ModelID:       "dual",
+			ContextLength: 131072,
+			Variants: []catalog.Variant{
+				{VariantID: "q8", RuntimeSupport: []string{catalog.RuntimeOllama}, EstimatedWeightGB: 9, KVBytesPerTokenFP16: 49152},
+				{VariantID: "bf16", RuntimeSupport: []string{catalog.RuntimeVLLM}, EstimatedWeightGB: 17, KVBytesPerTokenFP16: 49152},
+			},
+		}
+		cfg := agentconfig.InferenceConfig{PreferredModelID: "dual"}
+		bf16 := catalog.ModelState{VariantID: "bf16", State: catalog.ModelStateReady}
+		for name, st := range map[string]catalog.State{
+			"vLLM's record":            {VLLMModels: map[string]catalog.ModelState{"dual": bf16}},
+			"a vLLM build in ollama's": {Models: map[string]catalog.ModelState{"dual": bf16}},
+		} {
+			_, v, ok := resolveTuningTarget(cfg, []catalog.Manifest{dual}, st)
+			if !ok || v.VariantID != "q8" {
+				t.Errorf("%s: variant = %q ok=%v, want q8 (the build ollama pulls)", name, v.VariantID, ok)
+			}
+		}
+	})
+
 	t.Run("nothing-resolvable", func(t *testing.T) {
 		if _, _, ok := resolveTuningTarget(agentconfig.InferenceConfig{}, manifests, catalog.State{}); ok {
 			t.Error("ok = true with no preferred/active/bundled model")

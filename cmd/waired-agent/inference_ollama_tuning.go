@@ -683,9 +683,13 @@ func resolveTuningTarget(cfg agentconfig.InferenceConfig, manifests []catalog.Ma
 		return catalog.Manifest{}, catalog.Variant{}, false
 	}
 
-	if ms, found := state.Models[m.ModelID]; found && ms.State == catalog.ModelStateReady {
+	// ollama's own record of the model (waired-agent#1520), and only a
+	// variant ollama runs: a record naming another engine's build — one
+	// written before the records were split by engine — would size the
+	// tuning for weights ollama is not serving.
+	if ms, found := state.ModelFor(catalog.RuntimeOllama, m.ModelID); found && ms.State == catalog.ModelStateReady {
 		for _, v := range m.Variants {
-			if v.VariantID == ms.VariantID {
+			if v.VariantID == ms.VariantID && catalog.VariantServesOllama(v) {
 				return m, v, true
 			}
 		}
