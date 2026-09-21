@@ -230,8 +230,17 @@ func runVLLMStartAttempts(ctx context.Context, logger *slog.Logger, ensure func(
 		if movedOn() {
 			return vllmAttemptsMovedOn, err
 		}
-		if attempt < vllmStartMaxAttempts && !wait(ctx, attempt) {
+		if attempt == vllmStartMaxAttempts {
+			break
+		}
+		if !wait(ctx, attempt) {
 			return vllmAttemptsCancelled, err
+		}
+		// Asked again after the wait: on the host that found this the
+		// choice landed a second after a failure, and the next attempt
+		// spent another minute on the model nobody chose any more.
+		if movedOn() {
+			return vllmAttemptsMovedOn, err
 		}
 	}
 	return vllmAttemptsFailed, err

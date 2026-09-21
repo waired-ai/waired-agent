@@ -268,20 +268,25 @@ func TestRunVLLMStartAttempts(t *testing.T) {
 		// movedOnAfter is the attempt after whose failure the choice has
 		// moved on; 0 never.
 		movedOnAfter int
+		// movedOnInWait is the wait during which the choice moves on; 0
+		// never.
+		movedOnInWait int
 		// cancelAt is the wait that finds the context ended; 0 never.
 		cancelAt  int
 		wantEnd   vllmAttemptsEnd
 		wantCalls int
 		wantWaits []int
 	}{
-		{"up at once", []error{nil}, 0, 0, vllmAttemptsStarted, 1, nil},
-		{"up at the second", []error{failed, nil}, 0, 0, vllmAttemptsStarted, 2, []int{1}},
-		{"every attempt fails", []error{failed, failed, failed}, 0, 0, vllmAttemptsFailed, 3, []int{1, 2}},
-		{"a park raced the start", []error{infruntime.ErrEngineParked}, 0, 0, vllmAttemptsLatched, 1, nil},
-		{"recovery gave up", []error{failed, infruntime.ErrEngineUnrecoverable}, 0, 0, vllmAttemptsLatched, 2, []int{1}},
-		{"moved on after the first", []error{failed, failed, failed}, 1, 0, vllmAttemptsMovedOn, 1, nil},
-		{"moved on during the last", []error{failed, failed, failed}, 3, 0, vllmAttemptsMovedOn, 3, []int{1, 2}},
-		{"the daemon stops between", []error{failed, failed, failed}, 0, 1, vllmAttemptsCancelled, 1, []int{1}},
+		{"up at once", []error{nil}, 0, 0, 0, vllmAttemptsStarted, 1, nil},
+		{"up at the second", []error{failed, nil}, 0, 0, 0, vllmAttemptsStarted, 2, []int{1}},
+		{"every attempt fails", []error{failed, failed, failed}, 0, 0, 0, vllmAttemptsFailed, 3, []int{1, 2}},
+		{"a park raced the start", []error{infruntime.ErrEngineParked}, 0, 0, 0, vllmAttemptsLatched, 1, nil},
+		{"recovery gave up", []error{failed, infruntime.ErrEngineUnrecoverable}, 0, 0, 0, vllmAttemptsLatched, 2, []int{1}},
+		{"moved on after the first", []error{failed, failed, failed}, 1, 0, 0, vllmAttemptsMovedOn, 1, nil},
+		// The hardware case: chosen a second after the first failure.
+		{"moved on during the wait", []error{failed, nil}, 0, 1, 0, vllmAttemptsMovedOn, 1, []int{1}},
+		{"moved on during the last", []error{failed, failed, failed}, 3, 0, 0, vllmAttemptsMovedOn, 3, []int{1, 2}},
+		{"the daemon stops between", []error{failed, failed, failed}, 0, 0, 1, vllmAttemptsCancelled, 1, []int{1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -290,8 +295,11 @@ func TestRunVLLMStartAttempts(t *testing.T) {
 				calls++
 				return err
 			}
-			movedOn := func() bool { return tc.movedOnAfter != 0 && calls >= tc.movedOnAfter }
 			var waits []int
+			movedOn := func() bool {
+				return (tc.movedOnAfter != 0 && calls >= tc.movedOnAfter) ||
+					(tc.movedOnInWait != 0 && len(waits) >= tc.movedOnInWait)
+			}
 			wait := func(_ context.Context, attempt int) bool {
 				waits = append(waits, attempt)
 				return attempt != tc.cancelAt
