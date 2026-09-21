@@ -1,477 +1,232 @@
 package runtime
 
-import (
-	"fmt"
-	"regexp"
-)
+import "fmt"
 
-// OllamaBackend names the GPU compute backend waired steers Ollama
-// toward via process environment. It is informational (surfaced in the
-// doctor / inference status) plus the key the probe state-cache is
-// stored under; the actual steering is done by the env in BackendStep.
+// OllamaBackend names the GPU compute backend Ollama is expected to run
+// on. It is a LABEL: surfaced in the doctor and inference status, and
+// corrected by the engagement check (cmd/waired-agent) when nothing
+// actually landed on the GPU. Which backend runs is Ollama's own
+// decision, except where a BackendPlan carries an override.
 type OllamaBackend string
 
 const (
-	// BackendAuto leaves backend selection entirely to Ollama (no env
-	// override). Used for hosts where Ollama's own auto-detection is
-	// trusted and unambiguous.
+	// BackendAuto: Ollama chooses between the backends it has. An AMD
+	// card is the usual case — ROCm where the overlay's rocBLAS carries
+	// its gfx target, Vulkan otherwise.
 	BackendAuto OllamaBackend = "auto"
-	// BackendCUDA is NVIDIA. Ollama detects it automatically; we set no
-	// override and only label it for diagnostics.
+	// BackendCUDA is NVIDIA. Ollama detects it automatically.
 	BackendCUDA OllamaBackend = "cuda"
-	// BackendROCm is the AMD HIP/ROCm path. On Linux Ollama bundles the
-	// HIP runtime; on Windows the base package ships no ROCm and the
-	// installer adds it as a ~250 MB overlay (247 MB at 0.33.3, read off
-	// the asset) only for the discrete SKUs in Ollama's supported set
-	// (see amdROCmSupported). For Strix Halo it
-	// requires the gfx1151 HSA override; for supported discrete AMD cards
-	// Ollama engages it with no override.
+	// BackendROCm is the AMD HIP/ROCm path. On both operating systems it
+	// ships as a separate ~250 MB overlay (247 MB at 0.33.3, read off the
+	// asset) that the installer fetches when WantsROCmOverlay says so.
 	BackendROCm OllamaBackend = "rocm"
-	// BackendVulkan is Ollama's experimental Vulkan path (Mesa RADV on
-	// Linux, the AMD/Intel ICD on Windows). The only GPU route for AMD
-	// APUs on Windows and for Intel iGPUs, and the Strix Halo Linux
-	// fallback when bundled ROCm doesn't engage gfx1151.
+	// BackendVulkan is Ollama's Vulkan path (Mesa RADV / ANV on Linux, the
+	// vendor ICD on Windows), enabled by default since 0.30. Intel's only
+	// GPU route, and the one waired names for Windows Strix Halo.
 	BackendVulkan OllamaBackend = "vulkan"
 	// BackendMetal is Apple Silicon. Ollama auto-engages Metal (and its
-	// MLX backend on ≥32 GB hosts as of 0.19+); we set no override.
+	// MLX backend on >=32 GB hosts as of 0.19+).
 	BackendMetal OllamaBackend = "metal"
 	// BackendCPU means no GPU acceleration is expected on this host.
 	BackendCPU OllamaBackend = "cpu"
 )
 
-// strixHaloHSAOverride is the HSA_OVERRIDE_GFX_VERSION value that points
-// Ollama's bundled ROCm runtime at the Strix Halo iGPU (gfx1151).
-// Without it, Ollama 0.18+ silently fails to discover gfx1151 and runs
-// on CPU (ollama/ollama #15336, #13589). 11.5.1 maps to gfx1151.
-const strixHaloHSAOverride = "HSA_OVERRIDE_GFX_VERSION=11.5.1"
-
-// envOllamaVulkan opts Ollama into its (experimental) Vulkan backend.
-const envOllamaVulkan = "OLLAMA_VULKAN=1"
-
-// envOllamaIGPUEnable un-gates integrated GPUs. As of Ollama 0.30.x the
-// runner DROPS any integrated GPU by default — even one it discovered
-// via Vulkan — logging "dropping integrated GPU; to enable, set
-// OLLAMA_IGPU_ENABLE=1" and falling back to CPU (total_vram=0). Verified
-// live on a Ryzen AI Max+ 395: with only OLLAMA_VULKAN=1 the Radeon
-// 8060S iGPU was detected then dropped; adding OLLAMA_IGPU_ENABLE=1 made
-// it engage (type=iGPU, total≈112 GiB). So every step that targets an
-// integrated GPU (Strix Halo on either OS, Intel iGPU) must set this
-// alongside the backend flag, or the machine silently runs on CPU.
+// envOllamaIGPUEnable un-gates integrated GPUs. Since Ollama 0.30 the
+// runner DROPS every integrated GPU it discovered through Vulkan, logging
+// "dropping integrated GPU; to enable, set OLLAMA_IGPU_ENABLE=1" and
+// running on the CPU; only CUDA devices and ROCm gfx1151 are admitted by
+// default (discover/runner.go integratedGPUAllowedByDefault at v0.34.2).
 //
-// Since waired-agent#1484 it is set ONLY where the chip is one the engine
-// itself admits (Strix Halo, gfx1151) and waired has measured a reason to
-// route it through Vulkan, whose iGPUs the engine drops by default. Every
-// other integrated GPU is left to the engine's default, which is to run
-// on the CPU; an operator who wants otherwise sets this variable in the
-// agent's environment, and it reaches the engine because no plan here
-// sets the key (processEnv drops only the keys a plan sets).
+// It is set in exactly one place: the Windows Strix Halo arm, which names
+// Vulkan on a measurement and so needs its iGPU un-gated. Everywhere else
+// the engine's default stands (waired-agent#1484) — and because no plan
+// sets the key, an operator's own OLLAMA_IGPU_ENABLE in the agent's
+// environment reaches the engine untouched (processEnv drops only the
+// keys a plan sets).
 const envOllamaIGPUEnable = "OLLAMA_IGPU_ENABLE=1"
 
-// BackendInputs are the host facts that drive the backend choice. They
-// are extracted from a hardware.Profile by the caller (cmd/waired-agent)
-// so this package stays decoupled from internal/hardware.
-//
-// StrixHaloAPU is sourced from the *CPU model* (hardware.IsStrixHaloAPU),
-// deliberately NOT from GPU detection: on Linux the Strix Halo iGPU is
-// invisible to the profiler unless rocm-smi is installed (Ollama ships
-// its own HIP runtime, so most users never install the ROCm SDK), so
-// the CPU string is the only reliable Strix Halo signal (#290).
+// BackendInputs are the host facts that drive the plan. They are
+// extracted from a hardware.Profile's GPUs IN USE by the caller
+// (internal/setup.OllamaBackendInputs) so this package stays decoupled
+// from internal/hardware.
 type BackendInputs struct {
 	GOOS             string // host runtime.GOOS: "linux" / "windows" / "darwin"
-	PrimaryGPUVendor string // lower-case vendor of the first detected GPU; "" if none
-	PrimaryGPUModel  string // model string of the first detected GPU (GPU.Model); "" if none
-	StrixHaloAPU     bool   // CPU model matched hardware.IsStrixHaloAPU
+	PrimaryGPUVendor string // lower-case vendor of the first GPU in use; "" if none
+	// StrixHaloAPU is hardware.StrixHaloHost: the AMD GPU in use is a
+	// gfx1151, or — with no GPU reading — the CPU names a Ryzen AI Max.
+	StrixHaloAPU bool
+	// AMDGPU reports that an AMD GPU is in use, whichever position it
+	// holds: the ROCm overlay is fetched for it (WantsROCmOverlay).
+	AMDGPU bool
 }
 
-// BackendStep is one spawn attempt: a labelled backend plus the env
-// overrides `ollama serve` is launched with. Env is nil when no override
-// is needed (Ollama auto-detects).
-type BackendStep struct {
+// BackendPlan is what `ollama serve` is launched with: a label for the
+// backend expected to engage, and the environment overrides — none, on
+// every host but one.
+//
+// It used to be an ordered list of steps (ROCm, then Vulkan) that the
+// engagement probe walked by restarting the engine. Ollama does that
+// itself since 0.30: a device visible to both backends goes to ROCm
+// (ml/device.go PreferredLibrary), and one ROCm drops for want of kernels
+// (discover/amd.go filterUnsupportedROCmDevices) is served through
+// Vulkan, which is on by default. The steps duplicated the engine's own
+// fallback, so they are gone (waired-agent#1492).
+type BackendPlan struct {
 	Backend OllamaBackend
 	Env     []string
+	Reason  string
 }
 
-// BackendPlan is the ordered set of backend attempts for a host.
-// Steps[0] is the preferred backend. A second step is present only for
-// hosts where the preferred backend can silently fail and a runtime
-// fallback is warranted — Strix Halo on Linux, where bundled ROCm may
-// not actually engage gfx1151, so the caller verifies GPU engagement and
-// advances to the Vulkan step on CPU fallback (#290).
-type BackendPlan struct {
-	Steps  []BackendStep
-	Reason string
-}
-
-// Preferred returns the first (best-guess) backend step.
-func (p BackendPlan) Preferred() BackendStep { return p.Steps[0] }
-
-// WantsROCm reports whether any step in the plan asks for the ROCm
-// backend, which is the installer's question: on Windows the base archive
-// ships CUDA, Vulkan and CPU only, and ROCm arrives as a separate ~250 MB
-// overlay (247 MB at 0.33.3; the figure here read ~300 MB until it was
-// checked against the asset).
+// WantsROCmOverlay reports whether the installer should fetch Ollama's
+// ROCm overlay, which is the one backend decision left for waired to
+// make: ROCm is a separate download on both operating systems, and the
+// engine cannot choose a backend that is not on disk.
 //
-// Asking the PLAN rather than re-deriving "is this AMD card supported"
-// is what keeps the two in step. The installer used to answer it in
-// PowerShell (Resolve-GpuMode / Test-AMDRocmSupported) against a second
-// copy of the supported-SKU list, with a maintenance banner in each file
-// telling the next person to update both. Now there is one list, and the
-// overlay is fetched exactly when the agent will go on to request the
-// backend that needs it.
-
-func (p BackendPlan) WantsROCm() bool {
-	for _, s := range p.Steps {
-		if s.Backend == BackendROCm {
-			return true
-		}
+// Fetch it for any AMD GPU in use, and let the engine decide — it keeps
+// the devices the overlay's rocBLAS carries kernels for and serves the
+// rest through Vulkan. The one exception is the Windows Strix Halo, whose
+// measured arm names Vulkan: with the overlay on disk the engine would
+// prefer ROCm for it.
+//
+// This replaces a hand-kept copy of upstream's Windows SKU table
+// (amdROCmSupportedRes), which disagreed with both upstream's own docs
+// and the overlay's actual contents (waired-agent#1248, #1266).
+func WantsROCmOverlay(in BackendInputs) bool {
+	if in.GOOS == "darwin" || !in.AMDGPU {
+		return false
 	}
-	return false
+	return in.GOOS != "windows" || !in.StrixHaloAPU
 }
 
-// Probes reports whether the plan has a fallback step that the caller
-// should activate when the preferred backend does not engage the GPU.
-func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
-
-// amdROCmSupportedRes are the AMD GPUs the agent may PREFER ROCm for on
-// Windows, matched against the GPU model string. Windows ships no ROCm in
-// the base package — it arrives as a separate overlay asset — so a card
-// outside this set has no ROCm runtime there and must use Vulkan.
-//
-// This list is the only copy. It used to be mirrored in
-// scripts/install/ollama-windows.ps1's Test-AMDRocmSupported, and that
-// file was deleted with the second install path (#493), taking the
-// per-bump review checklist with it. The checklist is below instead.
-//
-// !!! MAINTENANCE, at every OllamaPinnedVersion bump: read the overlay
-// !!! rather than the release notes. ollama-windows-amd64-rocm.zip
-// !!! unpacks to lib/ollama/rocm_v<major>_<minor>/, and the rocBLAS
-// !!! kernels under it (Kernels.so-000-<target>.hsaco) name the gfx
-// !!! targets that build actually carries.
-// !!!
-// !!! At 0.33.3 (read 2026-09-06) the overlay is ROCm 7.1 and carries
-// !!! gfx906, gfx1030, gfx1100, gfx1101, gfx1102, gfx1150, gfx1151,
-// !!! gfx1200 and gfx1201 — broader than this list (which knows no RDNA4)
-// !!! and broader than upstream's own documented Windows table (RX
-// !!! 7900/7800/7700/7600 and PRO W7900…W7500 only). The three do not
-// !!! agree.
-// !!!
-// !!! RE-READ AT 0.34.2 (2026-09-20): nothing moved. The overlay is still
-// !!! rocm_v7_1, and its rocblas/library/ still holds exactly those nine
-// !!! TensileLibrary_lazy_gfx*.dat targets — read from the 0.34.2 zip
-// !!! itself, which is the set rocblasGFXTargets globs and so the set
-// !!! that decides ROCm capability. Upstream's docs/gpu.mdx is
-// !!! byte-identical from v0.33.3 through v0.34.2, so the #1248 recheck
-// !!! below answers "no": RX 9000 has NOT moved into upstream's Windows
-// !!! column, and the #1266 disagreement is unchanged too.
-// !!!
-// !!! AT THE NEXT BUMP, also re-read these upstream threads before
-// !!! assuming the Strix Halo arm below still needs to name Vulkan.
-// !!! They are the reason it does, and they were open at 0.33.3
-// !!! (checked 2026-09-06); the arm can be revisited when they close,
-// !!! not before. Re-read at 0.34.2 (2026-09-20): the three CORRECTNESS
-// !!! bugs are still open, so the arm stays. The two that are now closed
-// !!! are marked below; neither of them was a reason for the arm, and
-// !!! one of them was never as open as this stamp said. Full context:
-// !!! docs/knowledges/20260906/1700-what-to-recheck-about-amd-backends.md
-// !!!
-// !!!   ollama/ollama#17895  ROCm on gfx1151 answers WRONGLY above ~4k
-// !!!                        prompt tokens, silently. Vulkan and CPU
-// !!!                        clean on the same machine.
-// !!!   ollama/ollama#17847  ROCm on gfx1151 bleeds KV state between
-// !!!                        sequential requests at NUM_PARALLEL=1.
-// !!!   ollama/ollama#17498  ROCm on gfx1151 corrupts Gemma 4 output
-// !!!                        from ~1.2k prompt tokens.
-// !!!   ollama/ollama#17870  Vulkan on gfx1151 loses the device on very
-// !!!                        long prefill (num_batch=128 works around
-// !!!                        it). The Vulkan-side counterweight.
-// !!!                        CLOSED not_planned 2026-09-07. So the
-// !!!                        counterweight has no upstream fix coming.
-// !!!                        That does not move the arm: a workaround
-// !!!                        that exists beats three open correctness
-// !!!                        bugs that have none.
-// !!!   ROCm 7.2.4           ships native hipBLASLt gfx1151 kernels,
-// !!!                        which upstream says removes the need for
-// !!!                        HSA_OVERRIDE_GFX_VERSION. 0.33.3 bundles
-// !!!                        7.1; #17895 reproduces on 7.2 as well, so
-// !!!                        a version bump alone is not the fix.
-// !!!
-// !!! One more, on a DIFFERENT axis — it moves with the vendored
-// !!! llama.cpp version, not with ollama's release or its ROCm overlay,
-// !!! so ollama's release notes will never mention it:
-// !!!
-// !!!   ggml-org/llama.cpp#27856  qwen4exp (Qwen3.8-Flash-Next) decode
-// !!!                        collapses 3.5-4x once context passes ~1k on
-// !!!                        HIP/gfx1151 and plateaus at 5.5-6.1 tok/s.
-// !!!                        CUDA decays only mildly. This one lands on
-// !!!                        the LINUX arm, which prefers ROCm — the
-// !!!                        Windows arm is already on Vulkan — and the
-// !!!                        #290 probe cannot see it, since it falls
-// !!!                        back only on size_vram == 0.
-// !!!                        CLOSED completed 2026-09-07, and the stamp
-// !!!                        above was wrong to call it open at 0.33.3:
-// !!!                        the fix is ggml-org/llama.cpp#27466 (radix
-// !!!                        TOP_K for long rows, f8dbcd6, merged
-// !!!                        2026-08-31), FIRST IN b10720 — so b10760
-// !!!                        already carried it and 0.33.3 was never
-// !!!                        exposed. The tracking, not the engine, was
-// !!!                        stale. Re-checked at 0.34.2 / b10969, which
-// !!!                        also carries it.
-// !!!
-// !!! The gfx1151 half of that was measured and is settled: ROCm runs
-// !!! on a Strix Halo iGPU under Windows — and did so at v0.31.1 too, so
-// !!! the "v6.1" in this stamp was wrong for the very version it names —
-// !!! and it is slower than Vulkan there, so the Strix Halo arm below
-// !!! keeps Vulkan on the numbers rather than on an absence (#1233).
-// !!!
-// !!! RDNA4 is settled too, the other way, and this stamp used to get it
-// !!! backwards. It said an RX 9000 "wants a card nobody has yet", as
-// !!! though the entry were owed once someone bought one. Compare this
-// !!! list against the right column of upstream's own table instead —
-// !!! docs/gpu.mdx at v0.33.3 splits AMD support by OS, and the WINDOWS
-// !!! table is what this list is a copy of:
-// !!!
-// !!!   Windows: RX 7900 XTX/XT/GRE, 7800 XT, 7700 XT, 7600 XT, 7600
-// !!!            PRO W7900 W7800 W7700 W7600 W7500
-// !!!   Linux:   all of the above, PLUS RX 9070 XT/GRE/9070, 9060 XT/LP,
-// !!!            9060, RX 6950/6900/6800, PRO W6xxx, V620, Ryzen AI
-// !!!
-// !!! So RDNA4 is absent from this list because it is absent from
-// !!! upstream's WINDOWS table, which is agreement, not a gap
-// !!! (waired-agent#1248). The recheck is therefore a fact anyone can
-// !!! look up rather than a card anyone must buy: re-read that table at
-// !!! the next bump and see whether RX 9000 has moved into the Windows
-// !!! column.
-// !!!
-// !!! Where the three genuinely disagree is the OTHER direction, and it
-// !!! is not fixed here: the last three patterns below (RX 6800/6900/6950,
-// !!! PRO W6xxx, V620) are on upstream's LINUX table and NOT on its
-// !!! Windows one, so this list is broader than what upstream claims for
-// !!! the OS it applies to. waired-agent#1266 carries that; changing it
-// !!! moves shipped hosts, so it wants a measurement first.
-// !!!
-// !!! Note what this list actually decides: whether the OVERLAY IS
-// !!! FETCHED. That is not the same as "offering the option". At 0.33.3
-// !!! ollama decides ROCm capability from the overlay's own contents
-// !!! (discover/amd.go rocblasGFXTargets globs
-// !!! rocblas/library/TensileLibrary_lazy_gfx*.dat, and
-// !!! filterUnsupportedROCmDevices drops anything not in that set), and
-// !!! the overlay carries gfx1200/1201 — so fetching it is what makes an
-// !!! RX 9000 a ROCm device. Then ml/device.go PreferredLibrary picks
-// !!! ROCm over Vulkan for a duplicate device UNCONDITIONALLY, its own
-// !!! comment reading "TODO in the future if we find Vulkan is better
-// !!! than ROCm on some devices that implementation can live here". So
-// !!! adding a pattern here does not add a choice; it changes the
-// !!! default. A host whose operator wants ROCm anyway already has
-// !!! WAIRED_OLLAMA_GPU_MODE=rocm, which bypasses this list in
-// !!! wantROCmOverlay.
-var amdROCmSupportedRes = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)radeon\s+rx\s+7\d{3}`),                  // RX 7000 series
-	regexp.MustCompile(`(?i)radeon\s+rx\s+6[89]\d{2}`),              // RX 6800/6900/6950
-	regexp.MustCompile(`(?i)radeon\s+(\(tm\)\s+)?pro\s+w[67]\d{3}`), // PRO W6xxx/W7xxx
-	regexp.MustCompile(`(?i)radeon\s+(\(tm\)\s+)?pro\s+v620`),       // PRO V620
-}
-
-// amdROCmSupported reports whether an AMD GPU model is in Ollama's
-// Windows ROCm overlay support set (see amdROCmSupportedRes).
-func amdROCmSupported(model string) bool {
-	for _, re := range amdROCmSupportedRes {
-		if re.MatchString(model) {
-			return true
-		}
-	}
-	return false
-}
-
-// ResolveOllamaBackend maps host facts to an ordered backend plan.
-//
-// The Strix Halo APU is checked first and by CPU model, so the decision
-// holds even when the iGPU was never detected (the common Linux case).
+// ResolveOllamaBackend maps host facts to the plan.
 func ResolveOllamaBackend(in BackendInputs) BackendPlan {
-	// darwin has exactly two backends in Ollama's macOS build: Metal (Apple
-	// Silicon) or CPU. There is no ROCm / CUDA / Vulkan path on macOS, so
-	// darwin is guarded up front — the vendor switch below emits Linux/
-	// Windows-only GPU env (OLLAMA_VULKAN, OLLAMA_IGPU_ENABLE, the HSA
-	// override), which would be meaningless-to-harmful if a future
-	// detectIntel/detectAmd ever reported a non-apple vendor on a Mac.
-	// Mirrors the Windows special-case inside the StrixHalo block.
+	// macOS has exactly two backends in Ollama's build: Metal on Apple
+	// Silicon, or the CPU.
 	if in.GOOS == "darwin" {
 		if in.PrimaryGPUVendor == "apple" {
-			return BackendPlan{
-				Steps:  []BackendStep{{Backend: BackendMetal}},
-				Reason: "apple silicon: metal/mlx (ollama default, no override)",
-			}
+			return BackendPlan{Backend: BackendMetal, Reason: "apple silicon: metal/mlx (ollama default)"}
 		}
-		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendCPU}},
-			Reason: "macOS non-apple gpu: cpu (ollama macOS has only metal or cpu)",
-		}
+		return BackendPlan{Backend: BackendCPU, Reason: "macOS non-apple gpu: cpu (ollama macOS has only metal or cpu)"}
 	}
 
-	if in.StrixHaloAPU {
-		if in.GOOS == "windows" {
-			// Vulkan, because it is FASTER here — not because ROCm is
-			// absent. This arm used to say "ROCm has no Windows APU
-			// support", and that was never true of any engine this
-			// product has pinned: on a Ryzen AI Max+ 395, ollama v0.31.1
-			// — the version the stale stamp below named — already reports
-			// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`,
-			// identically to 0.33.3, which serves a 21.8 GB model wholly
-			// on the GPU. The Windows overlay has been rocm_v7_1 carrying
-			// gfx1151 since at least v0.31.1 (kernel lists read off the
-			// asset for 0.31.1, 0.32.13, 0.32.15, 0.33.2 and 0.33.3 — they
-			// are the same). waired-agent#1233, measured 2026-09-06.
-			//
-			// The reason that decides it is CORRECTNESS, not speed.
-			// ROCm on gfx1151 has open upstream defects that a coding
-			// agent meets on every request: ollama/ollama#17895 has it
-			// returning wrong output above ~4k prompt tokens — "fluent,
-			// confident, wrong answers" with nothing logged, and past ~8k
-			// byte-identical replies to different prompts — and
-			// ollama/ollama#17847 has it bleeding KV state between
-			// sequential requests at OLLAMA_NUM_PARALLEL=1. Both report
-			// the same machine clean on Vulkan and on CPU. Vulkan has one
-			// of its own (#17870, an amdgpu compute-ring timeout on very
-			// long prefill) but it FAILS the request; ROCm answers wrongly,
-			// which no gate here or in the catalog would catch.
-			//
-			// Speed agrees, and is the lesser reason. Ranges do not
-			// overlap. qwen3.6:35b-a3b-q4_K_M, the two backends alternated
-			// so drift cannot favour one, six turns each of a 30-36k-token
-			// prompt at num_predict 512, the cold turn after each load
-			// discarded:
-			//
-			//	prefill  Vulkan 876.8 (839.4-912.6)  ROCm 636.3 (580.0-654.1)
-			//	decode   Vulkan  49.2 ( 47.9- 50.1)  ROCm  43.8 ( 43.1- 44.3)
-			//
-			// Vulkan by 37.8 % and 12.3 % at the medians — measured
-			// against ollama's own bundled ROCm, which is a stock HIP
-			// build. Tuned gfx1151 builds exist and report the split going
-			// the other way on prefill, so this is a fact about the engine
-			// we ship, not about ROCm. An earlier pass
-			// measured one turn per backend at num_predict 64 — a
-			// 1.2-second decode window — and read 4.9 % and 11.5 % off it;
-			// a later session under the same conditions put ROCm ahead
-			// instead, the same Vulkan configuration having moved 22 %
-			// between the two. Size the window before believing a gap this
-			// small, and alternate the backends inside one run so drift
-			// cannot masquerade as a difference.
-			//
-			// Both genuinely run on the GPU — device buffers, not host
-			// ones (`load_tensors: ROCm0 model buffer size = 21171.18 MiB`),
-			// and peak GPU utilisation of 453 % and 112 %. The control that
-			// settles it: with both backends moved out of lib/ollama the
-			// same turn runs on the CPU at 158 tok/s prefill and 19.3
-			// decode, with size_vram 0 and the GPU at 0 % — 4.0x and 2.3x
-			// off the slower of the two GPU backends.
-			//
-			// The exposed figure matters as much as the rates: the engine
-			// offers ROCm 78197 MiB of the unified pool where it offers
-			// Vulkan 99437 MiB, so a model that fits under Vulkan may not
-			// fit at all under ROCm on the same machine.
-			//
-			// A ROCm step here also changed nothing WHEN MEASURED: with
-			// both backends on disk, four restarts — including one with
-			// the HSA override set — all dispatched
-			// `[{ID:0 Library:Vulkan}]`. Adding the step would only make
-			// the installer fetch a ~250 MB overlay nothing then used
-			// (WantsROCm feeds wantROCmOverlay). A user who wants to try
-			// ROCm anyway has WAIRED_OLLAMA_GPU_MODE=rocm.
-			//
-			// Do not generalise that observation, and do not lean on it
-			// here: the arm names Vulkan explicitly, so it does not
-			// depend on ollama's choice, which is just as well because
-			// the SOURCE PREDICTS THE OPPOSITE. ml/device.go's
-			// PreferredLibrary returns true for CUDA and ROCm and false
-			// for everything else, with no per-device case at all
-			// (waired-agent#1248, read at v0.33.3). Four Vulkan dispatches
-			// on gfx1151 are a fact; the mechanism that produced them is
-			// not established, so on any other SKU assume ROCm wins once
-			// the overlay is on disk.
-			//
-			// OLLAMA_IGPU_ENABLE is mandatory or the runner drops the iGPU.
-			return BackendPlan{
-				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}}},
-				Reason: "strix halo (windows): vulkan + igpu-enable — measured faster than ROCm here",
-			}
-		}
-		// Linux (and any non-Windows): try ROCm with the gfx1151 HSA
-		// override first (faster at long context); fall back to Vulkan if
-		// the bundled ROCm runtime doesn't actually engage the iGPU. Both
-		// steps carry OLLAMA_IGPU_ENABLE — the Strix Halo GPU is integrated
-		// regardless of backend, so 0.30.x would otherwise drop it.
+	// THE ONE OVERRIDE. Every other host takes the engine's own choice.
+	//
+	// AT EVERY OllamaPinnedVersion BUMP, re-read the threads below before
+	// assuming this arm still needs to name Vulkan; they are the reason it
+	// does (full context: docs/knowledges/20260906/1700-what-to-recheck-
+	// about-amd-backends.md). Checked open at 0.34.2 (2026-09-20):
+	// ollama/ollama#17895 (ROCm on gfx1151 answers wrongly above ~4k
+	// prompt tokens), #17847 (KV state bleeds between requests), #17498
+	// (Gemma 4 output corrupted from ~1.2k tokens). The Vulkan-side
+	// counterweight, #17870 (device lost on very long prefill, num_batch=128
+	// works around it), was closed not_planned on 2026-09-07.
+	if in.StrixHaloAPU && in.GOOS == "windows" {
+		// Vulkan, because it is FASTER here — not because ROCm is
+		// absent. This arm used to say "ROCm has no Windows APU
+		// support", and that was never true of any engine this
+		// product has pinned: on a Ryzen AI Max+ 395, ollama v0.31.1
+		// — the version the stale stamp below named — already reports
+		// `library=ROCm compute=gfx1151 ... type=iGPU total="76.8 GiB"`,
+		// identically to 0.33.3, which serves a 21.8 GB model wholly
+		// on the GPU. The Windows overlay has been rocm_v7_1 carrying
+		// gfx1151 since at least v0.31.1 (kernel lists read off the
+		// asset for 0.31.1, 0.32.13, 0.32.15, 0.33.2 and 0.33.3 — they
+		// are the same). waired-agent#1233, measured 2026-09-06.
+		//
+		// The reason that decides it is CORRECTNESS, not speed.
+		// ROCm on gfx1151 has open upstream defects that a coding
+		// agent meets on every request: ollama/ollama#17895 has it
+		// returning wrong output above ~4k prompt tokens — "fluent,
+		// confident, wrong answers" with nothing logged, and past ~8k
+		// byte-identical replies to different prompts — and
+		// ollama/ollama#17847 has it bleeding KV state between
+		// sequential requests at OLLAMA_NUM_PARALLEL=1. Both report
+		// the same machine clean on Vulkan and on CPU. Vulkan has one
+		// of its own (#17870, an amdgpu compute-ring timeout on very
+		// long prefill) but it FAILS the request; ROCm answers wrongly,
+		// which no gate here or in the catalog would catch.
+		//
+		// Speed agrees, and is the lesser reason. Ranges do not
+		// overlap. qwen3.6:35b-a3b-q4_K_M, the two backends alternated
+		// so drift cannot favour one, six turns each of a 30-36k-token
+		// prompt at num_predict 512, the cold turn after each load
+		// discarded:
+		//
+		//	prefill  Vulkan 876.8 (839.4-912.6)  ROCm 636.3 (580.0-654.1)
+		//	decode   Vulkan  49.2 ( 47.9- 50.1)  ROCm  43.8 ( 43.1- 44.3)
+		//
+		// Vulkan by 37.8 % and 12.3 % at the medians — measured
+		// against ollama's own bundled ROCm, which is a stock HIP
+		// build. Tuned gfx1151 builds exist and report the split going
+		// the other way on prefill, so this is a fact about the engine
+		// we ship, not about ROCm. An earlier pass
+		// measured one turn per backend at num_predict 64 — a
+		// 1.2-second decode window — and read 4.9 % and 11.5 % off it;
+		// a later session under the same conditions put ROCm ahead
+		// instead, the same Vulkan configuration having moved 22 %
+		// between the two. Size the window before believing a gap this
+		// small, and alternate the backends inside one run so drift
+		// cannot masquerade as a difference.
+		//
+		// Both genuinely run on the GPU — device buffers, not host
+		// ones (`load_tensors: ROCm0 model buffer size = 21171.18 MiB`),
+		// and peak GPU utilisation of 453 % and 112 %. The control that
+		// settles it: with both backends moved out of lib/ollama the
+		// same turn runs on the CPU at 158 tok/s prefill and 19.3
+		// decode, with size_vram 0 and the GPU at 0 % — 4.0x and 2.3x
+		// off the slower of the two GPU backends.
+		//
+		// The exposed figure matters as much as the rates: the engine
+		// offers ROCm 78197 MiB of the unified pool where it offers
+		// Vulkan 99437 MiB, so a model that fits under Vulkan may not
+		// fit at all under ROCm on the same machine.
+		//
+		// A ROCm step here also changed nothing WHEN MEASURED: with
+		// both backends on disk, four restarts — including one with
+		// the HSA override set — all dispatched
+		// `[{ID:0 Library:Vulkan}]`. Adding the step would only make
+		// the installer fetch a ~250 MB overlay nothing then used
+		// (WantsROCmOverlay says no for this arm). A user who wants to try
+		// ROCm anyway has WAIRED_OLLAMA_GPU_MODE=rocm.
+		//
+		// Do not generalise that observation, and do not lean on it
+		// here: the arm names Vulkan explicitly, so it does not
+		// depend on ollama's choice, which is just as well because
+		// the SOURCE PREDICTS THE OPPOSITE. ml/device.go's
+		// PreferredLibrary returns true for CUDA and ROCm and false
+		// for everything else, with no per-device case at all
+		// (waired-agent#1248, read at v0.33.3). Four Vulkan dispatches
+		// on gfx1151 are a fact; the mechanism that produced them is
+		// not established, so on any other SKU assume ROCm wins once
+		// the overlay is on disk.
+		//
+		// OLLAMA_IGPU_ENABLE is mandatory or the runner drops the iGPU.
+		// OLLAMA_VULKAN is not set: Vulkan is on by default since 0.30,
+		// and ROCm is kept off this host by not fetching its overlay.
 		return BackendPlan{
-			Steps: []BackendStep{
-				{Backend: BackendROCm, Env: []string{strixHaloHSAOverride, envOllamaIGPUEnable}},
-				{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}},
-			},
-			Reason: "strix halo (linux): try rocm (gfx1151 HSA override), fall back to vulkan if CPU-bound",
+			Backend: BackendVulkan,
+			Env:     []string{envOllamaIGPUEnable},
+			Reason:  "strix halo (windows): vulkan + igpu-enable — measured faster and correct where ROCm is not",
 		}
 	}
 
 	switch in.PrimaryGPUVendor {
 	case "apple":
-		// Metal is automatic; Ollama auto-engages MLX on ≥32 GB Apple
-		// Silicon (0.19+). No override — forcing the preview MLX flag
-		// would risk silent breakage, so we defer to Ollama's default.
-		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendMetal}},
-			Reason: "apple silicon: metal/mlx (ollama default, no override)",
-		}
-	case "intel":
-		// Only a discrete Intel card reaches here: an integrated one is set
-		// aside by the profiler before the list is read (hardware
-		// engine_gpus.go), because the engine drops Vulkan iGPUs by
-		// default. Vulkan is Intel's only GPU route in the engine.
-		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan}}},
-			Reason: "intel gpu: vulkan",
-		}
+		return BackendPlan{Backend: BackendMetal, Reason: "apple silicon: metal/mlx (ollama default)"}
 	case "nvidia":
-		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendCUDA}},
-			Reason: "nvidia gpu: cuda (ollama default, no override)",
-		}
+		return BackendPlan{Backend: BackendCUDA, Reason: "nvidia gpu: cuda (ollama default)"}
 	case "amd":
-		// An integrated AMD GPU other than Strix Halo never reaches here:
-		// the engine drops it by default and the profiler sets it aside
-		// (waired-agent#1484). What remains is discrete, or a device whose
-		// integration nothing could read — which the engine will classify
-		// for itself.
-		//
-		// On Windows the base package ships no ROCm; the installer adds the
-		// ROCm overlay only for the SKUs in amdROCmSupported. A discrete AMD
-		// outside that set therefore has no ROCm runtime and must use Vulkan
-		// (the path ollama-windows.ps1's Resolve-GpuMode took before #493
-		// removed it; amdROCmSupportedRes is the surviving copy of the set).
-		if in.GOOS == "windows" && !amdROCmSupported(in.PrimaryGPUModel) {
-			return BackendPlan{
-				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan}}},
-				Reason: "amd discrete (windows, outside ollama rocm overlay set): vulkan",
-			}
-		}
-		// Discrete AMD with ROCm available (Linux bundles the HIP runtime;
-		// Windows has the overlay for supported SKUs): prefer ROCm and let
-		// the engagement probe fall back to Vulkan if the model does not
-		// actually land on the GPU. size_vram>0 on ROCm keeps ROCm with no
-		// restart; a CPU-bound ROCm load switches to Vulkan (#290 probe).
-		return BackendPlan{
-			Steps: []BackendStep{
-				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{envOllamaVulkan}},
-			},
-			Reason: "amd discrete gpu: try rocm, fall back to vulkan if CPU-bound",
-		}
+		// ROCm where the overlay carries the card's gfx target — which on
+		// Linux includes the Strix Halo's gfx1151, admitted by default —
+		// and Vulkan for a card it does not. The engine decides.
+		return BackendPlan{Backend: BackendAuto, Reason: "amd gpu: ollama chooses rocm or vulkan (ollama default)"}
+	case "intel":
+		// Only a discrete Intel card is in use (the engine drops Intel
+		// iGPUs by default); Vulkan is Intel's only GPU route.
+		return BackendPlan{Backend: BackendVulkan, Reason: "intel gpu: vulkan (ollama default)"}
 	case "":
-		// No GPU the engine uses by default. An integrated GPU it drops is
-		// already out of the list, so there is nothing to engage.
-		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendCPU}},
-			Reason: "no gpu the engine uses by default: cpu",
-		}
+		return BackendPlan{Backend: BackendCPU, Reason: "no gpu the engine uses by default: cpu"}
 	default:
-		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendAuto}},
-			Reason: fmt.Sprintf("unrecognised gpu vendor %q: ollama auto-detect", in.PrimaryGPUVendor),
-		}
+		return BackendPlan{Backend: BackendAuto, Reason: fmt.Sprintf("unrecognised gpu vendor %q: ollama auto-detect", in.PrimaryGPUVendor)}
 	}
 }

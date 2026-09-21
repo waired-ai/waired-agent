@@ -138,7 +138,7 @@ LinuxとmacOSは`install.sh`、Windowsは同じオプションをPowerShellの�
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | 特定のリリースに固定する。 |
 | | | `WAIRED_STATE_DIR` | Wairedが識別情報と設定を置く場所。macOSとWindowsのみ。 |
 | | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | 推論エンジンの初回ダウンロードをWairedが諦めるまでの時間。既定は`60m`。とても遅い回線でだけ、たとえば`3h`に上げる。 |
-| | `-OllamaGpuMode <mode>` | | Windowsのみ。`auto`、`rocm`、`vulkan`、`cuda-only`、`cpu-only`。AMDのROCmのオーバーレイをダウンロードするかを決める。 |
+| | `-OllamaGpuMode <mode>` | | Windowsのみ。`auto`、`rocm`、`vulkan`、`cuda-only`、`cpu-only`。AMDのROCmのオーバーレイをダウンロードするかを決める。`auto`は、推論エンジンが使うAMDのGPUがあればダウンロードする。ただしVulkanで動くAMD Strix Haloは除く。 |
 
 <Aside type="note" title="Windowsのフラグにはスクリプトをディスクに置く必要があります">
 	`iwr … | iex`の1行のコマンドはパラメーターを渡せません。環境変数の列を使うか、このページの前半の例のように先にスクリプトをダウンロードします。

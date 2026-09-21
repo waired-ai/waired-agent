@@ -11,9 +11,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 func main() {
@@ -31,7 +34,12 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(string(out))
-	// The derived provenance key, on stderr so stdout stays the profile
-	// JSON alone (waired-agent#1455, #1485).
+	// What the daemon would derive from this profile, on stderr so stdout
+	// stays the profile JSON alone: the provenance key (waired-agent#1455,
+	// #1485), and the engine plan and ROCm-overlay decision (#1492).
 	fmt.Fprintf(os.Stderr, "host_key: %s\n", hardware.HostKey(&prof))
+	in := setup.OllamaBackendInputs(runtime.GOOS, prof)
+	plan := infruntime.ResolveOllamaBackend(in)
+	fmt.Fprintf(os.Stderr, "backend: %s env=%v overlay=%v (%s)\n",
+		plan.Backend, plan.Env, infruntime.WantsROCmOverlay(in), plan.Reason)
 }

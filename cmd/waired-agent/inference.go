@@ -34,6 +34,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
@@ -571,25 +572,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			"err", err)
 	}
 
-	// #290: pick the GPU-backend env for `ollama serve` from the host
-	// hardware profile. Strix Halo is keyed off the CPU model (not GPU
-	// detection) because on Linux its iGPU is invisible to the profiler
-	// unless rocm-smi is installed. backendPlan.Preferred() seeds the
-	// adapter; when backendPlan.Probes() is true the bootstrap goroutine
-	// verifies the GPU actually engaged and falls back to the next step.
+	// #290: the GPU-backend env for `ollama serve`. Which backend runs is
+	// the engine's own choice everywhere but the measured Windows Strix
+	// Halo arm (#1492); the plan's label seeds the adapter, and the
+	// bootstrap goroutine corrects it to "cpu" if nothing landed on the
+	// GPU.
 	hwProfile := profiler.Profile(ctx)
-	gpuVendor := ""
-	gpuModel := ""
-	if len(hwProfile.GPUs) > 0 {
-		gpuVendor = strings.ToLower(hwProfile.GPUs[0].Vendor)
-		gpuModel = hwProfile.GPUs[0].Model
-	}
-	backendPlan := infruntime.ResolveOllamaBackend(infruntime.BackendInputs{
-		GOOS:             runtime.GOOS,
-		PrimaryGPUVendor: gpuVendor,
-		PrimaryGPUModel:  gpuModel,
-		StrixHaloAPU:     hardware.StrixHaloHost(&hwProfile),
-	})
+	backendPlan := infruntime.ResolveOllamaBackend(setup.OllamaBackendInputs(runtime.GOOS, hwProfile))
 	// The GPUs the engine leaves off by default are out of the list the
 	// plan read (waired-agent#1484); say so once, so a host that runs on
 	// its CPU beside an iGPU is not a mystery in the log.
@@ -601,9 +590,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		logger.Info(msg, "model", u.Model, "pci_id", u.PCIID, "reason", u.Reason)
 	}
 	logger.Info("ollama gpu backend selected",
-		"backend", backendPlan.Preferred().Backend,
-		"env", backendPlan.Preferred().Env,
-		"probes_fallback", backendPlan.Probes(),
+		"backend", backendPlan.Backend,
+		"env", backendPlan.Env,
 		"reason", backendPlan.Reason)
 
 	// One record of retired engines for the whole host: every engine start
@@ -624,8 +612,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// waired-agent#29: the adapter reports a dead engine here; the
 		// provider owns the recovery policy. Assigned after the provider
 		// exists (the closure needs it), just below.
-		// #290: GPU-backend env (e.g. OLLAMA_VULKAN / HSA override).
-		BackendEnv: backendPlan.Preferred().Env,
+		// #290: GPU-backend env (OLLAMA_IGPU_ENABLE on a Windows Strix
+		// Halo; nothing elsewhere, #1492).
+		BackendEnv: backendPlan.Env,
 		// Blobs live in the waired-owned store, and only an exact-pin
 		// orphan of a previous run may be adopted on a port conflict
 		// (any other survivor fails loudly).
@@ -645,9 +634,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	ollama := infruntime.NewOllamaAdapter(ollamaCfg)
 	registry.Register(ollama)
 	// Record the chosen backend up front so the doctor / inference status
-	// shows it even before (or without) the engagement probe runs. The
-	// probe may revise it to a fallback or to "cpu" (#290).
-	ollama.SetResolvedBackend(backendPlan.Preferred().Backend)
+	// shows it even before (or without) the engagement check runs. The
+	// check may revise it to "cpu" (#290, #70).
+	ollama.SetResolvedBackend(backendPlan.Backend)
 	// #621: size the serve tuning (context window / KV cache quantization
 	// / parallelism) for the model this engine will serve and export it
 	// to the spawn env — without it every model silently loads at the

@@ -61,12 +61,11 @@ type OllamaConfig struct {
 	// ExtraEnv augments the env passed to the subprocess. Useful in
 	// tests; production callers leave it empty.
 	ExtraEnv []string
-	// BackendEnv holds GPU-backend selection overrides (e.g.
-	// "OLLAMA_VULKAN=1" or "HSA_OVERRIDE_GFX_VERSION=11.5.1") chosen for
-	// this host by ResolveOllamaBackend (#290). Unlike ExtraEnv it is
-	// production-set and may be replaced at runtime via SetBackendEnv
-	// (the Strix Halo ROCm->Vulkan probe). Any inherited env var with a
-	// matching key is dropped so these win over the parent environment.
+	// BackendEnv holds the GPU-backend overrides ResolveOllamaBackend
+	// chose for this host — today OLLAMA_IGPU_ENABLE=1 on a Windows Strix
+	// Halo and nothing anywhere else (#290, #1492). Unlike ExtraEnv it is
+	// production-set. Any inherited env var with a matching key is
+	// dropped so these win over the parent environment.
 	BackendEnv []string
 
 	// Spawner abstracts the subprocess starter (DefaultSpawner{} in
@@ -270,10 +269,8 @@ type OllamaAdapter struct {
 	proc    RunningProcess
 	state   Health
 	baseURL string
-	// backendEnv is the live GPU-backend env override set (seeded from
-	// cfg.BackendEnv, swappable via SetBackendEnv for the Strix Halo
-	// ROCm->Vulkan probe, #290). Guarded by mu; read by processEnv at
-	// each spawn.
+	// backendEnv is the GPU-backend env override set, from
+	// cfg.BackendEnv. Guarded by mu; read by processEnv at each spawn.
 	backendEnv []string
 	// modelEnvProvider, when set, is consulted at each spawn that has
 	// no explicit modelEnv yet: it resolves the serving target and
@@ -1138,23 +1135,6 @@ func (a *OllamaAdapter) processEnv() []string {
 	return out
 }
 
-// SetBackendEnv replaces the GPU-backend env overrides applied to the
-// NEXT `ollama serve` spawn. Used by the Strix Halo ROCm->Vulkan probe
-// to switch backends across a Stop / re-EnsureRunning cycle (#290); it
-// does not affect an already-running process until it is restarted.
-func (a *OllamaAdapter) SetBackendEnv(env []string) {
-	a.mu.Lock()
-	a.backendEnv = append([]string(nil), env...)
-	a.mu.Unlock()
-}
-
-// BackendEnv returns a copy of the current GPU-backend env overrides.
-func (a *OllamaAdapter) BackendEnv() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]string(nil), a.backendEnv...)
-}
-
 // SetModelEnvProvider registers the spawn-time tuning resolver — see
 // the modelEnvProvider field for the boot-order gap it closes.
 func (a *OllamaAdapter) SetModelEnvProvider(fn func() ([]string, ModelTuning, bool)) {
@@ -1222,8 +1202,8 @@ func (a *OllamaAdapter) refreshModelEnvFromProvider() {
 }
 
 // SetModelEnv replaces the per-model tuning env applied to the NEXT
-// `ollama serve` spawn (#621). Like SetBackendEnv it does not affect an
-// already-running process until it is restarted.
+// `ollama serve` spawn (#621). It does not affect an already-running
+// process until it is restarted.
 func (a *OllamaAdapter) SetModelEnv(env []string) {
 	a.mu.Lock()
 	a.modelEnv = append([]string(nil), env...)

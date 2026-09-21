@@ -167,8 +167,9 @@ func probeOrderProvider(t *testing.T, r download.CommandRunner) (*agentInference
 		agentCtx:     agentCtx,
 		ollamaUsable: func() bool { return present },
 	}
-	// Strix Halo Linux: ROCm then Vulkan, the only shape that probes.
-	p.bootPlan.backend = strixHaloPlan()
+	// A GPU plan, so the engagement check reads /api/ps (a CPU plan is
+	// not checked at all).
+	p.bootPlan.backend = nvidiaPlan()
 	arm(p)
 	return p, sp, &present, func() []int {
 		mu.Lock()
@@ -190,13 +191,17 @@ func probeOrderProvider(t *testing.T, r download.CommandRunner) (*agentInference
 // ever at fault, and the harm latched: engineBootstrapOnce runs this tail
 // exactly once per process.
 //
+// Since #1492 the backend check only relabels and the tuning degrade is
+// the one restart left; the ordering is what this pins, read at the
+// check's /api/ps request.
+//
 // Driven through the PREFERRED model (the #347 resume), not the bundled
 // fallback: #379's hold already parks the fallback's dispatch behind the
 // control plane, so it is no longer the exposed one. bootstrapPreferredModel
 // still calls PullModel inline, on the boot goroutine, exactly as before.
 func TestBootstrap_TheEngineSettlesBeforeAnyDownloadStarts(t *testing.T) {
 	r := newBlockingRunner(t)
-	p, sp, installed, admittedAtProbe := probeOrderProvider(t, r)
+	p, _, installed, admittedAtProbe := probeOrderProvider(t, r)
 	p.cfg.PreferredModelID = "model-b"
 	*installed = true
 
@@ -204,10 +209,11 @@ func TestBootstrap_TheEngineSettlesBeforeAnyDownloadStarts(t *testing.T) {
 	r.releaseAll()
 	p.waitForPulls()
 
-	if got := sp.count(); got < 2 {
-		t.Fatalf("engine spawns = %d, want at least 2 — the probe was expected to "+
-			"fall back and restart, which is what this test is about", got)
-	}
+	// The engagement check no longer restarts the engine (#1492): the
+	// engine falls back between backends by itself. The tuning verify
+	// that runs in the same window still can, which is why the order
+	// below — the engine is inspected before any download is admitted —
+	// is still the contract. The spawn count is no longer part of it.
 	admitted := admittedAtProbe()
 	if len(admitted) == 0 {
 		t.Fatal("the probe never inspected the engine; the ordering has nothing to read")

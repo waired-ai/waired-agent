@@ -11,6 +11,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 // installOllamaBundled is a seam so tests exercise installOllama's
@@ -79,11 +80,11 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 
 // wantROCmOverlay decides whether to fetch the ~250 MB AMD ROCm overlay.
 //
-// The Windows base archive ships CUDA, Vulkan and CPU; ROCm is separate and
-// covers only the discrete AMD SKUs in Ollama's Windows build. Rather than
-// re-deriving that set, this asks the SAME backend plan the agent will use
-// at spawn time: if no step in the plan requests ROCm, downloading the
-// runtime for it is 250 MB nobody will load.
+// The Windows base archive ships CUDA, Vulkan and CPU; ROCm is separate.
+// The answer is infruntime.WantsROCmOverlay over the same inputs the
+// daemon builds its plan from (setup.OllamaBackendInputs): fetch it for
+// an AMD GPU in use and let the engine decide what the overlay serves,
+// except on a Strix Halo, whose measured arm names Vulkan (#1492).
 //
 // WAIRED_OLLAMA_GPU_MODE (install.ps1's -OllamaGpuMode) still forces the
 // answer, with the five values it has always taken. Only 'rocm' asks for
@@ -97,14 +98,6 @@ func wantROCmOverlay(ctx context.Context, getenv func(string) string) bool {
 	case "vulkan", "cuda-only", "cpu-only":
 		return false
 	}
-	prof := hardware.NewProfiler("").Profile(ctx)
-	in := infruntime.BackendInputs{
-		GOOS:         "windows",
-		StrixHaloAPU: hardware.StrixHaloHost(&prof),
-	}
-	if len(prof.GPUs) > 0 {
-		in.PrimaryGPUVendor = strings.ToLower(prof.GPUs[0].Vendor)
-		in.PrimaryGPUModel = prof.GPUs[0].Model
-	}
-	return infruntime.ResolveOllamaBackend(in).WantsROCm()
+	return infruntime.WantsROCmOverlay(
+		setup.OllamaBackendInputs("windows", hardware.NewProfiler("").Profile(ctx)))
 }
