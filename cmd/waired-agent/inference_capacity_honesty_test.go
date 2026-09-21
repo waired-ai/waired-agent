@@ -12,11 +12,12 @@ import (
 //
 // Product contract, ratifying source waired-agent#1303: what this host
 // advertises as warm conversations is what the model runner is serving, and
-// nothing else. Measured on pc-mbp14-m5 and sv-macmini on 2026-09-12: the
-// runner was started with `-np 1`, the observation never landed (the macOS
-// program path contains a space), and the host advertised the 2 it had
-// asked for — so a pinned turn was admitted into a one-slot engine and
-// queued behind the peer owner's own turn, silent for 185 s.
+// nothing else. Measured on the M5 Pro MacBook and the M4 Mac mini on
+// 2026-09-12: the runner was started with `-np 1`, the observation never
+// landed (the macOS program path contains a space), and the host
+// advertised the 2 it had asked for — so a pinned turn was admitted into
+// a one-slot engine and queued behind the peer owner's own turn, silent
+// for 185 s.
 func TestWarmConversationSlots_IntentIsNotAMeasurement(t *testing.T) {
 	// The measured shape: asked for 2, runner really has 1, observation
 	// missing. Every ladder rung below the observation must decline.

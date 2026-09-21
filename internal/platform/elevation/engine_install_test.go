@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// Product contract (waired-agent#852, observed on pc-dell-premium): what
-// a surface quotes as the install command must be exactly what can be
-// typed or pasted. The elevation a Windows host needs is prose and lives
-// outside the quotes.
+// Product contract (waired-agent#852, observed on the Intel Arc 140T
+// Windows laptop): what a surface quotes as the install command must be
+// exactly what can be typed or pasted. The elevation a Windows host needs is
+// prose and lives outside the quotes.
 //
 // It used to live inside: EngineInstallCommand returned "waired runtimes
 // install ollama (from an elevated prompt)", so `waired models ls

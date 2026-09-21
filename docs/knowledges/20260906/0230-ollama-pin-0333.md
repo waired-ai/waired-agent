@@ -13,14 +13,14 @@ waired-ai/waired#1312 の L100) の実測記録。決定そのものは
 
 計測環境 (すべて 2026-09-06):
 
-- pc-mbp14-m5 — macOS 26.6.2 / Apple M5 Pro / RAM 48 GB / arm64。
+- M5 Pro MacBook Pro — macOS 26.6.2 / Apple M5 Pro / RAM 48 GB / arm64。
   ollama 0.33.3 をポート 11435、別 state dir で走らせた。この機体自身の
   waired agent (rc5) は止めずにそのまま動かしてある。
 - Linux 脚 — 開発機 (WSL2、NVIDIA の dGPU 2 枚: RTX 5080 15.9 GiB +
   RTX 5070 Laptop 7.9 GiB、total_vram 23.8 GiB)。ollama 0.33.3 をポート
-  11436、別 state dir で。**前回 Linux 脚に使った sv-mag ではない** —
+  11436、別 state dir で。**前回 Linux 脚に使った RTX PRO 4000 の Linux ホストではない** —
   作業時間中ずっと別セッションが確保していた。
-- sv-evox2 — Windows 11 build 26200 / Ryzen AI Max+ 395 (Strix Halo) /
+- Strix Halo のホスト — Windows 11 build 26200 / Ryzen AI Max+ 395 (Strix Halo) /
   unified memory 127.15 GB。ollama 0.33.3 を `C:\l100` に手で展開。
 
 モデルは特記なければ `qwen3.5:0.8b-q8_0`。

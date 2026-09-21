@@ -136,7 +136,7 @@ converge は **pin にしか追随しない**ので、pin を超える床は「�
   持つ」に変わった。値の判定は依然として `internal/router` 側にある —
   hostfit が持つのは語彙だけで、比較器 (`proto/version`) と床の解釈は呼び出し側。
 * 残る穴: エンジンが導入済みでも版が読めないホストが実在する
-  (実機 pc-dell-premium: `waired runtimes ls` が `ollama not_started yes spawned - -`)。
+  (実機 Intel Arc 140T の Windows ノート: `waired runtimes ls` が `ollama not_started yes spawned - -`)。
   そこでは fail-closed が効いて converge を当てても行は暗転したままになる。
   別 issue で追う — 本決定は「その状態を行が正直に言う」ところまで。
 

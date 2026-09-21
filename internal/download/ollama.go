@@ -171,7 +171,7 @@ func (r Rendering) Wanted() bool {
 // The stamp is INSIDE Pull rather than beside it, and the reason is
 // measured: `ollama pull` on a tag that is already present takes about
 // two seconds, moves no weights, and REWRITES the local manifest back to
-// the published config — clearing the renderer. Verified on sv-evox2,
+// the published config — clearing the renderer. Verified on the Strix Halo host,
 // where a re-pull of an already-stamped 78.87 GB tag returned
 // `renderer=” parser=”` in 2 s with a 0.00 GB disk delta. A caller
 // that pulls without re-stamping therefore does not leave the model
@@ -312,7 +312,7 @@ func (p *Puller) Remove(ctx context.Context, tag string) error {
 // name reuses every existing layer — weights, projector and the license
 // blob are not copied, only the small config object is rewritten — so
 // the model keeps the identity every caller downstream already holds.
-// Measured on sv-evox2: 0.00 GB of additional disk, and the three
+// Measured on the Strix Halo host: 0.00 GB of additional disk, and the three
 // refused shapes went 500 -> 200 with nothing else changed.
 func (p *Puller) stamp(ctx context.Context, binary, tag string, want Rendering) error {
 	if !want.Wanted() {

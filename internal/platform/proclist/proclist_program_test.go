@@ -7,9 +7,9 @@ import (
 )
 
 // macRunnerCommand is the command line `ps -axww -o command=` printed for
-// the live runner on pc-mbp14-m5 and sv-macmini on 2026-09-12, truncated
-// after the flags this package reads. Every macOS install produces this
-// shape, because the bundled engine lives under
+// the live runner on the M5 Pro MacBook and the M4 Mac mini on 2026-09-12,
+// truncated after the flags this package reads. Every macOS install
+// produces this shape, because the bundled engine lives under
 // /Library/Application Support/waired (internal/platform/paths).
 const macRunnerCommand = `/Library/Application Support/waired/runtimes/ollama/bin/llama-server ` +
 	`--model /Library/Application Support/waired/runtimes/ollama/models/blobs/sha256-d372de8e ` +
@@ -239,7 +239,7 @@ func TestParseCimJSON_ExecutablePath(t *testing.T) {
 // jsonEscape renders a Windows path for embedding in a JSON string literal.
 func jsonEscape(s string) string { return strings.ReplaceAll(s, `\`, `\\`) }
 
-// TestLiveRunners is the second half of what went wrong on sv-macmini
+// TestLiveRunners is the second half of what went wrong on the M4 Mac mini
 // (waired-agent#1303): a runner orphaned fourteen hours earlier carried the
 // same window and the same -np as the live one, so a caller looking for a
 // UNIQUE match found two and abstained — and the host then advertised a

@@ -15,8 +15,8 @@ import (
 )
 
 // TestMeshFinding_MeasurementOutranksTheClaim is the case waired#1137
-// found and the reason this measurement exists: macmini's overlay data
-// path was dead in both directions, and all three hosts' doctors said
+// found and the reason this measurement exists: the M4 Mac mini's overlay
+// data path was dead in both directions, and all three hosts' doctors said
 // `✓ mesh peers — 2/3 reachable, 2 ready`.
 //
 // Product contract from waired#1137 and the owner ruling of 2026-08-12
@@ -24,8 +24,8 @@ import (
 func TestMeshFinding_MeasurementOutranksTheClaim(t *testing.T) {
 	m := management.MeshState{PeersEnrolled: 3, PeersReachable: 2, PeersReady: 2}
 	probes := []meshPeerProbe{
-		{Name: "macmini", Answered: false},
-		{Name: "xps15", Answered: false},
+		{Name: "m4-mac-mini", Answered: false},
+		{Name: "rtx4070-laptop", Answered: false},
 	}
 
 	got := meshFinding(m, probes)
@@ -37,7 +37,7 @@ func TestMeshFinding_MeasurementOutranksTheClaim(t *testing.T) {
 	if got.Status != integration.StatusWarn {
 		t.Errorf("status = %s, want warn — nothing answered on the data path", got.Status)
 	}
-	for _, want := range []string{"macmini", "xps15", "2/3 reported reachable"} {
+	for _, want := range []string{"m4-mac-mini", "rtx4070-laptop", "2/3 reported reachable"} {
 		if !strings.Contains(got.Detail, want) {
 			t.Errorf("detail = %q, want it to contain %q", got.Detail, want)
 		}
@@ -52,16 +52,16 @@ func TestMeshFinding_MeasurementOutranksTheClaim(t *testing.T) {
 func TestMeshFinding_PartialAnswerNamesOnlyTheSilentOnes(t *testing.T) {
 	m := management.MeshState{PeersEnrolled: 3, PeersReachable: 2, PeersReady: 2}
 	got := meshFinding(m, []meshPeerProbe{
-		{Name: "xps15", Answered: true},
-		{Name: "macmini", Answered: false},
+		{Name: "rtx4070-laptop", Answered: true},
+		{Name: "m4-mac-mini", Answered: false},
 	})
 	if got.Status != integration.StatusWarn {
 		t.Errorf("status = %s, want warn", got.Status)
 	}
-	if !strings.Contains(got.Detail, "macmini") {
+	if !strings.Contains(got.Detail, "m4-mac-mini") {
 		t.Errorf("detail = %q does not name the peer that went quiet", got.Detail)
 	}
-	if strings.Contains(got.Detail, "xps15") {
+	if strings.Contains(got.Detail, "rtx4070-laptop") {
 		t.Errorf("detail = %q blames a peer that answered", got.Detail)
 	}
 	if !strings.Contains(got.Detail, "only 1 answered") {
@@ -219,7 +219,7 @@ func TestProbeObservability_MeasuredMeshContradictsTheReport(t *testing.T) {
 		},
 		mesh: func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
-				{DeviceName: "macmini"}, {DeviceName: "xps15"},
+				{DeviceName: "m4-mac-mini"}, {DeviceName: "rtx4070-laptop"},
 			}})
 		},
 		ping: func(w http.ResponseWriter, _ *http.Request) {
@@ -249,7 +249,7 @@ func TestProbeObservability_MeasuredMeshContradictsTheReport(t *testing.T) {
 	if mesh.Status == integration.StatusOK {
 		t.Error("a mesh that answered nothing must not render as a tick")
 	}
-	for _, want := range []string{"macmini", "xps15"} {
+	for _, want := range []string{"m4-mac-mini", "rtx4070-laptop"} {
 		if !strings.Contains(mesh.Detail, want) {
 			t.Errorf("detail = %q does not name %q", mesh.Detail, want)
 		}

@@ -337,7 +337,7 @@ func lowestEngineFloor(vs []catalog.Variant) string {
 // This function used to have two, on the reasoning that an unreadable
 // version "invites the reader to conclude the engine is missing when it
 // is installed and merely not started". Real hardware contradicted the
-// premise rather than the wording: on pc-dell-premium the engine WAS
+// premise rather than the wording: on the Intel Arc 140T laptop the engine WAS
 // missing, and the row said "could not be read" ten lines under a header
 // that said there was no inference engine on the computer (#852). Nothing could
 // read the version because there was nothing to read.

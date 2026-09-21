@@ -10,10 +10,11 @@ import (
 )
 
 // TestOpenAIChatCompletions_NamesTheComputerThatAnswered is
-// waired-agent#1176. Measured on sv-mag before the fix: a peer-served reply
-// on :9473 carried `X-Waired-Inference-Peer: dev_0a0d…` and a locally served
-// one carried no X-Waired header at all — only Content-Length, Content-Type,
-// Date and the engine's own `Server: uvicorn`. The body's `model` field is
+// waired-agent#1176. Measured on the RTX PRO 4000 Linux host before the
+// fix: a peer-served reply on :9473 carried
+// `X-Waired-Inference-Peer: dev_0a0d…` and a locally served one carried no
+// X-Waired header at all — only Content-Length, Content-Type, Date and the
+// engine's own `Server: uvicorn`. The body's `model` field is
 // the engine tag (`openai/gpt-oss-20b`), which names neither Waired nor the
 // computer. One listener over, the Anthropic surface answers the same
 // question for the same case with HeaderLocalModel (anthropic.go), so an

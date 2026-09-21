@@ -111,7 +111,7 @@ docs/knowledges/20260822/1906-tray-row-ab-capture-on-real-hardware.md §1 が
   タグ無しファイルでまさにそれをやっていた。
 
   **この記録は当初、Windows での等価物を「`Stop-Tray` がまず `CloseMainWindow`
-  で頼む」と書いていた。実機で測って誤りと分かった** (sv-evox2、2026-08-27、
+  で頼む」と書いていた。実機で測って誤りと分かった** (Strix Halo の Windows ホスト、2026-08-27、
   waired-agent#1059): トレイはウィンドウを表示しないので
   `Process.MainWindowHandle` は 0、`CloseMainWindow()` は `$false` を返して何も
   起きず、`/F` 無しの `taskkill` も *"This process can only be terminated

@@ -247,6 +247,14 @@ message**, not in repo files.
 
 ## Public-repo cautions
 
+* Never name the computers the product is verified on — not in docs,
+  comments, test fixtures, records, commit messages, or PR bodies.
+  Describe a host by its hardware and OS ("the Linux host with a 24 GB
+  RTX PRO 4000"), and give examples and fixtures a made-up device name
+  (`rtx4000-linux`, `my-desktop`). `scripts/ci/hostname-guard.py`
+  fails lint on the shape the fleet's names share (`sv-…`, `pc-…-…`);
+  it cannot see commit messages or PR bodies, so check those yourself
+  (waired-ai/waired#1486).
 * Fork PRs only run CI after maintainer approval. CI runs on
   GitHub-hosted runners; only `installtest-inference.yml`'s nightly
   Windows/macOS inference legs and banner check use self-hosted

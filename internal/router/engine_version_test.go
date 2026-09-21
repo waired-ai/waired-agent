@@ -142,9 +142,9 @@ func TestFamilyBestFit_EngineVersionGate(t *testing.T) {
 		}
 	})
 
-	// Observed on pc-dell-premium (#852): the version was unreadable
-	// because there was no engine, and the row said "could not be read"
-	// under a header that said there was no AI engine on the computer.
+	// Observed on the Intel Arc 140T Windows laptop (#852): the version was
+	// unreadable because there was no engine, and the row said "could not be
+	// read" under a header that said there was no AI engine on the computer.
 	// Both empties, one cause, two different true sentences.
 	t.Run("no engine at all says that, not that the version is unreadable", func(t *testing.T) {
 		m := m

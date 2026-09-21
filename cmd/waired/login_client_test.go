@@ -321,7 +321,7 @@ func TestRunInitViaDaemonSurfacesError(t *testing.T) {
 // runs enrollment asynchronously, which means the failure a fresh
 // auth-key install actually hits arrives through /login/status as text,
 // carrying controlclient's own prefix. The error below is verbatim from
-// the rc8 run on sv-xps15.
+// the rc8 run on the RTX 4070 Laptop Windows host.
 func TestRunInitViaDaemonClassifiesAuthKeyErrorFromPollPath(t *testing.T) {
 	const observed = `create login session: status 400: {"error":{"type":"invalid_request","message":"json: unknown field \"auth_key\""}}`
 

@@ -20,8 +20,8 @@ Accepted。docs/decisions/20260913/2245-speed-is-one-request-at-32768-tokens.md�
 2 週間が経ち、その間 rc9 の 3-OS 実機検証が**予約が必要だった理由そのもの**を撮って
 いた（waired-agent#784）:
 
-- macmini: 4B を 26 tok/s と実測 → 87 秒後もそれを `recommended_pick`（しかも削除済み）
-- xps15: 9B を 11〜12 tok/s と実測 → 段下げは正しく動いたのに、バッジは 9B のまま
+- 16 GB の M4 Mac mini: 4B を 26 tok/s と実測 → 87 秒後もそれを `recommended_pick`（しかも削除済み）
+- RTX 4070 Laptop の Windows ノート: 9B を 11〜12 tok/s と実測 → 段下げは正しく動いたのに、バッジは 9B のまま
 
 #784 は当初これを「ダウンロード前に**予測値**で弾け」と申し立てていた。オーナー裁定
 （2026-08-21）で却下 — 最軽量すら動かせない端末を救う意味はなく、多段ダウンロードは

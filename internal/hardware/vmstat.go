@@ -39,7 +39,7 @@ import (
 //
 // vm_stat reports "File-backed pages" and "Anonymous pages" as a
 // partition of active+inactive+speculative — verified exactly on two
-// hosts (sv-macmini M4/16 GiB and pc-mbp14-m5 M5 Pro/48 GiB, 2026-08-19)
+// hosts (a Mac mini M4/16 GiB and a MacBook Pro M5 Pro/48 GiB, 2026-08-19)
 // — but does NOT say how the file-backed ones split across the active
 // and inactive lists. So the term added here is the LOWER bound on the
 // file cache that is not already in the sum, max(0, file-backed −
@@ -50,7 +50,7 @@ import (
 //     macOS) the term is 0 and the figure is byte-for-byte today's;
 //   - the term only becomes positive once the cache is genuinely large,
 //     which is exactly the state the install-time measurement is taken
-//     in — measured on sv-macmini, reading one 47 GB file moved
+//     in — measured on the M4 Mac mini, reading one 47 GB file moved
 //     File-backed 245,581 → 471,249 pages while this function's old
 //     answer FELL by ~0.9 GiB.
 func parseVMStatAvailableBytes(out []byte) (uint64, error) {

@@ -164,7 +164,7 @@ friendly name（`VerifiedAndReputableDesktop`）を持ち、署名済み版の�
    なくなる — waired-agent#1112 がその形だった。
 6. **ALLOW 側は開いたまま。** F のとおり、イベント 3090/3091/3092 には
    レジストリ変更と再起動が要る。オーナー裁定（2026-09-04）: その実験は
-   xps15 で行い、dell では行わない。
+   RTX 4070 Laptop の Windows ノートで行い、Intel Arc 140T の Windows ノート(開発用のコンピュータ)では行わない。
 
 ## Consequences
 

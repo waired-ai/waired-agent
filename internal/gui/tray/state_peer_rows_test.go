@@ -24,12 +24,12 @@ func TestFormatPeerRowLabel(t *testing.T) {
 		{
 			name: "serving names the model",
 			peer: inferencemesh.PeerView{
-				DeviceID: "dev_b", DeviceName: "sv-evox2",
+				DeviceID: "dev_b", DeviceName: "strix-halo-win",
 				InferenceState: &signer.InferenceState{
 					Reachable: true, Models: []string{"qwen3.6:35b-a3b-q4_K_M"}, ActiveModel: "qwen3.6-35b-a3b",
 				},
 			},
-			want: "● sv-evox2 — qwen3.6-35b-a3b",
+			want: "● strix-halo-win — qwen3.6-35b-a3b",
 		},
 		{
 			// ActiveModel is the catalog id every host agrees on; the
@@ -37,23 +37,23 @@ func TestFormatPeerRowLabel(t *testing.T) {
 			// so it is only the fallback (inferencemesh.PeerModel).
 			name: "the engine tag is the fallback for a model name",
 			peer: inferencemesh.PeerView{
-				DeviceID: "dev_b", DeviceName: "sv-evox2",
+				DeviceID: "dev_b", DeviceName: "strix-halo-win",
 				InferenceState: &signer.InferenceState{Reachable: true, Models: []string{"qwen3.6:35b-a3b-q4_K_M"}},
 			},
-			want: "● sv-evox2 — qwen3.6:35b-a3b-q4_K_M",
+			want: "● strix-halo-win — qwen3.6:35b-a3b-q4_K_M",
 		},
 		{
 			name: "a peer that never reported an engine says so",
-			peer: inferencemesh.PeerView{DeviceID: "dev_c", DeviceName: "sv-xps15"},
-			want: "○ sv-xps15 — no engine",
+			peer: inferencemesh.PeerView{DeviceID: "dev_c", DeviceName: "rtx4070-laptop"},
+			want: "○ rtx4070-laptop — no engine",
 		},
 		{
 			name: "a peer's own reason beats the viewer's coarser reading",
 			peer: inferencemesh.PeerView{
-				DeviceID: "dev_c", DeviceName: "sv-xps15",
+				DeviceID: "dev_c", DeviceName: "rtx4070-laptop",
 				InferenceState: &signer.InferenceState{SubsystemState: signer.SubsystemStatePullFailed},
 			},
-			want: "○ sv-xps15 — pull failed",
+			want: "○ rtx4070-laptop — pull failed",
 		},
 		{
 			// A stale peer's last-known model is a claim about the past;
@@ -61,12 +61,12 @@ func TestFormatPeerRowLabel(t *testing.T) {
 			// the present (inferencemesh.ConditionHasFreshModel).
 			name: "a stale peer's model is withheld",
 			peer: inferencemesh.PeerView{
-				DeviceID: "dev_b", DeviceName: "sv-evox2", Stale: true,
+				DeviceID: "dev_b", DeviceName: "strix-halo-win", Stale: true,
 				InferenceState: &signer.InferenceState{
 					Reachable: true, Models: []string{"qwen3.6:35b"}, ActiveModel: "qwen3.6-35b-a3b",
 				},
 			},
-			want: "○ sv-evox2 — unavailable",
+			want: "○ strix-halo-win — unavailable",
 		},
 		{
 			// Public share spec §8.5: a stranger's device identifier must
@@ -114,10 +114,10 @@ func TestFormatPeerRowLabel(t *testing.T) {
 func TestUpdate_PeerRows_FromMesh(t *testing.T) {
 	snap := statusSnapshot()
 	snap.Mesh = &inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
-		{DeviceID: "dev_b", DeviceName: "sv-evox2", InferenceState: &signer.InferenceState{
+		{DeviceID: "dev_b", DeviceName: "strix-halo-win", InferenceState: &signer.InferenceState{
 			Reachable: true, Models: []string{"q"}, ActiveModel: "qwen3.6-35b-a3b",
 		}},
-		{DeviceID: "dev_c", DeviceName: "sv-xps15"},
+		{DeviceID: "dev_c", DeviceName: "rtx4070-laptop"},
 	}}
 	got := Update(snap)
 	if !got.ShowPeerRows {
@@ -126,7 +126,7 @@ func TestUpdate_PeerRows_FromMesh(t *testing.T) {
 	if got.PeerRowsParent != "Peers (2)" {
 		t.Errorf("PeerRowsParent = %q", got.PeerRowsParent)
 	}
-	want := []string{"● sv-evox2 — qwen3.6-35b-a3b", "○ sv-xps15 — no engine"}
+	want := []string{"● strix-halo-win — qwen3.6-35b-a3b", "○ rtx4070-laptop — no engine"}
 	if len(got.PeerRowEntries) != len(want) {
 		t.Fatalf("rows: want %d, got %d (%+v)", len(want), len(got.PeerRowEntries), got.PeerRowEntries)
 	}
@@ -142,14 +142,14 @@ func TestUpdate_PeerRows_FromMesh(t *testing.T) {
 func TestUpdate_PeerRows_FallBackToHardwareOnAnOldDaemon(t *testing.T) {
 	snap := statusSnapshot()
 	snap.Status = &management.Status{Phase: "active", PeerCount: 1, Peers: []management.PeerStatus{{
-		DeviceID: "dev_b", DeviceName: "sv-evox2", DisplayID: "dev_b",
+		DeviceID: "dev_b", DeviceName: "rtx4090-desktop", DisplayID: "dev_b",
 		Hardware: &management.PeerHardware{GPUModel: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24576},
 	}}}
 	got := Update(snap)
 	if !got.ShowPeerRows {
 		t.Fatal("ShowPeerRows should be true on the hardware fallback")
 	}
-	if len(got.PeerRowEntries) != 1 || got.PeerRowEntries[0].Label != "sv-evox2 — RTX 4090 (24 GB)" {
+	if len(got.PeerRowEntries) != 1 || got.PeerRowEntries[0].Label != "rtx4090-desktop — RTX 4090 (24 GB)" {
 		t.Errorf("hardware fallback row = %+v", got.PeerRowEntries)
 	}
 }
@@ -160,7 +160,7 @@ func TestUpdate_PeerRows_FallBackToHardwareOnAnOldDaemon(t *testing.T) {
 func TestUpdate_PeerRows_EmptyMeshDoesNotFallBack(t *testing.T) {
 	snap := statusSnapshot()
 	snap.Status = &management.Status{Phase: "active", PeerCount: 1, Peers: []management.PeerStatus{{
-		DeviceID: "dev_b", DeviceName: "sv-evox2",
+		DeviceID: "dev_b", DeviceName: "rtx4090-desktop",
 		Hardware: &management.PeerHardware{GPUModel: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24576},
 	}}}
 	snap.Mesh = &inferencemesh.Snapshot{}

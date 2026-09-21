@@ -1544,7 +1544,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// those windows a device whose OWN resolved model is ready must go
 		// on serving its own turn, exactly as it did before #1302.
 		//
-		// Measured on pc-mbp14-m5 (2026-09-12), twenty seconds after a
+		// Measured on the M5 Pro MacBook Pro (2026-09-12), twenty seconds after a
 		// daemon restart: the local reading was still empty, the mesh was
 		// not, and ranking sent a turn to a 125B model on another computer
 		// at 585 ms rtt while this one held a ready 35B-A3B. So the arm is

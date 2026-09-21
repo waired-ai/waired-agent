@@ -20,9 +20,10 @@ import (
 // pulls failed 3/3 and `waired status` said "Not enrolled".
 //
 // #1005: "no identity on disk" was one bool that a permission error also
-// produced, so on sv-mag and pc-mbp14-m5 (apt / launchd service installs)
-// every non-root run announced the identity gone and pointed at `waired
-// init` — the one command that would overwrite a healthy enrollment.
+// produced, so on the RTX PRO 4000 Linux host and the M5 Pro MacBook (apt /
+// launchd service installs) every non-root run announced the identity gone
+// and pointed at `waired init` — the one command that would overwrite a
+// healthy enrollment.
 func TestStateDirFinding(t *testing.T) {
 	for _, tc := range []struct {
 		name                      string

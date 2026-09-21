@@ -488,7 +488,7 @@ func TestSelectK_LocalIsNotGatedByTheOutboundTracker(t *testing.T) {
 // TestSelectK_AGapInTheLocalReadingDoesNotSendTheTurnAway is the regression
 // real hardware caught, and unit tests did not.
 //
-// Measured on pc-mbp14-m5 (2026-09-12), twenty seconds after a daemon
+// Measured on the M5 Pro MacBook (2026-09-12), twenty seconds after a daemon
 // restart: this device's own reading was still empty — the engine had not
 // finished coming back — while the mesh snapshot was fully populated. The
 // ranked arm found no local candidate, found peers, and sent the turn to a
@@ -542,7 +542,8 @@ func TestSelectK_AGapInTheLocalReadingDoesNotSendTheTurnAway(t *testing.T) {
 // describes a branch the ranked arm does not have, and printing it beside
 // the local candidate's own line contradicted it.
 //
-// Observed on pc-mbp14-m5 before this was fixed: both lines in one trace.
+// Observed on the M5 Pro MacBook before this was fixed: both lines in one
+// trace.
 func TestSelectK_TheRankedArmDoesNotSayTheMeshWasATryingPoint(t *testing.T) {
 	snap := inferencemesh.Snapshot{
 		SelfDeviceID: "self",

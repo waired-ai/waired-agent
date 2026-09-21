@@ -306,7 +306,7 @@ func formatCatalogDetail(c catalogDetailResp) string {
 // It used to interpolate a single string that carried both, so Windows
 // rendered "Install one with `waired runtimes install ollama (from an
 // elevated prompt)`" — prose inside a quotation that promised a command
-// (#852, seen on pc-dell-premium). goos is a parameter so both arms are
+// (#852, seen on the Intel Arc 140T laptop). goos is a parameter so both arms are
 // table-testable from any runner.
 func engineInstallSentence(goos string) string {
 	cmd := elevation.EngineInstallCommandFor(goos)

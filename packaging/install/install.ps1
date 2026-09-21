@@ -2549,7 +2549,7 @@ function Get-TrayRestartPlan {
     if (-not $WasRunning)  { return 'skip:not-running' }
     if (-not $TrayShipped) { return 'skip:not-shipped' }
     # Same session as the app being replaced. Necessary, because Start-Process
-    # reaches only the caller's session -- measured on sv-evox2 (2026-08-27),
+    # reaches only the caller's session -- measured on a Strix Halo host (2026-08-27),
     # where an ssh login lands in session 0 and the desktop is session 2. And
     # sufficient, because the app is drawn on that session: if we are in it,
     # there is a desktop to reopen into. When the reopen is out of reach the app
@@ -2558,7 +2558,7 @@ function Get-TrayRestartPlan {
     # Deliberately NOT Get-ConsoleUser, which was the first answer here and the
     # wrong question. It reads Win32_ComputerSystem.UserName, which is empty
     # while a session is logged on but DISCONNECTED -- the ordinary state of a
-    # server someone RDPs into, and the state sv-evox2 was in when the first
+    # server someone RDPs into, and the state the Strix Halo host was in when the first
     # version of this silently skipped a restart it should have made. Whose
     # desktop it is, is answered by the process being replaced.
     if (-not $SameSession) { return 'skip:other-session' }
@@ -3732,7 +3732,7 @@ function Invoke-WairedUpdateSwap {
         # Before the move, deliberately: the app is being reopened a few steps
         # below, and closing it first is what keeps the reopen from racing the
         # swap. It also spares Move-IntoInstallDir from having to rename a held
-        # image aside -- though measured on sv-evox2 (2026-08-27) the replace
+        # image aside -- though measured on a Strix Halo host (2026-08-27) the replace
         # succeeded against a running tray anyway (no .displaced- file was left),
         # so that is a bonus rather than the mechanism. What actually caused the
         # version skew was simply that nothing restarted the process

@@ -445,7 +445,7 @@ var engineDeadMarkers = []string{
 // has is the guess this list exists to keep out. The line above says
 // where to copy it from if one ever shows up.
 var engineOOMMarkers = []string{
-	// sv-mag (RTX PRO 4000 Blackwell), ollama 0.32.13,
+	// the Linux host (RTX PRO 4000 Blackwell), ollama 0.32.13,
 	// qwen3.8:27b-mtp-q4_K_M-wb2048 — measured 2026-08-27.
 	"CUDA error: out of memory",
 	// Not observed on hardware in this fleet — there is no discrete AMD

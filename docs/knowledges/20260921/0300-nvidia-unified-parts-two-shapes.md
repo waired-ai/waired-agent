@@ -66,7 +66,7 @@ independently validated"* と自認）、**32 GB の RAM に 32 GB の RTX 5090*
 
 ### 5. Windows は表を引かずに N1X を捕まえる
 
-`carvedFromSystemRAM`（#1462、sv-evox2 で実測検証）の片側不等式
+`carvedFromSystemRAM`（#1462、Strix Halo の Windows ホストで実測検証）の片側不等式
 `adapterBytes <= installed − visible` は、N1X でも成り立つ
 （カーブアウト約 7.9 GiB ≤ 搭載 − 可視 約 9.8 GiB）。**名前を一切使わない。**
 OS ごとに証拠が違い、問いは 1 つ、という #1462 の設計がそのまま効く。

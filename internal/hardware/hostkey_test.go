@@ -252,7 +252,7 @@ func TestHostTopologyOf_ReadingBeatsPolicyFlag(t *testing.T) {
 // The validator accepts what the derivation produces and rejects what a
 // machine name looks like. The rejected rows are the ones
 // docs/decisions/20260829/1100 §2 worried about: it declined to tell a
-// class from an identifier by pattern because "sv-mag" and
+// class from an identifier by pattern because "rtx4000-linux" and
 // "apple-unified-64gb" are both lowercase words joined by hyphens. A
 // derived key is not in that bind — it has a topology on the front, and
 // nothing types it — but the grammar should still say no to the obvious.
@@ -271,7 +271,7 @@ func TestValidHostKey(t *testing.T) {
 	}
 	for _, s := range []string{
 		"",
-		"sv-mag",
+		"rtx4000-linux",
 		"amd-unified-128gb",      // the old spelling: no topology in front
 		"nvidia-24gb-discrete",   // ditto
 		"unified",                // one component

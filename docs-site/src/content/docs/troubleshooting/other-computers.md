@@ -69,7 +69,7 @@ unavailable, requests aren't served here**. Claude Code gets the same
 answer. The turn fails at once and names the computer:
 
 ```
-API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The computer this turn is pinned to, rtx4000-linux, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 To fix it, either wake the pinned computer, checking it with
@@ -91,7 +91,7 @@ work. Then Claude Code shows a different message, with a 503 instead of a
 400:
 
 ```
-API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+API Error: 503 m4-mac-mini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
 ```
 
 The two messages send you to different places. **Not answering** means go

@@ -502,7 +502,7 @@ func TestProxyAnthropicStream_FrozenEngineBehindABusySlotIsAborted(t *testing.T)
 		PeerHealth: peer.probe,
 		PeerFacts: func(deviceID string) PeerFacts {
 			asked = append(asked, deviceID)
-			return PeerFacts{Name: "sv-mag", EngineLive: false, Known: true}
+			return PeerFacts{Name: "rtx4000-linux", EngineLive: false, Known: true}
 		},
 	})
 	w := httptest.NewRecorder()
@@ -529,7 +529,7 @@ func TestProxyAnthropicStream_FrozenEngineBehindABusySlotIsAborted(t *testing.T)
 	// read "the peer dev_d6e2… stopped working
 	// on this request", which is the identifier waired-agent#1180 says
 	// they cannot act on.
-	if !strings.Contains(w.Body.String(), "The peer sv-mag stopped working on this request") {
+	if !strings.Contains(w.Body.String(), "The peer rtx4000-linux stopped working on this request") {
 		t.Errorf("the error does not name the computer that stopped: %s", w.Body.String())
 	}
 	// The bit is asked about the peer holding the turn, by its functional

@@ -42,7 +42,7 @@ vLLM が ollama と違うのは、**モデルを降ろす軸が存在しない**
 `20260820/0130-model-residency-is-a-setting.md` の決定5は「既定が保持である以上
 解放弁が要る」とし、`unload` を第1軸、`engine stop` を第2軸として置いた。第2軸は
 **メモリが返ること**を前提にしている。実機で測ったところ、vLLM ホストではその前提が
-偽だった (sv-mag, RTX PRO 4000 Blackwell):
+偽だった (Linux ホスト, RTX PRO 4000 Blackwell):
 
 - vLLM が GPU を握った状態で、当時の `engine stop` の実体である
   `OllamaAdapter.Park` は **nil を返し**(= 面は成功と報告し `engine_power=stopped`

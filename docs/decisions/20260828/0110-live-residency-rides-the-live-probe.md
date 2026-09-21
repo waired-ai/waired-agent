@@ -14,7 +14,7 @@ waired-agent#879 は「アイドル期限切れのモデルがどの面からも
 
 | 面 | 状況 |
 |---|---|
-| `waired status` | `model loaded:` 行 + 期限。オーナーが sv-mag 実機で確認済み(#879 コメント 2026-08-22) |
+| `waired status` | `model loaded:` 行 + 期限。オーナーが RTX PRO 4000 の Linux ホストの実機で確認済み(#879 コメント 2026-08-22) |
 | daemon の status JSON | `RuntimeStatus.model_resident*`(#897) |
 | ピアの health probe | `HealthSnapshot.model_resident`(#880 → PR#968) |
 | `RequestEvent` | `model_residency`(`resident` / `absent` / `other`) |

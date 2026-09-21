@@ -14,7 +14,7 @@ waired-ai/waired#1312 のレーン L100。モデルは 2026-08-26 公開の Qwen
 manifest から読める** (§6)。79 GB を落として GPU ホストを 1 台押さえる前に、
 その 1 フィールドを見ること。
 
-計測環境 (2026-09-06): sv-evox2 — Windows 11 26200 / Ryzen AI Max+ 395
+計測環境 (2026-09-06): Strix Halo のホスト — Windows 11 26200 / Ryzen AI Max+ 395
 (Strix Halo) / ユニファイドメモリ 127.15 GB / ollama 0.33.3。
 
 ## Learnings
@@ -58,7 +58,7 @@ runner で動かして 2026-09-05 に **completed** で閉じられている。
 
 ### 3. 動いた。しかもよく動いた
 
-sv-evox2、`OLLAMA_VULKAN=1 OLLAMA_IGPU_ENABLE=1` (`ResolveOllamaBackend` の
+Strix Halo のホスト、`OLLAMA_VULKAN=1 OLLAMA_IGPU_ENABLE=1` (`ResolveOllamaBackend` の
 Strix Halo on Windows の腕が既に出している組) で:
 
 - この組が無いとエンジンは iGPU を丸ごと落とす —
@@ -300,7 +300,7 @@ render できる。ゲートは免除ではなく**通過**で解ける。
 
 ### 5. 測った結果
 
-sv-evox2、ollama 0.33.3(pin 中のもの)、同一ホスト・同一 blob。変えたのは
+Strix Halo のホスト、ollama 0.33.3(pin 中のもの)、同一ホスト・同一 blob。変えたのは
 config 2 行のみ:
 
 | shape | 素のタグ | 刻印後 |
@@ -348,7 +348,7 @@ probe 側が実際に使われた renderer を報告する必要がある — �
 
 ### 7. 刻印は pull を跨いで残らない — だから Pull の中に置いた
 
-実機で確かめた(sv-evox2):
+実機で確かめた(Strix Halo のホスト):
 
 ```
 before re-pull   renderer='qwen3.8' parser='qwen3.5'

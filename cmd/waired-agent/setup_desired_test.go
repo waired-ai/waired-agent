@@ -723,8 +723,9 @@ func TestSetupApplyNeverTurnsLocalInferenceOnByItself(t *testing.T) {
 		// frame, and its compare is against the zero value. The control
 		// plane never clears a desired value, so a device set up from a
 		// browser once carries the instruction forever and every daemon
-		// start looked like a change. Reproduced on sv-mag: the restart
-		// rewrote a person's `waired inference off` to `enabled` on disk.
+		// start looked like a change. Reproduced on the RTX PRO 4000 Linux
+		// host: the restart rewrote a person's `waired inference off` to
+		// `enabled` on disk.
 		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 		r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 0))

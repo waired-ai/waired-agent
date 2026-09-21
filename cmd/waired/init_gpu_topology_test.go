@@ -94,8 +94,8 @@ func TestGPUTopologyFrom(t *testing.T) {
 // A device the engine does not use by default is still a device whose
 // reading is worth keeping — the reading is what put it in UnusedGPUs,
 // and a daemon that could not read it back would put the device back in
-// use (waired-agent#1484). The sv-mag shape: a discrete NVIDIA card in
-// use, a 2-CU AMD iGPU set aside.
+// use (waired-agent#1484). The RTX PRO 4000 Linux host's shape: a discrete
+// NVIDIA card in use, a 2-CU AMD iGPU set aside.
 func TestGPUTopologyFrom_RecordsUnusedGPUs(t *testing.T) {
 	at := func() time.Time { return time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC) }
 	prof := hardware.Profile{

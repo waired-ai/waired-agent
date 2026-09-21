@@ -219,7 +219,7 @@ func (lc *loginController) restoreIdentityIfMissing() {
 		// line describes, the daemon's own log file was inside the state
 		// dir that just vanished, so its open handle now points at a
 		// deleted inode and nothing written here is readable until the
-		// daemon restarts. Measured on sv-macmini 2026-08-14 — the repair
+		// daemon restarts. Measured on the M4 Mac mini 2026-08-14 — the repair
 		// ran, `waired logs` had nowhere to read it from. The line is still
 		// worth emitting (a repair the operator can find later beats a
 		// silent one), but do not treat its absence from `waired logs` as

@@ -22,7 +22,7 @@ waired-agent#1038 (FIT は「収まる」と言うのに実機は CUDA out of me
 変換を触る人向け。
 
 計測環境 (2026-08-27、すべて同一ホスト・同一日):
-sv-mag — NVIDIA RTX PRO 4000 Blackwell (VRAM 24467 MiB) / RAM 121 GB /
+Linux ホスト — NVIDIA RTX PRO 4000 Blackwell (VRAM 24467 MiB) / RAM 121 GB /
 ollama 0.32.13 / `qwen3.8:27b-mtp-q4_K_M`。
 
 ## Learnings
@@ -127,7 +127,7 @@ compute バッファは約 1.9 GB 増える。予測ヘッドルームからの�
 
 上の素タグの argv が `-b 512 -ub 512` なのは、**この段下げが 2 段発火した結果**
 である(`--flash-attn on` なので `constrainedCUDAWithoutFlashAttention` の 256
-経路でもない)。sv-evox2(Strix Halo / Windows / 同版 / 同窓)でも同じく
+経路でもない)。Strix Halo のホスト(Strix Halo / Windows / 同版 / 同窓)でも同じく
 `-b 512 -ub 512` が観測されており、2 台・2 世代で同じ挙動。
 
 **そして `PARAMETER num_batch` を焼き込むとその段下げが丸ごと無効になる**

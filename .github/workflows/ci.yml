@@ -358,6 +358,16 @@ jobs:
       - name: vocabulary guard self-test
         run: bash scripts/ci/vocabulary-guard-test.sh
 
+      - name: hostname guard (no verification host is named in this public repo)
+        # Matches the shape of the fleet's names rather than a list of them,
+        # which would publish the names; describe a host by its hardware and
+        # OS instead (waired-ai/waired#1486). Exemption: `hostname-ok: <why>`
+        # on the line it excuses.
+        run: python3 scripts/ci/hostname-guard.py
+
+      - name: hostname guard self-test
+        run: bash scripts/ci/hostname-guard-test.sh
+
       - name: tray submenu parent guard self-test
         run: bash scripts/ci/tray-submenu-parent-guard-test.sh
 

@@ -578,7 +578,7 @@ func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
 // RAM, and the tray says how much on the row where selecting it starts
 // the download.
 //
-// The figures are the rc8 Windows host's own (sv-xps15, RTX 4070 Laptop,
+// The figures are the rc8 Windows host's own (RTX 4070 Laptop GPU,
 // budget 8188 MB): qwen3.5-9b needs 10719 MB to serve the coding window,
 // qwen3.5-4b needs 7539 and fits on the card. The 9B was marked
 // recommended, downloaded at 6.6 GB, and then measured 5 tok/s.

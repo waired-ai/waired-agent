@@ -786,7 +786,7 @@ func TestObserveRunnerParallel(t *testing.T) {
 		}
 	}
 	t.Run("an-orphaned-runner-does-not-make-the-match-ambiguous", func(t *testing.T) {
-		// Measured on sv-macmini (waired-agent#1303): a runner orphaned
+		// Measured on the M4 Mac mini (waired-agent#1303): a runner orphaned
 		// fourteen hours earlier still carried `-c 200704 -np 1`, matched
 		// the live tuning exactly as the real runner did, and the
 		// unique-match test below saw two and abstained. The host then

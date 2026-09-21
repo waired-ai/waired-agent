@@ -9,15 +9,15 @@ import "testing"
 // "File-backed pages" and "Anonymous pages" only appear on a real host,
 // and it was their absence that let the omission ship.
 //
-// macminiCacheSmall / macminiCacheLarge are the same host before and
+// macMiniM4CacheSmall / macMiniM4CacheLarge are the same host before and
 // after reading one 20 GB file (`dd ... of=/dev/null`), which is the
 // closest reachable stand-in for the moment the install-time
 // measurement is taken — right after a multi-GB model download.
 
-// sv-macmini, Apple M4, 16 GiB, macOS 26.5.1, with the file cache in its
+// A Mac mini, Apple M4, 16 GiB, macOS 26.5.1, with the file cache in its
 // everyday state: 409,145 file-backed pages against an inactive list of
 // 388,196, so only 19,677 of them can be proven to sit outside the sum.
-const macminiCacheSmall = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+const macMiniM4CacheSmall = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                    24141.
 Pages active:                                 383318.
 Pages inactive:                               388196.
@@ -46,7 +46,7 @@ Swapouts:                                     332213.
 // collapsed 24,141 → 3,812 and the file cache grew 409,145 → 470,266
 // pages: the old sum FELL by ~0.47 GB while ~1 GB of instantly
 // reclaimable cache was added.
-const macminiCacheLarge = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+const macMiniM4CacheLarge = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                     3812.
 Pages active:                                 385486.
 Pages inactive:                               383693.
@@ -71,10 +71,10 @@ Swapins:                                      187488.
 Swapouts:                                     332213.
 `
 
-// pc-mbp14-m5, Apple M5 Pro, 48 GiB, macOS 26.6.2 — the host in #835.
+// A MacBook, Apple M5 Pro, 48 GiB, macOS 26.6.2 — the host in #835.
 // Carries the "Pages tagged*" lines macOS 26.6 added, which nothing here
 // reads and which must stay harmless.
-const mbp14M5Pro = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+const macbookM5Pro = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                  1133377.
 Pages active:                                 683548.
 Pages inactive:                               770303.
@@ -131,20 +131,20 @@ func TestParseVMStatAvailableBytes(t *testing.T) {
 	}{
 		{
 			name: "an everyday file cache adds only its provable remainder",
-			in:   macminiCacheSmall,
+			in:   macMiniM4CacheSmall,
 			// free + inactive + speculative + purgeable, plus
 			// max(0, 409145 - (388196+1272)) = 19677 active file pages.
 			wantPages: 24141 + 388196 + 1272 + 4133 + 19677,
 		},
 		{
 			name: "a large file cache is counted, not charged to the OS",
-			in:   macminiCacheLarge,
+			in:   macMiniM4CacheLarge,
 			// max(0, 470266 - (383693+1357)) = 85216 active file pages.
 			wantPages: 3812 + 383693 + 1357 + 14 + 85216,
 		},
 		{
 			name: "cache under the inactive list adds nothing, unknown lines ignored",
-			in:   mbp14M5Pro,
+			in:   macbookM5Pro,
 			// 896753 < 770303+210943, so nothing can be proven active.
 			wantPages: 1133377 + 770303 + 210943 + 23665,
 		},
@@ -173,11 +173,11 @@ func TestParseVMStatAvailableBytes(t *testing.T) {
 		// makes: the same host, seconds apart, with MORE reclaimable
 		// memory must not report less of it. Before this change the
 		// inequality ran the other way.
-		small, err := parseVMStatAvailableBytes([]byte(macminiCacheSmall))
+		small, err := parseVMStatAvailableBytes([]byte(macMiniM4CacheSmall))
 		if err != nil {
 			t.Fatalf("small: %v", err)
 		}
-		large, err := parseVMStatAvailableBytes([]byte(macminiCacheLarge))
+		large, err := parseVMStatAvailableBytes([]byte(macMiniM4CacheLarge))
 		if err != nil {
 			t.Fatalf("large: %v", err)
 		}
@@ -222,9 +222,9 @@ func TestVMStatFixturesPartitionTheResidentSet(t *testing.T) {
 		fileBacked, anonymous         uint64
 		active, inactive, speculative uint64
 	}{
-		{"macmini cache small", 409145, 363641, 383318, 388196, 1272},
-		{"macmini cache large", 470266, 300270, 385486, 383693, 1357},
-		{"mbp14 m5 pro", 896753, 768041, 683548, 770303, 210943},
+		{"m4 mac mini cache small", 409145, 363641, 383318, 388196, 1272},
+		{"m4 mac mini cache large", 470266, 300270, 385486, 383693, 1357},
+		{"m5 pro macbook", 896753, 768041, 683548, 770303, 210943},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			resident := c.active + c.inactive + c.speculative

@@ -310,7 +310,7 @@ func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, management.Status{
 		NetworkID:    "net_alice",
 		DeviceID:     "dev_local_a",
-		DeviceName:   "alice-sv-mag",
+		DeviceName:   "alice-rtx4000-linux",
 		OverlayIP:    "100.96.0.10",
 		ListenPort:   51820,
 		PeerCount:    3,
@@ -327,7 +327,7 @@ func handleIdentity(w http.ResponseWriter, _ *http.Request) {
 		NetworkName:  "alice-net",
 		NetworkID:    "net_alice",
 		DeviceID:     "dev_local_a",
-		DeviceName:   "alice-sv-mag",
+		DeviceName:   "alice-rtx4000-linux",
 		OverlayIP:    "100.96.0.10",
 		ControlURL:   "https://control.example.com",
 	})

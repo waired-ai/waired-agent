@@ -70,7 +70,7 @@ func (r *scriptedRunner) Run(_ context.Context, binary string, args, env []strin
 // and /root is 0700: the unprivileged daemon user cannot follow the symlink.
 // Active() then fails its os.Stat and answers "no install" on a host whose
 // venv is complete — which is the whole of #778. Reproduced on real hardware
-// 2026-08-14 (evidence: verify-20260815-l56/sv-mag/M3repro/00-FINDING.md).
+// 2026-08-14 (internal verification notes).
 //
 // Pointing UV_PYTHON_INSTALL_DIR inside BaseDir puts the interpreter under
 // the state dir, where the executor's ownership hand-off

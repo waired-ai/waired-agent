@@ -1537,7 +1537,7 @@ assert_inference() {
         # — sends the reader to the download, and on this host the download
         # SUCCEEDED: it was the measurement's own 1 GB probe, and selection is
         # what declined. See #579 for the defect this arm exists to surface.
-        bad "this host got a probe, not a pick: the only model in the waired store is the host-cutoff probe (${state#probe }), and the daemon committed to no selection (#573)" ;;
+        bad "this host got a probe, not a pick: the only model in the waired store is the small benchmark model (${state#probe }), and the daemon committed to no selection (#573)" ;;
       none)
         bad "no model was selected on this host (mgmt API no_model_selected=true) — \`waired init --inference-enabled=true\` should have picked one" ;;
       *)

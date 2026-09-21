@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// oomBody is the verbatim reply measured on sv-mag (RTX PRO 4000
+// oomBody is the verbatim reply measured on the Linux host (RTX PRO 4000
 // Blackwell, ollama 0.32.13) serving qwen3.8:27b-mtp-q4_K_M-wb2048 for a
 // ~2,000-token prompt, 2026-08-27 (waired-agent#1038).
 const oomBody = `{"error":"an error was encountered while running the model: CUDA error\nCUDA error: out of memory"}`

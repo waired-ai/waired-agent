@@ -12,7 +12,7 @@ import (
 // device is still enrolled to whatever it was enrolled to, and nobody
 // asked to change that.
 //
-// Observed on sv-macmini 2026-08-15 against a build with #803: `waired
+// Observed on the M4 Mac mini 2026-08-15 against a build with #803: `waired
 // init` after the wipe failed with
 //
 //	already enrolled to https://app.dev.waired.net — run `waired logout`

@@ -783,7 +783,7 @@ function Assert-Inference {
             # reader to the download, and on this host the download SUCCEEDED:
             # it was the measurement's own 1 GB probe, and selection is what
             # declined. See waired-agent#579 for the defect this surfaces.
-            ItBad "this host got a probe, not a pick: the only model in the waired store is the host-cutoff probe ($($verdict -replace '^probe ','')), and the daemon committed to no selection (#573)"
+            ItBad "this host got a probe, not a pick: the only model in the waired store is the small benchmark model ($($verdict -replace '^probe ','')), and the daemon committed to no selection (#573)"
         } elseif ($verdict -eq 'none') {
             ItBad "no model was selected on this host (mgmt API no_model_selected=true) -- ``waired init --inference-enabled=true`` should have picked one"
         } else {
@@ -3047,7 +3047,7 @@ try {
             @{ NoTray = $true;  Shipped = $true;  Running = $true;  Same = $true;  Want = 'skip:no-tray' },
             @{ NoTray = $false; Shipped = $true;  Running = $false; Same = $true;  Want = 'skip:not-running' },
             @{ NoTray = $false; Shipped = $false; Running = $true;  Same = $true;  Want = 'skip:not-shipped' },
-            # The ssh shape, measured on sv-evox2: session 0 here, the desktop
+            # The ssh shape, measured on a Strix Halo host: session 0 here, the desktop
             # in session 2. Start-Process reaches only this session, so the app
             # must be left alone rather than closed and not reopened.
             @{ NoTray = $false; Shipped = $true;  Running = $true;  Same = $false; Want = 'skip:other-session' }
@@ -3059,7 +3059,7 @@ try {
         # The row that measurement added: a session that is logged on but
         # DISCONNECTED still has a desktop, and the first version of this asked
         # Get-ConsoleUser -- which is empty in that state -- and silently
-        # skipped a restart it should have made (sv-evox2, 2026-08-27).
+        # skipped a restart it should have made (a Strix Halo host, 2026-08-27).
         if ((Get-Content -LiteralPath $installPs1 -Raw) -match 'Get-TrayRestartPlan[\s\S]{0,600}ConsoleUserSid') {
             ItBad "Get-TrayRestartPlan gates on the console user again; a disconnected session has a desktop (#1046)"
         } else {
@@ -4413,7 +4413,7 @@ if ($Contract) {
         $prevEapContract = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
 
-        # (#751) `waired status` exits 0 in all three contexts the sv-evox2
+        # (#751) `waired status` exits 0 in all three contexts the Strix Halo host's
         # dogfood hit. As of the #751 fix, when the per-user dir is empty
         # status falls back to the SYSTEM dir: elevated/admin reads it and
         # renders; a standard/basic-token user (whom the SYSTEM DACL denies)

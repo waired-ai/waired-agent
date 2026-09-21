@@ -1368,7 +1368,7 @@ function Get-TrayProcesses {
 # Stop-ProcessesUnder does and this one did not.
 #
 # Terminates. There is no graceful stop to try first on Windows, and the
-# alternatives were measured rather than assumed (sv-evox2, 2026-08-27,
+# alternatives were measured rather than assumed (a Strix Halo host, 2026-08-27,
 # waired-agent#1059):
 #
 #   tray mainwindow=[0] title=[]

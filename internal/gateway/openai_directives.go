@@ -15,7 +15,7 @@ import (
 // model since waired-agent#830 — waired, waired/local, waired/peer,
 // waired/peer-<node>, waired/public. The OpenAI leg understood none of them:
 // it built router.Request{Model, StickyID} from the raw client string, so
-// "waired/peer" missed the catalog and came back a 404 (measured on sv-mag,
+// "waired/peer" missed the catalog and came back a 404 (measured on the RTX PRO 4000 Linux host,
 // 0.0.3-rc6, 2026-09-12). The owner's rc6 review asked for the same choices in
 // OpenCode's and OpenClaw's pickers that Claude Code's /model has
 // (waired-ai/waired#1349).

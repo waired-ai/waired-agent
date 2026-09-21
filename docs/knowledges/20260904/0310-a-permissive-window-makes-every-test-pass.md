@@ -4,7 +4,7 @@
 
 waired-agent#1191 の仮説 H3 は「分類器はファイルの内容を採点している」で、
 検証のために "a control binary" を求めている。1 本では軸が分けられないので、
-**1 つの性質だけが違う未署名 Windows バイナリを何本か作り**、dell
+**1 つの性質だけが違う未署名 Windows バイナリを何本か作り**、Intel Arc 140T の Windows ノート
 (SAC 強制中。実行時に `VerifiedAndReputablePolicyState=1`、
 `SAC_EnforcementReason=1` を確認)で走らせた。その結果は、
 危うく**誤った結論**として記録されるところだった。

@@ -14,7 +14,7 @@ Accepted。ただし §4 の「AI エンジン」という語のみ `docs/decisi
 
 ## Context
 
-pc-dell-premium (Windows, waired 0.0.3-rc3) の実機観測が発端 (waired-agent#852)。
+Intel Arc 140T のノート (Windows, waired 0.0.3-rc3) の実機観測が発端 (waired-agent#852)。
 同じホストの同じ起動で、CLI とデーモンログが正面から食い違っていた。
 
 ```

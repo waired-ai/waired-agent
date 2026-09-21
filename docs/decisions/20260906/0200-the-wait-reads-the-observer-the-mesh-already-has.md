@@ -56,10 +56,10 @@ request after N」)をそのまま使う。凍った engine について真で�
 
 ## Consequences
 
-- **実測(sv-macmini → sv-mag、vLLM 0.28.0 / gpt-oss-20b)**
+- **実測(16 GB の M4 Mac mini → RTX PRO 4000 の Linux ホスト、vLLM 0.28.0 / gpt-oss-20b)**
   - before: 300 s 0 バイト(クライアントが先に諦めた)
   - after: **60.4 s** で `400 waired_cannot_serve` / `X-Waired-Local-Error:
-    peer_stopped_serving` /「The peer sv-mag stopped working on this request
+    peer_stopped_serving` /「The peer rtx4000-linux stopped working on this request
     after 1m0s.」
   - 正当な cold prefill(110k トークン、TTFB 17.5 s)は**中断されない**
 - **ヒステリシスは足さない。** 平滑化は既に aggregator の Policy にある

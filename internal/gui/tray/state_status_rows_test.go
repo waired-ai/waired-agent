@@ -295,7 +295,7 @@ func TestUpdate_StatusRows_EnginelessHostServedByAPeer(t *testing.T) {
 		Reachable: true,
 		Peers: []inferencemesh.PeerView{{
 			DeviceID:   "dev_b",
-			DeviceName: "sv-evox2",
+			DeviceName: "strix-halo-win",
 			InferenceState: &signer.InferenceState{
 				Reachable: true, Models: []string{"qwen3.6:35b"}, ActiveModel: "qwen3.6-35b-a3b",
 			},

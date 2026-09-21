@@ -16,7 +16,7 @@ L100 で入れた `qwen3.8-flash-next` (qwen4exp) を実機で 262,144 トーク
 
 ### 1. 実測の内訳
 
-sv-evox2 (Windows / Strix Halo / 128 GB UMA / ollama 0.33.3)、`num_ctx` 262,144:
+Strix Halo のホスト (Windows / Strix Halo / 128 GB UMA / ollama 0.33.3)、`num_ctx` 262,144:
 
 ```
 llama_kv_cache:      6144.00 MiB (262144 cells, 12 layers)  K (f16) 3072.00  V (f16) 3072.00

@@ -42,7 +42,7 @@ waired は既定を書かなくなった。§4 の他の判断（managed setting
 3 は欠陥（waired-agent#1036）。1 と 2 は `TestNonDirectiveFollowsPolicyWhenFlagOn` と
 上記 §4 で固定されていた**現行契約**で、オーナーがその変更を要求した（waired-agent#1037）。
 
-### 実測（sv-evox2 / edge 0.0.3-edge.20260827153153 / Claude Code 2.1.245、ワイヤ捕捉）
+### 実測（Strix Halo の Windows ホスト / edge 0.0.3-edge.20260827153153 / Claude Code 2.1.245、ワイヤ捕捉）
 
 | | |
 |---|---|

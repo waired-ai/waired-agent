@@ -1682,7 +1682,7 @@ TRAY_STOP_GRACE="${WAIRED_TRAY_STOP_GRACE:-15}"
 # path. An update replaces a tray that is, by definition, the PREVIOUS build,
 # and every build before waired-agent#1045 ignores SIGTERM outright: the signal
 # is trapped and nothing acts on it, so the process runs on for ever. Measured
-# on pc-mbp14-m5 (2026-08-27) against the macOS arm when it had no escalation:
+# on an M5 Pro MacBook Pro (2026-08-27) against the macOS arm when it had no escalation:
 # the installer said "Reopening the Waired app on the new version", waited out
 # its whole grace period, and left PID 12421 -- started three days earlier --
 # exactly where it was, because `open -g` on an app that is already running
@@ -2270,7 +2270,7 @@ darwin_install_app() {
 #
 # The GUI check is not decoration. An SSH session has no Aqua session to
 # launch into: `open` there fails with OSLaunchdErrorDomain 125 "Domain does
-# not support specified action" (measured on sv-macmini, macOS 26.5.1,
+# not support specified action" (measured on an M4 Mac mini, macOS 26.5.1,
 # 2026-08-21), which is the macOS twin of the Windows Session-0 problem
 # install.ps1's Start-TrayAsOriginalUser has always guarded against.
 darwin_tray_launch_plan() {
@@ -2759,7 +2759,7 @@ darwin_tray_restart() {
     # process in place and says nothing -- and the app being replaced is by
     # definition the previous build, every one of which ignores SIGTERM before
     # waired-agent#1045. That is measured, not theoretical: this arm shipped
-    # without the escalation and left PID 12421 untouched on pc-mbp14-m5.
+    # without the escalation and left PID 12421 untouched on an M5 Pro MacBook Pro.
     common_stop_tray
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
         common_run launchctl asuser "$_dr_uid" sudo -u "$_dr_user" open -g "$DARWIN_APP" \

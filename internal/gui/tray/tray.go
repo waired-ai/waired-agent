@@ -486,7 +486,7 @@ type tray struct {
 // submenu then materialises only once some Show() happens to land after the
 // parent's own, and endRowPass walks t.rowStates, a Go map: the rows lost
 // are whichever ones the random iteration order reached first. Measured on
-// pc-dell-premium (0.0.3-rc4): three consecutive tray restarts rendered
+// the Intel Arc 140T laptop (0.0.3-rc4): three consecutive tray restarts rendered
 // "This device" with 8, 5 and 4 of its 8 rows, the device's own name and
 // address among the missing (waired-agent#1063). Parents therefore keep
 // their children, and paintCreationBaseline hides them from the zero
@@ -498,7 +498,7 @@ type tray struct {
 // dimmed, disabled, or grayed", GNOME's is "make a menu item insensitive
 // when its command is unavailable", and grey has meant exactly that since
 // the first Macintosh. So a row that says a state is fine — "● Engine:
-// ready", "Worker: sv-evox2", a peer that is serving — must never be grey:
+// ready", "Worker: strix-halo-win", a peer that is serving — must never be grey:
 // greyed good news reads as broken, which is what the owner reported on
 // 2026-08-28 against the rows waired-agent#1032 had just added.
 //

@@ -24,12 +24,12 @@ sudo も要らない(tray はデスクトップユーザのプロセス)。
   **どちらを送るかは「そのホストが配信中か」で決まる**。SIGTERM は `planShutdown` の
   wind-down を走らせる — **メッシュから外れ、エンジンが止まる**。これは欠陥ではなく
   ratified な契約(#316 + オーナー裁定 20260827: デスクトップからのサインアウトは
-  Quit と同じ意味)。実測(20260828、sv-mag): `kill -TERM` → `engine_power: stopped`、
+  Quit と同じ意味)。実測(20260828、RTX PRO 4000 の Linux ホスト): `kill -TERM` → `engine_power: stopped`、
   VRAM 20990MiB → 30MiB。
   - **観測者だけ差し替える A/B では `kill -9`**。wind-down が走らないので、配信中の
     エンジンはそのまま動き続ける。差し替える tray は使い捨てなので片付けは要らない。
   - SIGTERM を使ってしまった/使う必要があるなら、**`waired inference engine start` で
-    戻す**(sv-mag の vLLM で `ready` まで約 30 秒)。戻ったことは
+    戻す**(RTX PRO 4000 の Linux ホストの vLLM で `ready` まで約 30 秒)。戻ったことは
     `subsystem_state`/`engine_power` と VRAM で確認する。
   - セッション env は `/proc/<pid>/environ` か、別セッションが置いた env ファイルから
     採って `setsid nohup env … /usr/bin/waired-tray -mgmt …`。

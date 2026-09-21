@@ -500,9 +500,9 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 // PRODUCT CONTRACT (owner ruling 2026-08-09, waired-agent#599 — a re-run
 // replays the install conversation, benchmarks and gates included). Asking
 // for a fresh measurement and then judging the previous one replays
-// nothing, and it is how sv-xps15 came to gate on a 12.017 s figure while
-// a 39.473 s one landed 44 s later — with the two measurements running at
-// once, which is the contention waired-agent#703 is about.
+// nothing, and it is how the RTX 4070 Laptop host came to gate on a 12.017 s
+// figure while a 39.473 s one landed 44 s later — with the two measurements
+// running at once, which is the contention waired-agent#703 is about.
 func TestConfirmHostSpeedBudget_WaitsForTheFigureItAskedFor(t *testing.T) {
 	t.Run("a stale over-budget figure does not decide while a fresh one is coming", func(t *testing.T) {
 		shrinkHostSpeedAsk(t)

@@ -370,7 +370,7 @@ func renderStatusline(route management.ClaudeRoutingState, health string, reside
 		// is what waired-agent#1172 was: a ready local engine took the
 		// branch first, so on a host with a worker pin — or a session on a
 		// peer row — every turn the peer answered was printed in the local
-		// form. Measured on sv-mag, whose only model is gpt-oss-20b:
+		// form. Measured on the RTX PRO 4000 Linux host, whose only model is gpt-oss-20b:
 		// "on Waired (qwen3.6-35b-a3b)" for a turn a MacBook answered,
 		// while `waired claude status` named the peer from the very same
 		// record (claudeServedDisplay, claude_record.go).

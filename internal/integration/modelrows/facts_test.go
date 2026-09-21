@@ -211,8 +211,8 @@ func TestPeerForDirective(t *testing.T) {
 		team(peerView("studio-mac", "dev_tanaka", "qwen3.5:4b", true), "田中"),
 		team(peerView("studio-mac", "dev_sato", "qwen3.5:4b", true), "佐藤"),
 		ownIdle,
-		team(peerView("sv-evo-box", "dev_mail1", "qwen3.5:4b", true), "alice.example@example.com"),
-		team(peerView("sv-evo-box", "dev_mail2", "qwen3.5:4b", true), "alice.example@example.org"),
+		team(peerView("strix-halo-box", "dev_mail1", "qwen3.5:4b", true), "alice.example@example.com"),
+		team(peerView("strix-halo-box", "dev_mail2", "qwen3.5:4b", true), "alice.example@example.org"),
 		peerView("studio-mac-2", "dev_literal2", "qwen3.5:4b", true),
 		peerView("linux-gpu", "dev_gpu", "qwen3.5:4b", true),
 	}

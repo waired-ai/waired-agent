@@ -1560,7 +1560,7 @@ fi
 # 10ccc. The stop ESCALATES. This is not belt-and-braces on the update path,
 #        it is the path: the app being replaced is by definition the previous
 #        build, and every build before waired-agent#1045 ignores SIGTERM
-#        outright. Measured on pc-mbp14-m5 when the macOS arm shipped without
+#        outright. Measured on an M5 Pro MacBook Pro when the macOS arm shipped without
 #        it -- the installer announced the reopen, waited out its grace, and
 #        left a three-day-old PID in place, because `open -g` on a running app
 #        only activates it.

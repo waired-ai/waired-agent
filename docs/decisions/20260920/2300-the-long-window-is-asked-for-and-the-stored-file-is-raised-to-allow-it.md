@@ -48,7 +48,7 @@ CP の丸め・NAVI の表示は全部生きているのに、供給源だけが
    渡すと二重に効く。
 6. **blob の digest 検証は pull のときだけ。** 読み込み時の検証は無く、既に在る blob は飛ばす。
 
-### 参照機での実測(sv-evox2、Strix Halo 128 GB、q4_0 KV、flash attention on)
+### 参照機での実測(Windows、Strix Halo 128 GB、q4_0 KV、flash attention on)
 
 出荷 variant `qwen3.6-35b-a3b/mtp-q4-gguf`:
 

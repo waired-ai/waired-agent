@@ -23,10 +23,10 @@ parked / health の4つだけで、**実際の推論要求も、もう一方の�
 `docs/decisions/20260811/2340-one-model-resident-at-a-time.md` で
 `infruntime.MaxResidentModels = 1` を入れた結果、この盲点の代償が変わった。
 エンジンが同時に1モデルしか保持しないので、計測中に届いた仕事は probe と
-**競合する**のではなく**互いを追い出す**。sv-xps15 の実測で probe の再ロードが
+**競合する**のではなく**互いを追い出す**。RTX 4070 Laptop の Windows ノートの実測で probe の再ロードが
 約8秒、4B serving モデルの再ロードが約13秒。
 
-sv-xps15 で実際に起きた並走（2026-08-11）:
+RTX 4070 Laptop の Windows ノートで実際に起きた並走（2026-08-11）:
 
 ```
 17:19:01  waired init --non-interactive 再実行

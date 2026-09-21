@@ -111,7 +111,7 @@ argparse の exit 2 で、`EnsureRunning` のリトライが全部落ちる）�
 
 ## 実機で判明したこと（この決定を変えた2件）
 
-sv-mag (RTX PRO 4000 Blackwell) に実際に venv を作って converge を回したところ、
+Linux ホスト (RTX PRO 4000 Blackwell) に実際に venv を作って converge を回したところ、
 **設計の前提が2つとも偽**だった。どちらもユニットテストでは出ない
 （fake runner が `uv venv` を既存ディレクトリに対して成功させていたため）。
 

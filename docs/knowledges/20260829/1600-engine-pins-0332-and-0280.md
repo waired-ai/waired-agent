@@ -13,12 +13,12 @@ pin 移動が 1 行の変更で済まない理由: この製品は、upstream �
 
 計測環境 (すべて 2026-08-29):
 
-- sv-mag — Linux (Ubuntu) / NVIDIA RTX PRO 4000 Blackwell (VRAM 24467 MiB) /
+- RTX PRO 4000 の Linux ホスト — Linux (Ubuntu) / NVIDIA RTX PRO 4000 Blackwell (VRAM 24467 MiB) /
   driver 610.43.02 / compute capability 12.0 / RAM 120 GB / 32 cores
-- sv-evox2 — Windows
-- sv-macmini — macOS 26.5.1 / Apple M4 / RAM 16 GB
+- Strix Halo のホスト — Windows
+- M4 Mac mini — macOS 26.5.1 / Apple M4 / RAM 16 GB
 
-vLLM は、製品の daemon が sv-mag で実際に走らせていた argv を**逐語で再生**
+vLLM は、製品の daemon が RTX PRO 4000 の Linux ホストで実際に走らせていた argv を**逐語で再生**
 して検証した:
 
 ```
@@ -111,7 +111,7 @@ convert.go のコメントは、測定が支持する範囲まで狭めた。
 作り替えている。waired-agent#1125 と #1127 はこの 2 記録の上で設計を
 進めている。
 
-sv-mag、`qwen3.8:27b-mtp-q4_K_M`、ctx 200704、約 70k トークンの
+RTX PRO 4000 の Linux ホスト、`qwen3.8:27b-mtp-q4_K_M`、ctx 200704、約 70k トークンの
 プロンプト。再利用は `prompt_eval_duration` から読む — ollama の
 `prompt_eval_count` はヒットしてもしなくても全プロンプト分を報告するため:
 
@@ -211,7 +211,7 @@ true を返すのは、flashinfer が import できて、**かつ** (flashinfer_
 が入っている **or** `shutil.which("nvcc")` が非 nil) のとき。つまり cubin
 依存を落としたことで、**PATH 上の nvcc が荷重を持つようになった**。
 
-sv-mag では nvcc は /usr/local/cuda/bin/nvcc に在るが、ユーザーの PATH
+RTX PRO 4000 の Linux ホストでは nvcc は /usr/local/cuda/bin/nvcc に在るが、ユーザーの PATH
 にも root の PATH にも入っていない — Ubuntu の既定がそうである — ので、
 エンジンは `_initialize_kv_caches` の途中で死んだ:
 
@@ -236,7 +236,7 @@ update でローカル推論を失う。
 
 ### 9. KV オフロードは保持を買う — 小さくない (#1133 の追加測定 1)
 
-sv-mag、gpt-oss-20b。再利用は `usage.prompt_tokens_details.cached_tokens`
+RTX PRO 4000 の Linux ホスト、gpt-oss-20b。再利用は `usage.prompt_tokens_details.cached_tokens`
 から読む。
 
 - **オフロード無し**: 約 120k トークンの会話 3 本を 339,160 トークンの
@@ -257,7 +257,7 @@ sv-mag、gpt-oss-20b。再利用は `usage.prompt_tokens_details.cached_tokens`
 
 ## 追記 (20260829 17:00) — KV プールの数値は起動時の状況でも動く
 
-マージ後の実機確認 (#1148 を入れた sv-mag) で、**同じ argv・同じカード・
+マージ後の実機確認 (#1148 を入れた RTX PRO 4000 の Linux ホスト) で、**同じ argv・同じカード・
 同じエンジン版なのにプールの値が食い違った**。切り分けた結果:
 
 | 条件 | GPU KV cache size |
@@ -327,7 +327,7 @@ D の再送は 100% cached で 0.09 s、E の再送は完全に冷えて 29.80 s
 この構成のブロック粒度より小さいのだろう、というのが向こうの読みで、
 こちらに反証は無い。
 
-そうすると、こちらの sv-mag で「オフロード有り = 285,883 / 無し = 339,160」
+そうすると、こちらの RTX PRO 4000 の Linux ホストで「オフロード有り = 285,883 / 無し = 339,160」
 と出た差は、**オフロードではなく起動時の残留 VRAM を測っていた**と考える
 のが自然になる (追記 1 の表の 3 行目と、concurrency 表示まで一致していた)。
 `restart.sh` は起動前に `vram after stop: 30 MiB` を確認していたが、

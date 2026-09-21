@@ -81,7 +81,7 @@ macOS 署名ケース）への答えであって、**ポートが塞がってい
 ## Consequences
 
 - ウィザードのエンジン行が、再起動しただけのホストで**緑を主張しなくなった**。
-  実機の before は sv-evox2 で撮れている（`waired status` は
+  実機の before は Strix Halo の Windows ホストで撮れている（`waired status` は
   `engine_failed` と理由、同じ瞬間に `status --observability` は
   `Engine: not ready (model=(unknown))`）。
 - **同族の欠陥 3 件を同じ PR で直した**。どれも「理由はプロセス内に在るのに、

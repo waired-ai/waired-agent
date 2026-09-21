@@ -124,7 +124,7 @@ const mib = 1 << 20
 // GC 10.3.6, KFD gfx_target_version 100306, a 2 GiB carve-out, a GTT of
 // 64933629952 bytes that KFD reports as the pool, location_id 4096 at
 // 0000:10:00.0. libdrm's amdgpu.ids on that host has no 13C0 entry.
-func svMagIGPU() fakeAMDCard {
+func rtx4000LinuxIGPU() fakeAMDCard {
 	return fakeAMDCard{
 		card: "card1", pciAddr: "0000:10:00.0", device: "0x13c0", revision: "0xc1",
 		vramBytes: 2147483648, usedBytes: 16 * mib, gttBytes: 64933629952,
@@ -135,7 +135,7 @@ func svMagIGPU() fakeAMDCard {
 
 func TestReadAMDSysfs_TheFleetHostsIGPU(t *testing.T) {
 	root := t.TempDir()
-	svMagIGPU().lay(t, root)
+	rtx4000LinuxIGPU().lay(t, root)
 	// An NVIDIA card beside it must be ignored: vendor 0x10de.
 	writeFile(t, filepath.Join(root, "sys", "class", "drm", "card0", "device", "vendor"), "0x10de\n")
 
@@ -209,7 +209,7 @@ func TestReadAMDSysfs_NoKFDFallsBackToTheGCMapping(t *testing.T) {
 // passed-through card) is not something this host's engine can use.
 func TestReadAMDSysfs_OtherDriversAreSkipped(t *testing.T) {
 	root := t.TempDir()
-	c := svMagIGPU()
+	c := rtx4000LinuxIGPU()
 	c.driver = "vfio-pci"
 	c.lay(t, root)
 	if got := readAMDSysfs(root); len(got) != 0 {

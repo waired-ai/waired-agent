@@ -401,16 +401,16 @@ func TestNodeDirectivePref_EveryOfferedRowPinsItsOwnComputer(t *testing.T) {
 		team(serving("dev_tanaka", "studio-mac"), "田中"),
 		team(serving("dev_sato", "studio-mac"), "佐藤"),
 		serving("dev_literal2", "studio-mac-2"),
-		team(serving("dev_mail1", "sv-evo-box"), "alice.example@example.com"),
-		team(serving("dev_mail2", "sv-evo-box"), "alice.example@example.org"),
+		team(serving("dev_mail1", "strix-halo-box"), "alice.example@example.com"),
+		team(serving("dev_mail2", "strix-halo-box"), "alice.example@example.org"),
 	}}
 	p := &agentInferenceProvider{meshSnapshotFn: func() inferencemesh.Snapshot { return snap }}
 	byLabel := map[string]string{
-		"Waired peer: studio-mac (田中)":                        "dev_tanaka",
-		"Waired peer: studio-mac (佐藤)":                        "dev_sato",
-		"Waired peer: studio-mac-2":                           "dev_literal2",
-		"Waired peer: sv-evo-box (alice.example@example.com)": "dev_mail1",
-		"Waired peer: sv-evo-box (alice.example@example.org)": "dev_mail2",
+		"Waired peer: studio-mac (田中)":                            "dev_tanaka",
+		"Waired peer: studio-mac (佐藤)":                            "dev_sato",
+		"Waired peer: studio-mac-2":                               "dev_literal2",
+		"Waired peer: strix-halo-box (alice.example@example.com)": "dev_mail1",
+		"Waired peer: strix-halo-box (alice.example@example.org)": "dev_mail2",
 	}
 
 	offered := 0
@@ -441,7 +441,7 @@ func TestNodeDirectivePref_EveryOfferedRowPinsItsOwnComputer(t *testing.T) {
 	}
 
 	// The spellings the old resolver accepted must not land on a guess.
-	for _, stale := range []string{"waired/peer-studio-mac", "waired/peer-sv-evo-box-alice-example-example"} {
+	for _, stale := range []string{"waired/peer-studio-mac", "waired/peer-strix-halo-box-alice-example-exa"} {
 		if got, ok, _ := nodeDirectivePref(gateway.NodeDirectiveFor(stale), snap.Peers, state.RoutingPreference{}); ok {
 			t.Errorf("%q pinned %q; it names no single computer", stale, got.pref.PinnedPeerDeviceID)
 		}

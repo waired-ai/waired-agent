@@ -77,9 +77,9 @@ package runtime
 //
 // 0.32.15 -> 0.33.2 is taken for the caching work in 0.33.0, and the
 // list below is what was re-measured rather than assumed
-// (waired-agent#1132). Measured 2026-08-29 on three hosts: sv-mag
-// (Linux, RTX PRO 4000 Blackwell), sv-evox2 (Windows), sv-macmini
-// (macOS, M4).
+// (waired-agent#1132). Measured 2026-08-29 on three hosts: a Linux
+// host (RTX PRO 4000 Blackwell), a Windows host (Strix Halo) and a Mac
+// mini (macOS, M4).
 //
 // What 0.33.0 buys. Upstream disabled Claude Code's "tokens left"
 // countdown system message, which ollama had been moving to the front
@@ -146,8 +146,8 @@ package runtime
 // is the floor waired-agent#1192's catalog entry declares, and
 // TestBundledEngineFloorsNeverExceedThePin is why the entry cannot land
 // until this constant has moved. Measured 2026-09-06 on three OSes:
-// pc-mbp14-m5 (macOS, M5 Pro), sv-evox2 (Windows, Strix Halo), and —
-// sv-mag being held for the whole window — the WSL2 development machine
+// a MacBook Pro (macOS, M5 Pro), a Windows host (Strix Halo), and —
+// the RTX PRO 4000 Linux host being held for the whole window — the WSL2 development machine
 // for the Linux leg, which is a different card from the RTX PRO 4000
 // the 0.33.2 entry used.
 //

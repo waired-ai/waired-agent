@@ -76,7 +76,7 @@ statusline:         waired segment installed
 subagents:          follow their own model
 default model:      not set — Claude Code uses its own, which is a real Anthropic model
 last request:       waired → Waired   (2 minutes ago)
-last served:        2026-09-04T01:52:11+09:00 — qwen3.5-9b (peer sv-mag)
+last served:        2026-09-04T01:52:11+09:00 — qwen3.5-9b (peer rtx4000-linux)
 waired node:        auto (this device or a mesh peer)   (change with `waired worker`)
 ```
 

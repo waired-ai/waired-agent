@@ -11,7 +11,7 @@ Plasma の両方で正しく出る文字列が存在しないので直せない�
 
 ### 2 つのエスケープは互いに補完的
 
-実機(sv-mag = Ubuntu 26.04 / GNOME Shell 50.1 / ubuntu-appindicators)で、
+実機(RTX PRO 4000 の Linux ホスト = Ubuntu 26.04 / GNOME Shell 50.1 / ubuntu-appindicators)で、
 インストール済み拡張の正規表現を gjs に、仕様側は GTK の `use_underline` を
 python3-gi に流して採った:
 
