@@ -168,8 +168,12 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 	// within milliseconds anyway, and its failure path would write a transient
 	// failed state a watching client (waired#774) could misread as terminal.
 	// The post-restart bootstrap (bootstrapPreferredModel, issue #347)
-	// performs the real pull and activates the model once it is ready — the
-	// old model keeps serving in the meantime.
+	// performs the real pull and activates the model once it is ready. This
+	// path is taken only for a switch across engines (ollama ↔ vLLM), and
+	// nothing answers on this computer from the restart until the new engine
+	// is up; a switch within one engine — vLLM included since
+	// waired-agent#1515 — is applied in process above and keeps the old
+	// model answering meanwhile.
 	downloading := !modelDownloaded(s.inference.ListModels(r.Context()), manifest.ModelID)
 
 	// No fallback. This package used to carry its own per-OS restart

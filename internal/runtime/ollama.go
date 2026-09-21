@@ -1281,6 +1281,12 @@ type ModelTuning struct {
 	// (waired-ai/waired-agent#657). Today the flag records WHY the host
 	// is on that rung, for the local decision-reason wording only.
 	WindowFits bool
+	// WeightsOverBudget: vLLM only. With every sizing input known, the
+	// model's padded weights alone exceed the GPU memory vLLM may use here,
+	// so the start will fail whatever the window (waired-agent#1515). Set
+	// by computeVLLMTuning; a start that then fails is recorded as not
+	// fitting this computer rather than read as a KV-cache problem.
+	WeightsOverBudget bool
 	// PromptBatchTokens is how many prompt tokens the engine prefills per
 	// step: llama.cpp's -b / --batch-size on the ollama path, vLLM's
 	// --max-num-batched-tokens. 0 = not known.

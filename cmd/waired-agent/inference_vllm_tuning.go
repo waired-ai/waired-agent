@@ -71,6 +71,7 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 		mt.WindowFits = true
 		if v.EstimatedWeightGB > 0 && v.KVBytesPerTokenFP16 > 0 && gpuMemUtil > 0 && hasNVIDIAGPU(hw) {
 			mt.WindowFits = false
+			mt.WeightsOverBudget = true
 			mt.Warning = fmt.Sprintf(
 				"model weights (~%.1f GB plus activations) exceed the vLLM GPU memory budget at gpu-memory-utilization=%.2f, TP=%d; engine startup will likely fail — see engine.log",
 				v.EstimatedWeightGB, gpuMemUtil, tp)

@@ -74,12 +74,16 @@ func TestVLLMStartPlan_RefusalsAreOneStringInOnePlace(t *testing.T) {
 		if _, joined := p.beginPull(&pullJob{modelID: "gpt-oss-20b"}); joined {
 			t.Fatal("precondition: the first claim must not join")
 		}
+		// Not the start plan's refusal any more: the bootstrap waits on an
+		// in-flight download rather than refusing (waired-agent#1515). An
+		// explicit start still answers with why nothing can start yet.
 		_, _, release, _, _, err := p.vllmStartPlan()
 		release()
-		if err == nil || !strings.Contains(err.Error(), "still downloading") {
-			t.Errorf("vllmStartPlan while a pull is in flight = %v, want the still-downloading refusal\n"+
-				"(the bootstrap's own fetch does not pass through beginPull, so proceeding here\n"+
-				" runs a second `hf download` into the same directory)", err)
+		if err != nil {
+			t.Errorf("vllmStartPlan while a pull is in flight = %v, want the plan (the download is a wait, not a refusal)", err)
+		}
+		if err := p.vllmStartRefusal(); err == nil || !strings.Contains(err.Error(), "still downloading") {
+			t.Errorf("vllmStartRefusal while a pull is in flight = %v, want the still-downloading answer", err)
 		}
 		// A refusal holds nothing: the venv it resolved is free to be
 		// reclaimed (waired-agent#1431).

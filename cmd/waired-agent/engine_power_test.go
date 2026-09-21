@@ -22,6 +22,16 @@ func TestDecideEnginePower(t *testing.T) {
 		wantPower   management.EnginePowerState
 		wantManaged bool
 	}{
+		// ── vLLM downloading before its first start (waired-agent#1515) ─
+		// The bootstrap no longer holds the start claim for a download, so
+		// the download itself is what says a start is coming.
+		{"vllm, no adapter, the chosen model downloading", enginePowerInputs{
+			Engine: catalog.RuntimeVLLM, WeightsDownloading: true,
+		}, management.EnginePowerStarting, true},
+		{"vllm, no adapter, nothing downloading", enginePowerInputs{
+			Engine: catalog.RuntimeVLLM,
+		}, management.EnginePowerStopped, true},
+
 		// ── ollama, unchanged by #881 ──────────────────────────────────
 		{"ollama running", enginePowerInputs{
 			Engine: catalog.RuntimeOllama, AdapterPresent: true, Health: infruntime.StateReady,

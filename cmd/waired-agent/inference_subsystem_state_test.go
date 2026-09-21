@@ -50,6 +50,26 @@ func TestSubsystemState(t *testing.T) {
 		{"engine down", with(func(f *inferenceSubsystemFacts) {
 			f.EngineState = infruntime.StateFailed
 		}), signer.SubsystemStateEngineFailed},
+		// waired-agent#1515: a vLLM host with nothing it can answer with
+		// while the chosen model downloads is loading, not about to start.
+		{"no adapter, the chosen model downloading", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine, f.EngineState = false, ""
+			f.EngineInstalledNoAdapter, f.WeightsDownloading = true, true
+		}), signer.SubsystemStateLoading},
+		{"no adapter, nothing downloading", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine, f.EngineState = false, ""
+			f.EngineInstalledNoAdapter = true
+		}), signer.SubsystemStateStarting},
+		// The chosen model's download was cancelled and nothing else can
+		// run: no start is coming.
+		{"no adapter, the chosen model absent and not downloading", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine, f.EngineState = false, ""
+			f.EngineInstalledNoAdapter, f.ChosenAbsent = true, true
+		}), signer.SubsystemStateAwaitingModel},
+		{"no adapter, the chosen model absent and downloading", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine, f.EngineState = false, ""
+			f.EngineInstalledNoAdapter, f.ChosenAbsent, f.WeightsDownloading = true, true, true
+		}), signer.SubsystemStateLoading},
 
 		// #310: the latch outlives the live reading, so a Stop() that
 		// overwrote StateFailed must not let a permanently-dead engine read

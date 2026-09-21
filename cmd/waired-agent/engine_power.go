@@ -103,6 +103,11 @@ type enginePowerInputs struct {
 	// OllamaAdopted is Mode() == EngineModeAdopted: an orphan of a previous
 	// run, which waired holds no process handle for.
 	OllamaAdopted bool
+	// WeightsDownloading: vLLM, no adapter, and the chosen model is
+	// downloading. The bootstrap no longer holds the start claim for the
+	// length of a download (waired-agent#1515), so without this a host
+	// fetching 23 GB before its first start would read "stopped".
+	WeightsDownloading bool
 }
 
 // decideEnginePower answers the power state and whether waired manages the
@@ -150,7 +155,7 @@ func decideEnginePower(in enginePowerInputs) (management.EnginePowerState, bool)
 		// for and the bootstrap is still resolving the venv or downloading
 		// weights; reporting "stopped" would have an operator press start
 		// again on a host that is already pulling 40 GB.
-		if in.StartInFlight {
+		if in.StartInFlight || in.WeightsDownloading {
 			return management.EnginePowerStarting, managed
 		}
 		return management.EnginePowerStopped, managed

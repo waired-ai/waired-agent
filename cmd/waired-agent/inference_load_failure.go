@@ -146,6 +146,16 @@ func (p *agentInferenceProvider) loadIsBlocked() (catalog.VariantLoadFailure, bo
 	return rec, true
 }
 
+// engineLoadIsBlocked is loadIsBlocked for whichever engine serves here.
+// loadIsBlocked reads the active build, which is ollama's answer; on vLLM
+// the build that failed is not the active one (vllmBlockedLoad).
+func (p *agentInferenceProvider) engineLoadIsBlocked() (catalog.VariantLoadFailure, bool) {
+	if p != nil && p.servingEngine() == catalog.RuntimeVLLM {
+		return p.vllmLoadStillBlocked()
+	}
+	return p.loadIsBlocked()
+}
+
 // smallerAlternative names a model this computer could run instead of the
 // one that did not load, or "" when the catalog has nothing to offer.
 //
@@ -184,6 +194,10 @@ func (p *agentInferenceProvider) smallerAlternative(ctx context.Context, failed 
 	}
 	failedWeight := variantWeightGB(p.manifests, failed.ModelID, failed.VariantID)
 	here, shape := p.loadContextNow(ctx), p.loadShapeNow()
+	// On vLLM the product picks each model's shape itself, so a record for
+	// a candidate describes the start it would be given again; the ollama
+	// tuning's shape says nothing about it and would match no record.
+	anyShape := failed.Context.EngineKind == string(catalog.RuntimeVLLM)
 	for _, c := range ranked {
 		if c.Manifest.ModelID == failed.ModelID {
 			continue
@@ -192,7 +206,7 @@ func (p *agentInferenceProvider) smallerAlternative(ctx context.Context, failed 
 			continue
 		}
 		if sha := activeVariantSHA(p.manifests, c.Manifest.ModelID, c.Variant.VariantID); sha != "" {
-			if rec, ok := st.FailedLoads[sha]; ok && rec.Blocks(here, shape) {
+			if rec, ok := st.FailedLoads[sha]; ok && rec.Context == here && (anyShape || rec.Shape == shape) {
 				continue
 			}
 		}
@@ -283,7 +297,7 @@ func (p *agentInferenceProvider) reviewOutOfMemoryPark(context.Context) {
 	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
 		return
 	}
-	if _, blocked := p.loadIsBlocked(); blocked {
+	if _, blocked := p.engineLoadIsBlocked(); blocked {
 		return
 	}
 	p.resumeAfterOutOfMemory("this computer changed, so what it could not load before no longer applies")
