@@ -69,7 +69,9 @@ OS 別のフックを持つパッケージのテストを書くとき。
 ある OS の定数や分岐を変えると、その OS 版を固定しているテストが CI で落ちる。
 
 **2c. 本物の OS 別フックを残したテストは、走っているホストから答える**
-(waired-agent#1462、#1479 で 2 度)。`NewProfiler` に `WithUMA` を渡さず本物の
+(waired-agent#1462、#1479 で 2 度。#1530 で 3 度目: vLLM の予算を問うテストで、偽の
+RAM 128 GB が runner 上で 96 GB の統合メモリの予算になり、24 GB カードに載らないはずの
+35B が載る判定になった)。`NewProfiler` に `WithUMA` を渡さず本物の
 `defaultUMA` を使うと、darwin の CI の runner は arm64 なので `UnifiedMemory=true` を
 立て(Linux では立たない)、sysctl で答えて早期 return するので、共有の規則に到達
 しない。手元で通り、CI で落ちる。逆向きに誤って通る形もある。darwin の
