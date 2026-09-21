@@ -32,7 +32,7 @@ func detectAMD(ctx context.Context) ([]GPU, Accelerators, error) {
 	// (the gfx target, whether the part is an APU, the KFD pool) —
 	// waired-agent#1485. It finds nothing where there is no
 	// /sys/class/drm, so Windows and macOS go on to the paths below.
-	if gpus := readAMDSysfs(amdSysfsRoot); len(gpus) > 0 {
+	if gpus := readAMDSysfs(sysfsRoot); len(gpus) > 0 {
 		return gpus, Accelerators{ROCm: true}, nil
 	}
 	if _, err := exec.LookPath("rocm-smi"); err == nil {

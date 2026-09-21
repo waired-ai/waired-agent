@@ -34,3 +34,15 @@ func persistedGPUIntegration(stateDir string) func(pciID string) (bool, bool) {
 		return rec.IntegratedFor(pciID)
 	}
 }
+
+// persistedGPUVRAM is the same record's memory reading, for the parts
+// whose size the daemon cannot read either (waired-agent#1483).
+func persistedGPUVRAM(stateDir string) func(pciID string) (int, bool) {
+	return func(pciID string) (int, bool) {
+		rec, err := state.ReadGPUTopology(stateDir)
+		if err != nil {
+			return 0, false
+		}
+		return rec.VRAMFor(pciID)
+	}
+}

@@ -418,6 +418,7 @@ type Profiler struct {
 	umaFn           func(context.Context, *Profile)
 	integratedFn    integratedFrom
 	persistedFn     func(pciID string) (integrated, ok bool)
+	persistedVRAMFn func(pciID string) (mb int, ok bool)
 
 	ramAtInstallGB         int
 	ramAtInstallMeasuredAt string
@@ -578,6 +579,16 @@ func WithPersistedIntegration(fn func(pciID string) (integrated, ok bool)) Optio
 	return func(p *Profiler) { p.persistedFn = fn }
 }
 
+// WithPersistedVRAM injects a memory reading taken earlier under
+// privileges this process does not have, keyed like the integration
+// reading above. It fills only a device whose own detector found no
+// memory figure: an Intel discrete card on Linux, whose size the drivers
+// publish only through the render node (waired-agent#1483). A live
+// figure always wins.
+func WithPersistedVRAM(fn func(pciID string) (mb int, ok bool)) Option {
+	return func(p *Profiler) { p.persistedVRAMFn = fn }
+}
+
 // NewProfiler returns a Profiler that caches results for 30s by default
 // (per spec §6) and uses real OS detection. cachePath is the directory
 // whose free-space we report (typically the model cache root).
@@ -684,6 +695,12 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 		// Linux without KFD) is named from its device ID (amd_pci_gfx.go).
 		if prof.GPUs[i].GFXTarget == "" && strings.EqualFold(prof.GPUs[i].Vendor, "amd") {
 			prof.GPUs[i].GFXTarget = amdGFXTargetForPCIID(prof.GPUs[i].PCIID)
+		}
+		// A memory figure only the elevated setup could read.
+		if prof.GPUs[i].VRAMTotalMB == 0 && p.persistedVRAMFn != nil {
+			if mb, ok := p.persistedVRAMFn(prof.GPUs[i].PCIID); ok {
+				prof.GPUs[i].VRAMTotalMB = mb
+			}
 		}
 	}
 	// The per-device "is this one pool?" reading runs before the UMA

@@ -169,10 +169,25 @@ func ChipSlug(gpu GPU, cpuModel string) string {
 			return "sm" + digits
 		}
 		return chipSlugUnknown
+	case "intel":
+		// A discrete Intel card is named by the kernel's platform name —
+		// "bmg" for a B580, "dg2" for an A770 — the Intel counterpart of
+		// the compute capability and the ISA target above
+		// (intel_pci_parts.go, waired-agent#1483). An integrated one would
+		// be named by its CPU, like an AMD APU, but it never reaches a
+		// key: the engine does not use Intel iGPUs by default, so the
+		// profiler sets them aside before the key is derived.
+		if gpu.IntegratedKnown && gpu.Integrated {
+			return slugOrUnknown(normalizeChipName(cpuModel))
+		}
+		if p, ok := intelPartFor(gpu.PCIID); ok {
+			return p.platform
+		}
+		return chipSlugUnknown
 	default:
-		// Intel and anything a future detector adds: the CPU string is
-		// the best structured name available, and for an integrated
-		// part it is the right one.
+		// Anything a future detector adds: the CPU string is the best
+		// structured name available, and for an integrated part it is
+		// the right one.
 		return slugOrUnknown(normalizeChipName(cpuModel))
 	}
 }

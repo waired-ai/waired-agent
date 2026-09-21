@@ -404,22 +404,30 @@ func smallestVariantReq(manifests []catalog.Manifest, engine string) (minRAMGB, 
 // describeProfile is a terse hardware summary for the selection note.
 func describeProfile(hw hardware.Profile) string {
 	if len(hw.GPUs) == 0 {
-		if len(hw.UnusedGPUs) > 0 {
-			// The host has a GPU the engine leaves off by default
-			// (waired-agent#1484). Name it, so "CPU host" does not read as
-			// a failure to see the hardware.
-			names := make([]string, 0, len(hw.UnusedGPUs))
-			for _, u := range hw.UnusedGPUs {
-				if u.Model != "" {
-					names = append(names, u.Model)
-				} else {
-					names = append(names, u.Vendor)
-				}
+		// The host has a GPU nothing was sized against: one the engine
+		// leaves off by default (waired-agent#1484), or one whose memory
+		// size could not be read (#1483). Name it, and say which, so
+		// "CPU host" does not read as a failure to see the hardware.
+		var off, unread []string
+		for _, u := range hw.UnusedGPUs {
+			name := u.Model
+			if name == "" {
+				name = u.Vendor
 			}
-			return fmt.Sprintf("CPU host (%d GB RAM; the engine does not use %s by default)",
-				hw.RAMTotalGB, strings.Join(names, ", "))
+			if u.MemoryUnread {
+				unread = append(unread, name)
+			} else {
+				off = append(off, name)
+			}
 		}
-		return fmt.Sprintf("CPU host (%d GB RAM)", hw.RAMTotalGB)
+		clauses := []string{fmt.Sprintf("%d GB RAM", hw.RAMTotalGB)}
+		if len(off) > 0 {
+			clauses = append(clauses, fmt.Sprintf("the engine does not use %s by default", strings.Join(off, ", ")))
+		}
+		if len(unread) > 0 {
+			clauses = append(clauses, fmt.Sprintf("the memory size of %s is not known", strings.Join(unread, ", ")))
+		}
+		return fmt.Sprintf("CPU host (%s)", strings.Join(clauses, "; "))
 	}
 	g := hw.GPUs[0]
 	label := g.Model

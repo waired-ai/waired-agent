@@ -55,12 +55,25 @@ var ollamaDefaultIntegratedROCmGFXTargets = map[string]struct{}{
 // leaves off carries. It says what the engine does, and how to change it.
 const unusedIntegratedReason = "the engine uses an integrated GPU by default only when it is a CUDA device or a ROCm gfx1151 device; set OLLAMA_IGPU_ENABLE=1 to override"
 
-// UnusedGPU is a GPU that was detected but that the inference engine
-// will not run on, with the reason. It is a report: nothing sizes a
-// model against it.
+// unreadIntelMemoryReason is the Reason an Intel card whose memory size
+// could not be read carries. On Linux the size comes from the driver's
+// query on the render node, which `sudo waired init` can open.
+const unreadIntelMemoryReason = "its memory size could not be read, so models are not sized for it; on Linux, running `sudo waired init` reads it"
+
+// UnusedGPU is a GPU that was detected but that the host is not
+// described by, with the reason: the engine does not use it by default,
+// or its memory could not be read. It is a report: nothing sizes a model
+// against it.
 type UnusedGPU struct {
 	GPU
 	Reason string `json:"reason"`
+
+	// MemoryUnread separates the two reasons a GPU is left out. False: the
+	// engine does not use it by default, so the host really runs on the
+	// CPU. True: the engine may well use it, but its memory size was not
+	// read, so nothing can be sized against it — and a surface must not
+	// say the host runs on the CPU.
+	MemoryUnread bool `json:"memory_unread,omitempty"`
 }
 
 // DetectedGPUs returns every GPU the profiler found — the ones the engine
@@ -86,6 +99,15 @@ func (p Profile) DetectedGPUs() []GPU {
 // is never read as a fact (integrated.go).
 func engineUsesByDefault(g GPU, cpuModel string) (bool, string) {
 	if !g.IntegratedKnown || !g.Integrated {
+		// A discrete (or unclassified) Intel card whose memory could not
+		// be read: the engine may well use it, but a GPU with no memory
+		// figure would be described as one with no limit at all — the
+		// defect a GB10 with "0 MB VRAM" had (#459). Leaving it out
+		// describes the host as the CPU host it was before Intel was
+		// detected, which is the safe direction.
+		if strings.EqualFold(g.Vendor, "intel") && g.VRAMTotalMB == 0 {
+			return false, unreadIntelMemoryReason
+		}
 		return true, ""
 	}
 	switch strings.ToLower(strings.TrimSpace(g.Vendor)) {
@@ -121,7 +143,7 @@ func partitionForEngine(prof *Profile) (used []GPU, unused []UnusedGPU) {
 		if ok, why := engineUsesByDefault(g, prof.CPU.Model); ok {
 			used = append(used, g)
 		} else {
-			unused = append(unused, UnusedGPU{GPU: g, Reason: why})
+			unused = append(unused, UnusedGPU{GPU: g, Reason: why, MemoryUnread: why == unreadIntelMemoryReason})
 		}
 	}
 	return used, unused

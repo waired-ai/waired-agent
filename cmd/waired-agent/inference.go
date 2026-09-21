@@ -521,7 +521,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// The persisted memory figure (#568): the catalog endpoint's
 		// fit verdicts must match what the wire publishes.
 		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)),
-		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir)))
+		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir)),
+		hardware.WithPersistedVRAM(persistedGPUVRAM(stateDir)))
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
@@ -593,8 +594,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// plan read (waired-agent#1484); say so once, so a host that runs on
 	// its CPU beside an iGPU is not a mystery in the log.
 	for _, u := range hwProfile.UnusedGPUs {
-		logger.Info("integrated GPU not used by the engine",
-			"model", u.Model, "pci_id", u.PCIID, "reason", u.Reason)
+		msg := "integrated GPU not used by the engine"
+		if u.MemoryUnread {
+			msg = "GPU not counted: its memory size was not read"
+		}
+		logger.Info(msg, "model", u.Model, "pci_id", u.PCIID, "reason", u.Reason)
 	}
 	logger.Info("ollama gpu backend selected",
 		"backend", backendPlan.Preferred().Backend,
