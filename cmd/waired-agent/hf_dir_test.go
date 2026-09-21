@@ -148,7 +148,7 @@ func TestDeleteModel_RemovesAVLLMModelsDirectory(t *testing.T) {
 	p, store, root := hfDeleteProvider(t, nil)
 	dir := filepath.Join(root, "Qwen__Qwen3.5-9B")
 	writeHFFile(t, dir, "model.safetensors", 64)
-	seedModels(t, store, map[string]catalog.ModelState{
+	seedVLLMModels(t, store, map[string]catalog.ModelState{
 		"qwen3.5-9b": {VariantID: "bf16", HFRepo: "Qwen/Qwen3.5-9B", LocalPath: dir, State: catalog.ModelStateReady},
 	})
 
@@ -159,8 +159,37 @@ func TestDeleteModel_RemovesAVLLMModelsDirectory(t *testing.T) {
 		t.Error("the model's directory survived `models rm`")
 	}
 	st, _ := store.Load()
-	if _, still := st.Models["qwen3.5-9b"]; still {
+	if _, still := st.VLLMModels["qwen3.5-9b"]; still {
 		t.Error("the record survived a successful deletion")
+	}
+}
+
+// `waired models rm` names a model, not an engine (waired-agent#1520): with
+// both engines holding it, both engines' weights and records go.
+func TestDeleteModel_RemovesEveryEnginesCopy(t *testing.T) {
+	r := &rmRunner{}
+	p, store := deleteModelProvider(t, r, map[string]catalog.ModelState{
+		"qwen3.5-4b": {VariantID: "q8", OllamaTag: "qwen3.5:4b-q8_0", State: catalog.ModelStateReady},
+	})
+	p.stateDir = t.TempDir()
+	dir := filepath.Join(hfModelsRoot(p.stateDir), "Qwen__Qwen3.5-4B")
+	writeHFFile(t, dir, "model.safetensors", 64)
+	seedVLLMModels(t, store, map[string]catalog.ModelState{
+		"qwen3.5-4b": {VariantID: "bf16", HFRepo: "Qwen/Qwen3.5-4B", LocalPath: dir, State: catalog.ModelStateReady},
+	})
+
+	if err := p.DeleteModel(context.Background(), "qwen3.5-4b"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if len(r.calls) != 1 || r.calls[0][1] != "rm" || r.calls[0][2] != "qwen3.5:4b-q8_0" {
+		t.Errorf("engine calls = %v, want `ollama rm qwen3.5:4b-q8_0`", r.calls)
+	}
+	if exists(dir) {
+		t.Error("vLLM's directory survived `models rm`")
+	}
+	st, _ := store.Load()
+	if len(st.RecordsFor("qwen3.5-4b")) != 0 {
+		t.Errorf("records left after the deletion: %+v", st.RecordsFor("qwen3.5-4b"))
 	}
 }
 
@@ -170,7 +199,7 @@ func TestDeleteModel_KeepsAVLLMDirectoryAnotherModelNames(t *testing.T) {
 	p, store, root := hfDeleteProvider(t, nil)
 	dir := filepath.Join(root, "org__shared")
 	writeHFFile(t, dir, "model.safetensors", 64)
-	seedModels(t, store, map[string]catalog.ModelState{
+	seedVLLMModels(t, store, map[string]catalog.ModelState{
 		"model-a": {VariantID: "bf16", LocalPath: dir, State: catalog.ModelStateReady},
 		"model-b": {VariantID: "bf16", LocalPath: dir + string(filepath.Separator), State: catalog.ModelStateReady},
 	})
@@ -182,10 +211,10 @@ func TestDeleteModel_KeepsAVLLMDirectoryAnotherModelNames(t *testing.T) {
 		t.Error("removed a directory another model's record still names")
 	}
 	st, _ := store.Load()
-	if _, still := st.Models["model-a"]; still {
+	if _, still := st.VLLMModels["model-a"]; still {
 		t.Error("the record should still go; only the shared weights stay")
 	}
-	if _, kept := st.Models["model-b"]; !kept {
+	if _, kept := st.VLLMModels["model-b"]; !kept {
 		t.Error("the sharing model lost its record")
 	}
 }
@@ -196,7 +225,7 @@ func TestDeleteModel_LeavesAPathOutsideTheModelDirectories(t *testing.T) {
 	p, store, _ := hfDeleteProvider(t, nil)
 	elsewhere := t.TempDir()
 	keep := writeHFFile(t, elsewhere, "precious", 8)
-	seedModels(t, store, map[string]catalog.ModelState{
+	seedVLLMModels(t, store, map[string]catalog.ModelState{
 		"odd": {VariantID: "bf16", LocalPath: elsewhere, State: catalog.ModelStateReady},
 	})
 
@@ -208,11 +237,13 @@ func TestDeleteModel_LeavesAPathOutsideTheModelDirectories(t *testing.T) {
 	}
 }
 
-func seedModels(t *testing.T, store *catalog.Store, models map[string]catalog.ModelState) {
+// seedVLLMModels records models as vLLM's: a model directory is where the
+// vLLM engine keeps what it fetched (waired-agent#1520).
+func seedVLLMModels(t *testing.T, store *catalog.Store, models map[string]catalog.ModelState) {
 	t.Helper()
 	if err := store.Update(func(s *catalog.State) {
 		for id, m := range models {
-			s.Models[id] = m
+			s.SetModel(catalog.RuntimeVLLM, id, m)
 		}
 	}); err != nil {
 		t.Fatal(err)

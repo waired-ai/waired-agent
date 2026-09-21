@@ -455,7 +455,7 @@ func (s *Selector) localBestTier() int {
 	if s.in.LocalServingOff {
 		return best
 	}
-	for modelID, ms := range s.in.LocalState.Models {
+	for modelID, ms := range s.in.localModels() {
 		if ms.State != catalog.ModelStateReady {
 			continue
 		}

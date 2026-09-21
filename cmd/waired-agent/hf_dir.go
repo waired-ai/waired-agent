@@ -125,7 +125,7 @@ func (p *agentInferenceProvider) removeHFModelDir(ctx context.Context, modelID, 
 	if err != nil {
 		return err
 	}
-	if shared := modelIDsForDir(st.Models, dir, modelID); len(shared) > 0 {
+	if shared := modelIDsForDir(st.VLLMModels, dir, modelID); len(shared) > 0 {
 		p.logger.Info("model record removed; weights kept, another model names the same directory",
 			"model", modelID, "dir", dir, "shared_with", shared)
 		return nil

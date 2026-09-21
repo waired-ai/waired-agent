@@ -156,9 +156,8 @@ func TestSwitchFactsFor_OnlyAModelThatCanStartAnswers(t *testing.T) {
 		)
 		if err := p.store.Update(func(s *catalog.State) {
 			s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: previous, VariantID: "st"}
-			s.Models = map[string]catalog.ModelState{
-				previous: {State: catalog.ModelStateReady, VariantID: "st", LocalPath: t.TempDir()},
-			}
+			s.SetModel(catalog.RuntimeVLLM, previous,
+				catalog.ModelState{State: catalog.ModelStateReady, VariantID: "st", LocalPath: t.TempDir()})
 		}); err != nil {
 			t.Fatal(err)
 		}

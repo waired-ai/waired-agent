@@ -89,7 +89,7 @@ func TestVLLMPreviousCandidate(t *testing.T) {
 	active := func(model, variant, runtime string) *catalog.ActiveSelection {
 		return &catalog.ActiveSelection{ModelID: model, VariantID: variant, Runtime: runtime}
 	}
-	ready := catalog.State{Models: map[string]catalog.ModelState{
+	ready := catalog.State{VLLMModels: map[string]catalog.ModelState{
 		"qwen3.5-4b":  {State: catalog.ModelStateReady, VariantID: "bf16", LocalPath: "/models/hf/Qwen__Qwen3.5-4B"},
 		"gpt-oss-20b": {State: catalog.ModelStateReady, VariantID: "mxfp4-safetensors", LocalPath: "/models/hf/openai__gpt-oss-20b"},
 	}}
@@ -120,7 +120,7 @@ func TestVLLMPreviousCandidate(t *testing.T) {
 		{"it ran on ollama", active("qwen3.5-4b", "bf16", catalog.RuntimeOllama), ready, "qwen3.6-35b-a3b", exists, startable(true), false},
 		{"another build is what is on disk", active("qwen3.5-4b", "fp8", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, startable(true), false},
 		{"its weights are not ready", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM),
-			catalog.State{Models: map[string]catalog.ModelState{"qwen3.5-4b": {State: catalog.ModelStateDownloading, VariantID: "bf16", LocalPath: "/x"}}},
+			catalog.State{VLLMModels: map[string]catalog.ModelState{"qwen3.5-4b": {State: catalog.ModelStateDownloading, VariantID: "bf16", LocalPath: "/x"}}},
 			"qwen3.6-35b-a3b", exists, startable(true), false},
 		{"its directory is gone", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b",
 			func(string) bool { return false }, startable(true), false},
@@ -236,7 +236,7 @@ func TestHFWeightsLanded_ActiveMovesOnlyWithNothingUp(t *testing.T) {
 			p.preferredOverride.Store(&chosen)
 			if err := p.store.Update(func(s *catalog.State) {
 				s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: "previous", VariantID: "bf16"}
-				s.Models = map[string]catalog.ModelState{
+				s.VLLMModels = map[string]catalog.ModelState{
 					"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
 				}
 			}); err != nil {

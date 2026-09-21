@@ -132,7 +132,7 @@ func vllmPreviousCandidate(active *catalog.ActiveSelection, manifests []catalog.
 		if !ok || !router.VariantLoadable(v, catalog.RuntimeVLLM, engineVersion) || !startable(m, v) {
 			return catalog.Manifest{}, catalog.Variant{}, "", false
 		}
-		ms := st.Models[m.ModelID]
+		ms := st.VLLMModels[m.ModelID]
 		if ms.State != catalog.ModelStateReady || ms.VariantID != active.VariantID || ms.LocalPath == "" || !dirExists(ms.LocalPath) {
 			return catalog.Manifest{}, catalog.Variant{}, "", false
 		}
@@ -314,7 +314,7 @@ func (p *agentInferenceProvider) vllmChosenAbsent() bool {
 	if err != nil {
 		return false
 	}
-	ms := st.Models[m.ModelID]
+	ms := st.VLLMModels[m.ModelID]
 	return ms.State != catalog.ModelStateReady || ms.LocalPath == "" || !dirExists(ms.LocalPath)
 }
 

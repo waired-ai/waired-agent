@@ -42,9 +42,16 @@ const (
 // is forward-compatible). MigrateInPlace fills Active and bumps
 // Version when a v1 file is loaded.
 type State struct {
-	Version           int                       `json:"version"`
-	Active            *ActiveSelection          `json:"active,omitempty"`
+	Version int              `json:"version"`
+	Active  *ActiveSelection `json:"active,omitempty"`
+	// Models holds the ollama engine's record of each model, and
+	// VLLMModels the vLLM engine's (waired-agent#1520). One row per model
+	// id could not say which engine it described, so a model a vLLM
+	// measurement had fetched read as ready to an ollama engine that did
+	// not have it. Read and write them through ModelFor / ModelsFor /
+	// SetModel / RemoveModel with the engine named.
 	Models            map[string]ModelState     `json:"models"`
+	VLLMModels        map[string]ModelState     `json:"vllm_models,omitempty"`
 	Runtimes          map[string]RuntimeInstall `json:"runtimes,omitempty"`
 	Endpoints         map[string]EndpointState  `json:"endpoints"`
 	ExternalManifests []ExternalManifestRef     `json:"external_manifests,omitempty"`
@@ -440,10 +447,11 @@ func (s *Store) loadLocked() (State, error) {
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return State{
-				Version:   StateVersion,
-				Models:    map[string]ModelState{},
-				Endpoints: map[string]EndpointState{},
-				Runtimes:  map[string]RuntimeInstall{},
+				Version:    StateVersion,
+				Models:     map[string]ModelState{},
+				VLLMModels: map[string]ModelState{},
+				Endpoints:  map[string]EndpointState{},
+				Runtimes:   map[string]RuntimeInstall{},
 			}, nil
 		}
 		return State{}, fmt.Errorf("catalog: read %s: %w", s.path, err)

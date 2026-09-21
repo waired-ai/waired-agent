@@ -2912,7 +2912,9 @@ func (p *agentInferenceProvider) setupModelState(modelID string) (string, modelP
 	if err != nil {
 		return "", modelPullProgress{}, ""
 	}
-	ms, ok := st.Models[modelID]
+	// The serving engine's record (waired-agent#1520): the setup row asks
+	// whether this engine has the model, not whether some engine does.
+	ms, ok := st.ModelFor(p.servingEngine(), modelID)
 	if !ok {
 		return catalog.ModelStateNotPresent, modelPullProgress{}, ""
 	}
@@ -3170,7 +3172,11 @@ func (p *agentInferenceProvider) setupBuildChosen(modelID, variantID, kvType str
 		return true
 	}
 	st, err := p.store.Load()
-	return err == nil && st.Models[modelID].VariantID == variantID
+	if err != nil {
+		return false
+	}
+	ms, _ := st.ModelFor(p.servingEngine(), modelID)
+	return ms.VariantID == variantID
 }
 
 func (p *agentInferenceProvider) setupBuildServing(modelID string) bool {

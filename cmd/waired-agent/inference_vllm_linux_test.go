@@ -138,6 +138,36 @@ func TestResolveVLLMTensorParallel(t *testing.T) {
 	}
 }
 
+// vLLM's download writes vLLM's record (waired-agent#1520). With one record
+// per model id it took ollama's Ready record for a refresh and overwrote it
+// with the safetensors build, leaving one record that named both engines'
+// weights.
+func TestDownloadHFWeights_LeavesOllamasRecordAlone(t *testing.T) {
+	p := vllmTestProvider(t)
+	m := mixedVLLMManifest()
+	if err := p.store.Update(func(s *catalog.State) {
+		s.SetModel(catalog.RuntimeOllama, m.ModelID, catalog.ModelState{
+			VariantID: m.Variants[0].VariantID, OllamaTag: "gpt-oss:20b", State: catalog.ModelStateReady,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{lines: []string{"done"}})
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, m.Variants[1], puller, false, nil); err != nil {
+		t.Fatalf("downloadHFWeights: %v", err)
+	}
+	st, _ := p.store.Load()
+	o, _ := st.ModelFor(catalog.RuntimeOllama, m.ModelID)
+	if o.VariantID != m.Variants[0].VariantID || o.OllamaTag != "gpt-oss:20b" || o.State != catalog.ModelStateReady ||
+		o.HFRepo != "" || o.LocalPath != "" {
+		t.Errorf("ollama's record after a vLLM download = %+v, want it unchanged", o)
+	}
+	if v, _ := st.ModelFor(catalog.RuntimeVLLM, m.ModelID); v.State != catalog.ModelStateReady ||
+		v.VariantID != m.Variants[1].VariantID || v.OllamaTag != "" {
+		t.Errorf("vLLM's record = %+v, want the safetensors build Ready and nothing of ollama's", v)
+	}
+}
+
 // downloadHFWeights must drive the model to Ready with the on-disk path and
 // repo recorded, and register a local vLLM endpoint the router can select.
 func TestDownloadHFWeights_RecordsReadyAndEndpoint(t *testing.T) {
@@ -155,7 +185,7 @@ func TestDownloadHFWeights_RecordsReadyAndEndpoint(t *testing.T) {
 	}
 
 	st, _ := p.store.Load()
-	ms := st.Models[m.ModelID]
+	ms := st.VLLMModels[m.ModelID]
 	if ms.State != catalog.ModelStateReady {
 		t.Errorf("model state=%q, want ready", ms.State)
 	}
@@ -185,7 +215,7 @@ func TestDownloadHFWeights_FailureRecordsFailedState(t *testing.T) {
 		t.Fatal("expected download error")
 	}
 	st, _ := p.store.Load()
-	if ms := st.Models[m.ModelID]; ms.State != catalog.ModelStateFailed {
+	if ms := st.VLLMModels[m.ModelID]; ms.State != catalog.ModelStateFailed {
 		t.Errorf("model state=%q, want failed", ms.State)
 	}
 }
@@ -200,7 +230,7 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 
 	// Seed the model as already ready on disk.
 	if err := p.store.Update(func(s *catalog.State) {
-		s.Models[m.ModelID] = catalog.ModelState{
+		s.VLLMModels[m.ModelID] = catalog.ModelState{
 			VariantID: variant.VariantID,
 			HFRepo:    variant.Source.RepoID,
 			LocalPath: p.hfLocalDir(variant.Source.RepoID),
@@ -215,7 +245,7 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 		t.Fatal("expected download error")
 	}
 	st, _ := p.store.Load()
-	ms := st.Models[m.ModelID]
+	ms := st.VLLMModels[m.ModelID]
 	if ms.State != catalog.ModelStateReady {
 		t.Errorf("state = %q after failed refresh, want ready (serving must survive)", ms.State)
 	}

@@ -101,7 +101,7 @@ func (p *agentInferenceProvider) switchFactsFor(ctx context.Context, modelID str
 	}
 	// ollama answers with the Active model while it is on disk.
 	if a := st.Active; a != nil && a.Runtime == catalog.RuntimeOllama {
-		if st.Models[a.ModelID].State == catalog.ModelStateReady {
+		if ms, _ := st.ModelFor(catalog.RuntimeOllama, a.ModelID); ms.State == catalog.ModelStateReady {
 			f.ServingModel, f.ServingVariant = a.ModelID, a.VariantID
 		}
 	}

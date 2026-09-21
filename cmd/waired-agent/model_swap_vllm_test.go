@@ -111,7 +111,7 @@ func waitForStartDecline(t *testing.T, p *agentInferenceProvider, what string) {
 func TestSwapPreferredModel_VLLMHostWithNoEngineAppliesInProcess(t *testing.T) {
 	p := vllmSwapProvider(t)
 	if err := p.store.Update(func(s *catalog.State) {
-		s.Models = map[string]catalog.ModelState{
+		s.VLLMModels = map[string]catalog.ModelState{
 			"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
 		}
 	}); err != nil {
@@ -167,7 +167,7 @@ func TestSwapPreferredModel_VLLMEngineUpSwitchesInProcess(t *testing.T) {
 	p := vllmSwapProvider(t)
 	p.setVLLM(&recordingAdapter{name: "vllm", health: infruntime.StateReady})
 	if err := p.store.Update(func(s *catalog.State) {
-		s.Models = map[string]catalog.ModelState{
+		s.VLLMModels = map[string]catalog.ModelState{
 			"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
 		}
 	}); err != nil {

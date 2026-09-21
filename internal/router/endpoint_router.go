@@ -165,6 +165,15 @@ type Request struct {
 	NodeDirective string `json:"node_directive,omitempty"`
 }
 
+// localModels is the serving engine's model records.
+func (in Inputs) localModels() map[string]catalog.ModelState {
+	engine := in.ServingEngine
+	if engine == "" {
+		engine = catalog.RuntimeOllama
+	}
+	return in.LocalState.ModelsFor(engine)
+}
+
 // Inputs bundles the world the selector reasons over: the known
 // manifests, the local cache state, the local hardware profile, the
 // runtime registry (which engines are wired up locally), and an
@@ -174,6 +183,12 @@ type Inputs struct {
 	LocalState catalog.State
 	Hardware   hardware.Profile
 	Runtimes   *runtime.Registry
+
+	// ServingEngine is the engine this device serves with; "" reads as
+	// ollama. Its records in LocalState are what this device can answer
+	// with (waired-agent#1520): weights the other engine fetched are not a
+	// local route.
+	ServingEngine string
 
 	// DefaultModelID, when non-empty, is the model the dynamic coding
 	// alias (DynamicCodingAliases: waired/default)
@@ -1414,7 +1429,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	}
 
 	// Step 3: locality filter / mesh fallback / external fallback.
-	modelState, present := s.in.LocalState.Models[manifest.ModelID]
+	modelState, present := s.in.localModels()[manifest.ModelID]
 	// Ready weights are not enough: a host whose operator turned local
 	// inference off, or that never installed an engine, has no local
 	// candidate no matter what is on disk (waired-agent#829). Every
@@ -1909,7 +1924,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		localIn = true
 	}
 	if r := localCandidateReason(local, localIn, localDropped, s.in.LocalServingOff,
-		localModelState(s.in.LocalState, local.ModelID), s.in.MinModelSize); r != "" {
+		localModelState(s.in.localModels(), local.ModelID), s.in.MinModelSize); r != "" {
 		reasons = withReason(reasons, r)
 	}
 	if localDropped.belowFloor && short != nil {

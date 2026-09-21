@@ -89,7 +89,7 @@ func (p *agentInferenceProvider) resolvePullVariant(
 		p.logger.Warn("the requested build is unknown or cannot be loaded by this engine; choosing one as if none was named",
 			"model", manifest.ModelID, "requested", requested, "engine", engine, "engine_version", engineVersion)
 	}
-	if ms, ok := st.Models[manifest.ModelID]; ok && ms.State == catalog.ModelStateReady {
+	if ms, ok := st.ModelFor(engine, manifest.ModelID); ok && ms.State == catalog.ModelStateReady {
 		if cur, ok := variantByID(manifest, ms.VariantID); ok && loadable(cur) {
 			return cur, false
 		}
@@ -104,8 +104,12 @@ func (p *agentInferenceProvider) resolvePullVariant(
 	return best.Variant, false
 }
 
-// commitBuild makes variantID the build modelID's Models row serves,
-// inside a store update, and reports whether the row now names it.
+// commitBuild makes variantID the build engine's record of modelID serves,
+// inside a store update, and reports whether the record now names it.
+//
+// Staged and retained builds are ollama's (waired-agent#1348); a vLLM build
+// that is not the record's own is fetched and switched to by the vLLM start
+// path, so here it answers false.
 //
 // A build that is already the row is a no-op. One held in StagedVariants
 // (Ready) or RetainedVariants is moved into the row, and the build it
@@ -113,13 +117,16 @@ func (p *agentInferenceProvider) resolvePullVariant(
 // tag — they are still on disk, and the user is offered their removal
 // rather than having them vanish or leak. Anything else (not downloaded,
 // still downloading) leaves the row alone and answers false.
-func commitBuild(s *catalog.State, modelID, variantID string) bool {
-	cur, ok := s.Models[modelID]
+func commitBuild(s *catalog.State, engine, modelID, variantID string) bool {
+	cur, ok := s.ModelFor(engine, modelID)
 	if !ok {
 		return false
 	}
 	if variantID == "" || cur.VariantID == variantID {
 		return cur.State == catalog.ModelStateReady
+	}
+	if engine != catalog.RuntimeOllama {
+		return false
 	}
 	var next catalog.ModelState
 	found := false
@@ -150,9 +157,9 @@ func commitBuild(s *catalog.State, modelID, variantID string) bool {
 		prev.Error = ""
 		setRetained(s, modelID, append(s.RetainedVariants[modelID], prev))
 	}
-	s.Models[modelID] = next
+	s.SetModel(engine, modelID, next)
 	for k, e := range s.Endpoints {
-		if e.ModelID == modelID {
+		if e.ModelID == modelID && (e.Runtime == "" || e.Runtime == engine) {
 			e.VariantID = variantID
 			s.Endpoints[k] = e
 		}

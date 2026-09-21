@@ -3073,7 +3073,10 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		rs[name] = p.runtimeStatusFor(ctx, name, hwProfile)
 	}
 	p.addRefusedEngineRow(rs, hwProfile)
-	models := modelsSnapshot(state.Models, p.catalogManifests(), p.dlProgress.aggregate)
+	// The serving engine's records (waired-agent#1520): a model on disk
+	// only for the other engine is not something this engine can run, so
+	// `models ls`, `models pull`'s wait and the wizard see it as absent.
+	models := modelsSnapshot(state.ModelsFor(p.servingEngine()), p.catalogManifests(), p.dlProgress.aggregate)
 	endpoints := []management.ActiveEndpoint{}
 	for id, e := range state.Endpoints {
 		endpoints = append(endpoints, management.ActiveEndpoint{
@@ -3406,11 +3409,20 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 	}
 	if st.Active != nil {
 		f.HasActive = true
-		ms, ok := st.Models[st.Active.ModelID]
+		ms, ok := st.ModelFor(activeRuntime(st.Active), st.Active.ModelID)
 		f.ModelKnown = ok
 		f.ModelState = ms.State
 	}
 	return f
+}
+
+// activeRuntime is the engine whose record Active names. An Active written
+// before it carried a runtime is ollama's, the only engine there was.
+func activeRuntime(a *catalog.ActiveSelection) string {
+	if a == nil || a.Runtime == "" {
+		return catalog.RuntimeOllama
+	}
+	return a.Runtime
 }
 
 // SubsystemState is the mesh-facing reader of the same answer
@@ -3519,7 +3531,7 @@ func (p *agentInferenceProvider) EngineReady() (bool, string) {
 		return false, ""
 	}
 	modelID := st.Active.ModelID
-	ms, ok := st.Models[modelID]
+	ms, ok := st.ModelFor(activeRuntime(st.Active), modelID)
 	if !ok || ms.State != catalog.ModelStateReady {
 		return false, modelID
 	}
@@ -4048,8 +4060,9 @@ func vllmVersionWarning(installed string) string {
 func (p *agentInferenceProvider) ListModels(_ context.Context) []management.ModelEntry {
 	state, _ := p.store.Load()
 	out := []management.ModelEntry{}
+	engine := p.servingEngine()
 	for _, m := range p.catalogManifests() {
-		st := state.Models[m.ModelID]
+		st, _ := state.ModelFor(engine, m.ModelID)
 		entry := management.ModelEntry{
 			ModelID:   m.ModelID,
 			Aliases:   m.ModelAliases,
@@ -4661,11 +4674,18 @@ func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 		return
 	}
 	landed := false
+	// The record of the engine this job was fetching for
+	// (waired-agent#1520); a hand-built fixture's job names none, which is
+	// the ollama engine every job was for before vLLM.
+	engine := job.engine
+	if engine == "" {
+		engine = catalog.RuntimeOllama
+	}
 	if err := p.store.Update(func(s *catalog.State) {
 		// A cancelled download of another build of a serving model drops
 		// its staged row and leaves the served one alone
-		// (waired-agent#1348).
-		if sv, ok := s.StagedVariants[job.modelID]; ok && sv.VariantID == job.variantID {
+		// (waired-agent#1348). Staged builds are ollama's.
+		if sv, ok := s.StagedVariants[job.modelID]; engine == catalog.RuntimeOllama && ok && sv.VariantID == job.variantID {
 			if sv.State == catalog.ModelStateReady {
 				landed = true
 				return
@@ -4673,7 +4693,7 @@ func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 			delete(s.StagedVariants, job.modelID)
 			return
 		}
-		m, ok := s.Models[job.modelID]
+		m, ok := s.ModelFor(engine, job.modelID)
 		if !ok {
 			return
 		}
@@ -4681,7 +4701,7 @@ func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 			landed = true
 			return
 		}
-		delete(s.Models, job.modelID)
+		s.RemoveModel(engine, job.modelID)
 	}); err != nil {
 		p.logger.Warn("clearing the cancelled download's record failed",
 			"model", job.modelID, "job", job.jobID, "err", err)
@@ -5412,7 +5432,8 @@ func (p *agentInferenceProvider) isBundledModel(modelID string) bool {
 // value when the store is unreadable.
 func (p *agentInferenceProvider) bundledModelState(modelID string) catalog.ModelState {
 	state, _ := p.store.Load()
-	return state.Models[modelID]
+	ms, _ := state.ModelFor(p.servingEngine(), modelID)
+	return ms
 }
 
 // The agent-startup pre-pull of spec waired_inference_spec.md §11.1 (a
@@ -5575,7 +5596,7 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 		if s.Active != nil {
 			return
 		}
-		ms, ok := s.Models[modelID]
+		ms, ok := s.ModelFor(p.servingEngine(), modelID)
 		if !ok || ms.State != catalog.ModelStateReady {
 			return
 		}
@@ -5704,13 +5725,14 @@ func (p *agentInferenceProvider) activatePreferred(modelID, variantID string, fl
 				return
 			}
 		}
-		if want != "" && !commitBuild(s, modelID, want) {
+		engine := p.servingEngine()
+		if want != "" && !commitBuild(s, engine, modelID, want) {
 			// The chosen build is not on disk yet. Activating the build
 			// that is would serve something nobody chose; the switch
 			// completes when the chosen one lands.
 			return
 		}
-		ms, ok := s.Models[modelID]
+		ms, ok := s.ModelFor(engine, modelID)
 		if !ok || ms.State != catalog.ModelStateReady {
 			return
 		}
@@ -5757,7 +5779,7 @@ func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) bo
 		return false
 	}
 	state, _ := p.store.Load()
-	if cur := state.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady &&
+	if cur, _ := state.ModelFor(p.servingEngine(), manifest.ModelID); cur.State == catalog.ModelStateReady &&
 		p.engineServesTag(ctx, cur.OllamaTag) {
 		p.activatePreferredIfNeeded(manifest.ModelID, cur.VariantID)
 		// A build chosen before the restart that is not the row's yet
@@ -5930,7 +5952,7 @@ func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOr
 	defer p.publishRecommendationNotices(ctx)
 
 	st, _ := p.store.Load()
-	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady &&
+	if ms, found := st.ModelFor(engine, manifest.ModelID); found && ms.State == catalog.ModelStateReady &&
 		(variantID == "" || variantID == ms.VariantID || buildOnDisk(st, manifest.ModelID, variantID)) {
 		// On disk: flip Active (and the build, when another one was
 		// chosen and is already here) + bring the engine onto it now.
@@ -5981,8 +6003,12 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	if err != nil {
 		return err
 	}
-	m, ok := state.Models[modelID]
-	if !ok {
+	// Every engine's record of the model goes (waired-agent#1520): `models
+	// rm` names a model, not an engine, and weights one engine fetched stay
+	// on disk after the other becomes the one this host serves with.
+	records := state.RecordsFor(modelID)
+	m := records[catalog.RuntimeOllama]
+	if len(records) == 0 {
 		// The cancelled job's own cleanup already removed the row. The
 		// operator asked for the model to be gone and it is gone, so this
 		// is the success case, not "no such model".
@@ -6026,7 +6052,7 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	// directory stayed, tens of GB that no record named — #641's shape on
 	// the other engine. Removed before the record for the same reason as
 	// the tag above.
-	if dir := m.LocalPath; dir != "" {
+	if dir := records[catalog.RuntimeVLLM].LocalPath; dir != "" {
 		if err := p.removeHFModelDir(ctx, modelID, dir); err != nil {
 			p.logger.Warn("deleting the weights failed; keeping the model record",
 				"model", modelID, "dir", dir, "err", err)
@@ -6055,7 +6081,9 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	}
 	delete(state.StagedVariants, modelID)
 	delete(state.RetainedVariants, modelID)
-	delete(state.Models, modelID)
+	for _, rt := range catalog.EngineRuntimes {
+		state.RemoveModel(rt, modelID)
+	}
 	for k, e := range state.Endpoints {
 		if e.ModelID == modelID {
 			delete(state.Endpoints, k)
@@ -6185,6 +6213,7 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 		// this device never pulls it.
 		Manifests:      p.routableManifests(),
 		LocalState:     st,
+		ServingEngine:  p.servingEngine(),
 		Hardware:       hw,
 		Runtimes:       p.registry,
 		DefaultModelID: defaultCodingModelID(p.resolvedModelCfg(), st),
@@ -6321,7 +6350,7 @@ func activeEngineTag(s catalog.State) (string, bool) {
 	if s.Active == nil {
 		return "", false
 	}
-	ms, ok := s.Models[s.Active.ModelID]
+	ms, ok := s.ModelFor(activeRuntime(s.Active), s.Active.ModelID)
 	if !ok {
 		return "", false
 	}
@@ -6672,7 +6701,7 @@ func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State)
 	// that `ollama pull` completes as a fast no-op over the existing blobs
 	// and which fills the missing field in on the way through.
 	precached := false
-	if ms, ok := state.Models[mp.Manifest.ModelID]; ok &&
+	if ms, ok := state.ModelFor(engine, mp.Manifest.ModelID); ok &&
 		ms.State == catalog.ModelStateReady && ms.VariantID == mp.Variant.VariantID {
 		precached = true
 	}
@@ -6733,7 +6762,7 @@ func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
 	// would fill the disk with a build nothing will switch to. The pick
 	// still reports it through AvailableUpdate.
 	if st, err := p.store.Load(); err == nil {
-		if ms, ok := st.Models[upd.ModelID]; ok && ms.State == catalog.ModelStateReady && ms.VariantID != upd.VariantID {
+		if ms, ok := st.ModelFor(upd.Runtime, upd.ModelID); ok && ms.State == catalog.ModelStateReady && ms.VariantID != upd.VariantID {
 			return
 		}
 	}
@@ -6839,11 +6868,14 @@ func (p *agentInferenceProvider) activeEngineModel() string {
 		return ""
 	}
 	// Active records ModelID + VariantID; the engine-native name
-	// (Ollama tag / HF repo id) lives on the per-model ModelState
-	// entry the puller wrote at install time.
-	modelState, ok := st.Models[st.Active.ModelID]
+	// (Ollama tag / HF repo id) lives on the Active engine's own record
+	// of the model (waired-agent#1520), which its puller wrote. No record
+	// means that engine has not fetched the model, so there is no name it
+	// would answer to: the model id used to stand in, and the benchmark
+	// then asked ollama for a model it did not have and got a 404.
+	modelState, ok := st.ModelFor(activeRuntime(st.Active), st.Active.ModelID)
 	if !ok {
-		return st.Active.ModelID
+		return ""
 	}
 	switch st.Active.Runtime {
 	case catalog.RuntimeOllama:
