@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
+
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -147,10 +149,25 @@ func (p *agentInferenceProvider) parkForOutOfMemory(ctx context.Context, why str
 // loadable because time passed, and retrying on a schedule is what put the
 // reference host under the same memory pressure twice (#1443, #1450).
 func (p *agentInferenceProvider) resumeAfterOutOfMemory(because string) bool {
-	if p == nil || p.ollama == nil {
+	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
 		return false
 	}
-	if p.parkedBecause() != parkCauseOutOfMemory {
+	// vLLM's latch lives on the provider (engine_power.go), and its apply
+	// step is the bootstrap, which re-plans from the choice that changed
+	// (waired-agent#1515).
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		p.noteParked(parkCauseNone)
+		p.setVLLMParked(false)
+		if a, ok := p.vllmAdapter().(interface{ ClearFailure() }); ok {
+			a.ClearFailure()
+		}
+		if p.logger != nil {
+			p.logger.Info("inference resumed: the reason it was stopped no longer applies", "because", because)
+		}
+		p.requestEngineStart(because)
+		return true
+	}
+	if p.ollama == nil {
 		return false
 	}
 	p.noteParked(parkCauseNone)

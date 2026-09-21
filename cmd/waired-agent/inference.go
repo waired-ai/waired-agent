@@ -5819,6 +5819,9 @@ func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOr
 	// asks for the download again even if a cancelled one was dispatched.
 	if engine == catalog.RuntimeVLLM {
 		p.vllmDispatched.forget(manifest.ModelID)
+		// The person chose the model, not a build of it, so the choice
+		// overrules the record for every build (waired-agent#1515).
+		p.forgetVLLMLoadFailures(manifest)
 	}
 
 	// Publish the effective preference so every in-process reader (tuning

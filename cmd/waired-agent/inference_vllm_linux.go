@@ -716,6 +716,20 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 	// this build's serve flags: the flag is not passed, so the engine uses
 	// its own default and we do not know it.
 	tuning.PromptBatchTokens = batchedTokens
+	// A build this computer already could not start, in this same shape
+	// on this same machine, is not tried again: the engine is held off
+	// with the reason instead (waired-agent#1515). Choosing the model
+	// again, or a change to the computer, is what lifts it.
+	shape := vllmLoadShape(tuning, kvCacheDType, router.VLLMMaxNumSeqs(p.cfg.VLLMMaxNumSeqs))
+	if chosen {
+		if rec, blocked := p.vllmLoadBlocked(ctx, manifest, variant, shape); blocked {
+			p.logger.Info("vllm bootstrap: this computer already could not start this model in this configuration; not starting it again",
+				"model", manifest.ModelID, "variant", variant.VariantID, "reason", rec.Reason, "failed_at", rec.FailedAt)
+			p.parkVLLMForOutOfMemory(rec.Reason)
+			release()
+			return
+		}
+	}
 	logDir := filepath.Join(p.stateDir, "runtimes", "vllm", "logs")
 	adapter := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:                    python,
@@ -803,6 +817,11 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		// which is what a run whose attempts failed differently needs.
 		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
 		hint := vllmStartupHint(string(raw), p.cfg.ResolvedVLLMPort())
+		if tuning.WeightsOverBudget {
+			// Not the KV cache: the weights alone are larger than what vLLM
+			// may use here, so no KV setting helps (waired-agent#1515).
+			hint = "the model's weights are larger than the GPU memory vLLM may use on this computer — choose a smaller model"
+		}
 		p.logger.Error("vllm did not become ready after retries; local inference unavailable until restart",
 			"err", ensureErr, "hint", hint, "engine_log", filepath.Join(logDir, "engine.log"))
 		// The hint used to end here, in a log line nobody reads on a
@@ -822,6 +841,15 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		// paths and no secrets, and without it a flag rejection cannot
 		// be matched to the flag that caused it.
 		p.logger.Warn("vllm start-up argv", "args", adapter.CommandArgsForDiagnostics())
+		// A chosen model that did not fit is remembered and the engine held
+		// off with the reason, so a restart does not repeat the same failed
+		// start (waired-agent#1515). The previous model answering in the
+		// meantime is not the choice and is not recorded against.
+		if chosen {
+			if mem, reason := vllmStartFailedForMemory(infruntime.LastEngineLogSpawn(string(raw)), tuning.WeightsOverBudget); mem {
+				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, reason, hint)
+			}
+		}
 		return
 	}
 	// #675 read-back: the engine logs its measured KV pool capacity

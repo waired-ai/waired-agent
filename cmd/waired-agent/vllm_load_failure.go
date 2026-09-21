@@ -1,0 +1,136 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+)
+
+// A vLLM start that failed because the model does not fit this computer is
+// remembered, and the engine is held off with the reason, as an ollama load
+// that ran out of memory already is (#1453, #1464). Owner decision
+// 2026-09-21 (waired-agent#1515): stop and say why. Nothing here retries on
+// a timer, and nothing falls back to another model on its own.
+//
+// Until this existed a vLLM host that had been handed a model too large for
+// its card — chosen, not refused, per the 2026-09-20 ruling — failed three
+// start attempts, stopped trying until the next trigger, and failed the same
+// three again on every restart, with a hint about the KV cache that sent the
+// reader to the wrong setting.
+
+// vllmStartFailedForMemory reports whether a failed vLLM start failed because
+// the model did not fit in GPU memory, from the engine's own output for that
+// start and the tuning's verdict that the weights alone exceed the budget.
+// The reason is the log's own wording where there is one.
+func vllmStartFailedForMemory(lastSpawnLog string, weightsOverBudget bool) (bool, string) {
+	for _, marker := range []string{
+		"CUDA out of memory",
+		"torch.OutOfMemoryError",
+		"No available memory for the cache blocks",
+		"larger than the maximum number of tokens that can be stored in KV cache",
+	} {
+		if strings.Contains(lastSpawnLog, marker) {
+			return true, marker
+		}
+	}
+	if weightsOverBudget {
+		return true, "the model's weights are larger than the GPU memory vLLM may use on this computer"
+	}
+	return false, ""
+}
+
+// vllmLoadShape is the configuration a vLLM start asked for, in the shape a
+// load-failure record keys on. Two starts with the same shape on the same
+// machine are the same attempt; a smaller window, another KV type or a
+// different card is a new one.
+func vllmLoadShape(t infruntime.ModelTuning, kvCacheDType string, maxNumSeqs int) catalog.LoadShape {
+	return catalog.LoadShape{
+		ContextLength: t.ContextLength,
+		KVCacheType:   kvCacheDType,
+		NumParallel:   maxNumSeqs,
+		Backend:       "cuda",
+	}
+}
+
+// vllmLoadBlocked reports whether this computer has already recorded that
+// this build does not start here in this shape.
+func (p *agentInferenceProvider) vllmLoadBlocked(ctx context.Context, m catalog.Manifest, v catalog.Variant,
+	shape catalog.LoadShape) (catalog.VariantLoadFailure, bool) {
+	if p == nil || p.store == nil {
+		return catalog.VariantLoadFailure{}, false
+	}
+	sha := activeVariantSHA(p.manifests, m.ModelID, v.VariantID)
+	if sha == "" {
+		return catalog.VariantLoadFailure{}, false
+	}
+	st, err := p.store.Load()
+	if err != nil {
+		return catalog.VariantLoadFailure{}, false
+	}
+	rec, ok := st.FailedLoads[sha]
+	if !ok || !rec.Blocks(p.loadContextNow(ctx), shape) {
+		return catalog.VariantLoadFailure{}, false
+	}
+	return rec, true
+}
+
+// recordVLLMLoadFailure keeps the fact that this build did not start here,
+// and holds the engine off with the reason.
+func (p *agentInferenceProvider) recordVLLMLoadFailure(ctx context.Context, m catalog.Manifest, v catalog.Variant,
+	shape catalog.LoadShape, reason, detail string) {
+	if p == nil || p.store == nil {
+		return
+	}
+	sha := activeVariantSHA(p.manifests, m.ModelID, v.VariantID)
+	if sha == "" {
+		return // a failure it cannot key is not recorded (see onLoadMemoryFailure)
+	}
+	rec := catalog.VariantLoadFailure{
+		ModelID:   m.ModelID,
+		VariantID: v.VariantID,
+		Reason:    reason,
+		Detail:    detail,
+		Context:   p.loadContextNow(ctx),
+		Shape:     shape,
+		FailedAt:  time.Now().UTC(),
+	}
+	if err := p.store.Update(func(s *catalog.State) {
+		if s.FailedLoads == nil {
+			s.FailedLoads = map[string]catalog.VariantLoadFailure{}
+		}
+		s.FailedLoads[sha] = rec
+	}); err != nil && p.logger != nil {
+		p.logger.Warn("could not record a vLLM start that did not fit this computer", "model_id", m.ModelID, "err", err)
+	}
+	p.parkVLLMForOutOfMemory(reason)
+	if p.logger != nil {
+		p.logger.Warn("this computer could not start this model on vLLM; it will not be started again automatically",
+			"model_id", m.ModelID, "variant_id", v.VariantID, "reason", reason,
+			"context_length", shape.ContextLength, "kv_cache_type", shape.KVCacheType)
+	}
+}
+
+// parkVLLMForOutOfMemory holds the vLLM engine off because its model does
+// not fit here. The operator's own stop wins, as it does for ollama.
+func (p *agentInferenceProvider) parkVLLMForOutOfMemory(why string) {
+	if p == nil || p.parkedBecause() == parkCauseOperator {
+		return
+	}
+	p.noteParked(parkCauseOutOfMemory)
+	p.setVLLMParked(true)
+	if p.logger != nil {
+		p.logger.Warn("inference stopped: the chosen model does not fit this computer's GPU memory", "why", why)
+	}
+}
+
+// forgetVLLMLoadFailures drops every record for the model's builds: choosing
+// the model again overrules them, and a person who chose a model did not
+// choose a build of it.
+func (p *agentInferenceProvider) forgetVLLMLoadFailures(m catalog.Manifest) {
+	for _, v := range m.Variants {
+		p.forgetLoadFailure(activeVariantSHA(p.manifests, m.ModelID, v.VariantID))
+	}
+}
