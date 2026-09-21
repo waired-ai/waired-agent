@@ -493,6 +493,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	statePath := catalog.DefaultStatePath()
 	store := catalog.NewStore(statePath)
 
+	// Before anything of this process can download: every partial file in
+	// a model directory now is one the previous run's `hf download` could
+	// not delete when the service stopped it (waired-agent#1519).
+	sweepHFPartialsAtBoot(logger, stateDir)
+
 	cachePath := defaultCachePath()
 	// The engine probe resolves the binary the way the daemon resolves
 	// the one it spawns (state dir first), not from $PATH — waired's own
@@ -1485,6 +1490,11 @@ type agentInferenceProvider struct {
 	// Status() (and thus `waired status`) can show a percentage + size.
 	// In-memory only (transient; never persisted to state.json).
 	dlProgress *downloadProgress
+
+	// hfDirs gives one download at a time a Hugging Face model directory,
+	// so the partial files it finds there are dead ones it may delete
+	// (waired-agent#1519). Zero value ready.
+	hfDirs hfDirLocks
 
 	// pullsWG tracks background pull goroutines spawned by PullModel so
 	// tests can join them before their t.TempDir() is removed (#377).
@@ -4293,6 +4303,7 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 	job := &pullJob{
 		jobID: jobID, modelID: manifest.ModelID,
 		variantID: variant.VariantID, tag: variant.Source.Tag,
+		engine: engine,
 		// Whether the choice above was made without knowing what the
 		// engine can load. runPullJob revisits it after the engine is
 		// serving, where the answer is always known (#361).
@@ -4397,6 +4408,10 @@ type pullJob struct {
 	modelID   string
 	variantID string
 	tag       string
+	// engine is the engine whose weights this job fetches. "" — the unit
+	// fixtures that build a pullJob by hand — reads as ollama, the engine
+	// every job was for before vLLM.
+	engine string
 	// resolvedBlind records that variantID/tag were chosen while the
 	// engine version was unknown, so every floored variant was excluded
 	// on no evidence. runPullJob re-resolves once the engine is serving
@@ -4610,7 +4625,9 @@ var pullCancelSettle = 5 * time.Second
 // reclaimed: ollama keeps them as `<blob>-partial` under its own model
 // dir, and `ollama rm` cannot name a tag whose manifest was never
 // written. A later pull of the same model resumes from them. See the PR
-// body for the follow-up.
+// body for the follow-up. A Hugging Face download is the opposite case:
+// its partial files cannot be resumed, so downloadHFWeights deletes them
+// before this runs (waired-agent#1519).
 func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 	if !job.requestedStop() {
 		return
@@ -4664,6 +4681,15 @@ func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
 	// the whole point of stopping.
 	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == job.modelID {
 		p.pendingSwapModel.CompareAndSwap(psm, nil)
+	}
+	// What happens to the bytes differs by engine. ollama keeps a stopped
+	// blob as `<blob>-partial` and the next pull resumes from it; a Hugging
+	// Face partial is never resumed, and downloadHFWeights has already
+	// deleted it (waired-agent#1519).
+	if job.engine == catalog.RuntimeVLLM {
+		p.logger.Info("cancelled download's record removed; its partial files were deleted",
+			"model", job.modelID, "job", job.jobID)
+		return
 	}
 	p.logger.Info("cancelled download's record removed; the part already fetched stays on disk",
 		"model", job.modelID, "tag", job.tag, "job", job.jobID)
@@ -4918,6 +4944,7 @@ func (p *agentInferenceProvider) upgradeBlindVariant(
 		p.pullsInFlight[manifest.ModelID] = &pullJob{
 			jobID: cur.jobID, modelID: cur.modelID,
 			variantID: variant.VariantID, tag: variant.Source.Tag,
+			engine: cur.engine,
 			// The SAME stop half, not a fresh one: a cancel that reaches
 			// the replacement has to arrive at the context the download
 			// is actually running on.
@@ -5956,6 +5983,18 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 			p.logger.Info("model weights deleted", "model", modelID, "tag", tag)
 		}
 	}
+	// A vLLM model's weights are a directory rather than a tag, and until
+	// waired-agent#1519 nothing removed it: the record went and the whole
+	// directory stayed, tens of GB that no record named — #641's shape on
+	// the other engine. Removed before the record for the same reason as
+	// the tag above.
+	if dir := m.LocalPath; dir != "" {
+		if err := p.removeHFModelDir(ctx, modelID, dir); err != nil {
+			p.logger.Warn("deleting the weights failed; keeping the model record",
+				"model", modelID, "dir", dir, "err", err)
+			return fmt.Errorf("delete the weights for %s: %w", modelID, err)
+		}
+	}
 	// The model's other builds go with it: a staged download that landed
 	// and every retained build (waired-agent#1348). Leaving them would be
 	// #641 again — gigabytes on disk that no record names once the model
@@ -6055,6 +6094,20 @@ func (p *agentInferenceProvider) forgetDeletedModel(modelID string) {
 // modelIDsForTag lists the models OTHER than except whose weights are the
 // same engine tag. Non-empty means removing the tag would take those
 // models' weights with it.
+// modelIDsForDir is modelIDsForTag for a vLLM model's weights directory,
+// which is named after the repository rather than the model, so two model
+// ids can name one.
+func modelIDsForDir(models map[string]catalog.ModelState, dir, except string) []string {
+	var shared []string
+	for id, e := range models {
+		if id != except && e.LocalPath != "" && filepath.Clean(e.LocalPath) == filepath.Clean(dir) {
+			shared = append(shared, id)
+		}
+	}
+	slices.Sort(shared)
+	return shared
+}
+
 func modelIDsForTag(models map[string]catalog.ModelState, tag, except string) []string {
 	var shared []string
 	for id, e := range models {

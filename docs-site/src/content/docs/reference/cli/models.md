@@ -69,9 +69,11 @@ until the new model is serving. The confirmations work as they do for `pull`.
 
 **`cancel`** stops a download that is running, and asks nothing first. It
 prints the job it stopped, or says `no download in progress for <model>`. A
-`pull` that was waiting on that download stops too and exits non-zero. The
-part already downloaded stays on disk, so pulling the same model again
-resumes. Cancelling does not undo a `use`. If you had chosen that model, it
+`pull` that was waiting on that download stops too and exits non-zero. With
+Ollama, the part already downloaded stays on disk, so pulling the same model
+again resumes. With vLLM, the files that finished stay and the next pull skips
+them, but a file that was still downloading is deleted and starts over.
+Cancelling does not undo a `use`. If you had chosen that model, it
 stays your choice and applies when the weights arrive.
 
 **`rm`** deletes a model's files and confirms first, or takes `--yes`. It

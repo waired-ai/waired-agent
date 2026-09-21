@@ -251,6 +251,53 @@ func hfIncompleteBytes(localDir string) int64 {
 	return total
 }
 
+// SweepHFIncomplete deletes every partial file huggingface_hub left under
+// localDir's download cache, and reports how many it removed and how many
+// bytes they held.
+//
+// A partial is never resumed. Each `hf download` process writes to a
+// temporary name of its own, `<hash>.<etag>.<random 8 hex>.incomplete`
+// (huggingface_hub's file_download.py since huggingface/huggingface_hub#4228,
+// measured on 1.31.0), and deletes it in a `finally` block when the transfer
+// fails. That block does not run when the process is killed, and the agent
+// kills it on every cancel and every service stop, so each interrupted attempt
+// left one partial per file in flight. A 23.46 GB model fetched over three
+// attempts left 17.8 GB of them behind (waired-agent#1519).
+//
+// Recursive, because a file in a subdirectory of the repository is parked in
+// the same subdirectory of the cache. Only `.incomplete` files go: the
+// `.metadata` files beside them describe files that did land, and the CLI
+// reads them to skip those on the next run.
+//
+// The caller must know that nothing is downloading into localDir: a partial
+// that belongs to a live download is indistinguishable from a dead one, and
+// deleting it fails that download when it tries to move the file in place.
+func SweepHFIncomplete(localDir string) (removed int, bytes int64, err error) {
+	root := filepath.Join(localDir, hfIncompleteDir)
+	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".incomplete") {
+			return nil
+		}
+		var size int64
+		if fi, ierr := d.Info(); ierr == nil {
+			size = fi.Size()
+		}
+		if rerr := os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			return rerr
+		}
+		removed++
+		bytes += size
+		return nil
+	})
+	return removed, bytes, walkErr
+}
+
 // AnnounceHFFiles reports every file at zero bytes, so a reader has the
 // download's full size before the first byte lands.
 //

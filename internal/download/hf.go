@@ -103,8 +103,15 @@ func (e *HFError) Unwrap() error { return e.Cause }
 // Pull invokes `huggingface-cli download <repo> --local-dir <dir>`
 // (with --local-dir-use-symlinks=False so vLLM can read the files
 // directly) and forwards parsed Progress events to onProgress. A failure
-// that is not an auth or not-found error is retried once; the CLI resumes
-// the files the first attempt finished.
+// that is not an auth or not-found error is retried once, unless ctx is
+// already done: a cancelled or shut-down pull stops rather than starting a
+// second download.
+//
+// The retry does not fetch again a file the first attempt finished, because
+// the CLI skips files already in --local-dir. It does not resume a file the
+// first attempt had half-written either: huggingface_hub writes each attempt
+// to a temporary name of its own (SweepHFIncomplete), so a partial restarts
+// from zero. The caller clears the partials of attempts that were killed.
 //
 // There is no fast-path toggle any more. The venv's huggingface_hub is
 // 1.x, which no longer uses hf_transfer: it ignores
@@ -163,6 +170,11 @@ func (p *HFPuller) Pull(ctx context.Context, repo string, opts HFPullOpts, onPro
 	// (a dropped connection on a proxied or NAT'd network) gets one.
 	hfErr := &HFError{}
 	if errors.As(first, &hfErr) && (hfErr.Class == HFErrAuth || hfErr.Class == HFErrNotFound) {
+		return first
+	}
+	// A cancelled context killed the first attempt; starting another would
+	// only be killed in turn, after announcing a retry nobody asked for.
+	if ctx.Err() != nil {
 		return first
 	}
 	onProgress(Progress{State: StateUnknown, Percent: -1, Message: "download failed, retrying once"})

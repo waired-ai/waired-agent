@@ -146,7 +146,7 @@ func TestDownloadHFWeights_RecordsReadyAndEndpoint(t *testing.T) {
 	variant := m.Variants[1] // the vLLM safetensors variant
 	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{lines: []string{"done"}})
 
-	localDir, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false)
+	localDir, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false, nil)
 	if err != nil {
 		t.Fatalf("downloadHFWeights: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestDownloadHFWeights_FailureRecordsFailedState(t *testing.T) {
 	variant := m.Variants[1]
 	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{err: io.ErrUnexpectedEOF})
 
-	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err == nil {
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false, nil); err == nil {
 		t.Fatal("expected download error")
 	}
 	st, _ := p.store.Load()
@@ -211,7 +211,7 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 	}
 
 	puller := download.NewHFPuller("hf-fake", &fakeHFRunner{err: io.ErrUnexpectedEOF})
-	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, true); err == nil {
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, true, nil); err == nil {
 		t.Fatal("expected download error")
 	}
 	st, _ := p.store.Load()
@@ -250,7 +250,7 @@ func TestDownloadHFWeights_AsksForTheTopLevelAndKnowsItsSize(t *testing.T) {
 	runner.onRun = func() { completed, total, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
 	puller := download.NewHFPuller("hf-fake", runner)
 
-	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false, nil); err != nil {
 		t.Fatalf("downloadHFWeights: %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestDownloadHFWeights_NoWeightsAtTheTopLevelTakesTheWholeRepo(t *testing.T)
 	runner.onRun = func() { _, _, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
 	puller := download.NewHFPuller("hf-fake", runner)
 
-	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false, nil); err != nil {
 		t.Fatalf("downloadHFWeights: %v", err)
 	}
 	args := runner.lastArgs()
@@ -317,7 +317,7 @@ func TestDownloadHFWeights_ListingFailureFallsBackToTheWholeRepo(t *testing.T) {
 	runner.onRun = func() { _, _, _, sawProgress = p.dlProgress.aggregate(m.ModelID) }
 	puller := download.NewHFPuller("hf-fake", runner)
 
-	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false); err != nil {
+	if _, err := p.downloadHFWeights(context.Background(), m.ModelID, variant, puller, false, nil); err != nil {
 		t.Fatalf("downloadHFWeights: %v", err)
 	}
 	args := runner.lastArgs()

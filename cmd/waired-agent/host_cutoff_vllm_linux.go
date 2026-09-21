@@ -93,7 +93,7 @@ func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, vari
 		}
 	}()
 
-	localPath, err := p.downloadHFWeights(ctx, hostfit.HostCutoffProbeModelID, variant, puller, false)
+	localPath, err := p.downloadHFWeights(ctx, hostfit.HostCutoffProbeModelID, variant, puller, false, nil)
 	if err != nil {
 		return hostCutoffMeasurement{}, fmt.Errorf("probe weights: %w", err)
 	}
