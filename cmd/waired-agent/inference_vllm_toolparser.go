@@ -144,5 +144,38 @@ func resolveVLLMToolParser(m catalog.Manifest, override string) string {
 	if override != "" {
 		return override
 	}
+	// A custom model carries its parser in its variant, set at import from
+	// the model's family and checked against the pinned vLLM's registry
+	// (waired-ai/waired#1480); this table knows only the catalog's ids.
+	if v, ok := customVLLMVariant(m); ok {
+		return v.VLLMToolCallParser
+	}
 	return vllmToolParserByModelID[m.ModelID]
+}
+
+// resolveVLLMReasoningParser is the --reasoning-parser for m: a custom
+// model's own, set at import, and none for the catalog's models, which
+// have never passed one.
+func resolveVLLMReasoningParser(m catalog.Manifest) string {
+	if v, ok := customVLLMVariant(m); ok {
+		return v.VLLMReasoningParser
+	}
+	return ""
+}
+
+// vllmLoadFormat is the --load-format for m: "safetensors" for a custom
+// model, so vLLM never loads a pickled checkpoint from a repository nobody
+// at Waired has reviewed; the catalog's models keep vLLM's default.
+func vllmLoadFormat(m catalog.Manifest) string {
+	if m.Provenance == catalog.ProvenanceCustom {
+		return "safetensors"
+	}
+	return ""
+}
+
+func customVLLMVariant(m catalog.Manifest) (catalog.Variant, bool) {
+	if m.Provenance != catalog.ProvenanceCustom || len(m.Variants) != 1 {
+		return catalog.Variant{}, false
+	}
+	return m.Variants[0], true
 }
