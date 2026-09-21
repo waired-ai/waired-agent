@@ -1,0 +1,4 @@
+# provenance: the "inference compute" line is verbatim from ollama 0.34.2's engine.log on a Linux host with an RTX PRO 4000 Blackwell and an AMD gfx1036 iGPU (2026-09-21). The "Listening on" and "vram-based default context" lines are synthetic, written in the format server/routes.go logs them (23.5 GiB selects 32768 there).
+time=2026-09-21T07:21:50.101Z level=INFO source=routes.go:2000 msg="Listening on 127.0.0.1:9475 (version 0.34.2)"
+time=2026-09-21T07:21:51.937Z level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=CUDA compute=12.0 name=CUDA0 description="NVIDIA RTX PRO 4000 Blackwell" libdirs=ollama,cuda_v13 driver=13.3 pci_id=0000:01:00.0 type=discrete total="23.5 GiB" available="23.2 GiB"
+time=2026-09-21T07:21:51.938Z level=INFO source=routes.go:2050 msg="vram-based default context" total_vram="23.5 GiB" default_num_ctx=32768

@@ -27,7 +27,10 @@ import (
 // from the adapter's spawn-time fallback resolver (#624) instead, which
 // re-reads state on every spawn.
 type engineBootstrapPlan struct {
-	backend      infruntime.BackendPlan
+	backend infruntime.BackendPlan
+	// prediction is the GPUs the plan expects the engine to use, checked
+	// against the engine's own report once it is up (#1513).
+	prediction   enginePrediction
 	tuned        bool
 	tune         ollamaTuning
 	tuneTag      string
@@ -440,6 +443,10 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	if resolved := verifyBackendEngaged(ctx, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger); resolved != "" {
 		p.ollama.SetResolvedBackend(resolved)
 	}
+	// And the engine's own list of the devices it kept, against the one
+	// the plan was made from (#1513). Report only; read before the tuning
+	// verify below, which can restart the engine.
+	p.reportEngineDiscovery()
 	// #621: verify the exported serve tuning against the running engine
 	// and degrade once on positive evidence (silent f16 fallback /
 	// spill). Ordered after the backend probe so the two never interleave

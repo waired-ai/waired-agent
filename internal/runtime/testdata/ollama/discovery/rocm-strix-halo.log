@@ -1,0 +1,4 @@
+# provenance: the fields of the "inference compute" line are verbatim from docs/knowledges/20260906/0430-rocm-runs-on-strix-halo-windows.md (ollama with the ROCm overlay on a Windows Strix Halo, AMD Radeon 8060S); the time/level/source prefix and the surrounding lines are synthetic, in server/routes.go's format. CRLF line ends, as a Windows engine.log can carry.
+time=2026-09-06T04:30:00.000+09:00 level=INFO source=routes.go:2000 msg="Listening on 127.0.0.1:9475 (version 0.34.2)"
+time=2026-09-06T04:30:01.000+09:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=ROCm compute=gfx1151 name=ROCm0 description="AMD Radeon(TM) 8060S Graphics" libdirs=ollama,rocm_v7_1 pci_id=0000:c5:00.0 type=iGPU total="76.8 GiB" available="76.6 GiB"
+time=2026-09-06T04:30:01.001+09:00 level=INFO source=routes.go:2050 msg="vram-based default context" total_vram="76.8 GiB" default_num_ctx=262144
