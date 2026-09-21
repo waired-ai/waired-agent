@@ -32,6 +32,7 @@ const (
 	noticeSourceUpdate         = "update"
 	noticeSourceEngine         = "engine"
 	noticeSourceLoadFailure    = "inference-load-failure"
+	noticeSourceCustomModels   = "custom-models"
 )
 
 // noticeProvider adapts the registry to management.NoticeProvider.

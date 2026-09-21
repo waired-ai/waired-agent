@@ -64,7 +64,7 @@ type vllmBlockedLoad struct {
 
 // vllmBlockKey is the key the records use for this build in this shape.
 func (p *agentInferenceProvider) vllmBlockKey(m catalog.Manifest, v catalog.Variant, shape catalog.LoadShape) vllmBlockedLoad {
-	return vllmBlockedLoad{SHA: activeVariantSHA(p.manifests, m.ModelID, v.VariantID), Shape: shape}
+	return vllmBlockedLoad{SHA: activeVariantSHA(p.catalogManifests(), m.ModelID, v.VariantID), Shape: shape}
 }
 
 // vllmLoadStillBlocked is loadIsBlocked on a vLLM host: the record for the
@@ -109,7 +109,7 @@ func (p *agentInferenceProvider) vllmLoadBlocked(ctx context.Context, m catalog.
 	if p == nil || p.store == nil {
 		return catalog.VariantLoadFailure{}, false
 	}
-	sha := activeVariantSHA(p.manifests, m.ModelID, v.VariantID)
+	sha := activeVariantSHA(p.catalogManifests(), m.ModelID, v.VariantID)
 	if sha == "" {
 		return catalog.VariantLoadFailure{}, false
 	}
@@ -183,6 +183,6 @@ func (p *agentInferenceProvider) parkVLLMForOutOfMemory(blocked vllmBlockedLoad,
 // choose a build of it.
 func (p *agentInferenceProvider) forgetVLLMLoadFailures(m catalog.Manifest) {
 	for _, v := range m.Variants {
-		p.forgetLoadFailure(activeVariantSHA(p.manifests, m.ModelID, v.VariantID))
+		p.forgetLoadFailure(activeVariantSHA(p.catalogManifests(), m.ModelID, v.VariantID))
 	}
 }

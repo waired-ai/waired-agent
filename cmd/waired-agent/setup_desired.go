@@ -484,6 +484,14 @@ type setupReconciler struct {
 	now        func() time.Time // test seam
 	interval   time.Duration    // push cadence; setupPushInterval outside tests
 
+	// customModelKnown and fetchCustomModels park a desired custom model
+	// this device has not received yet (waired-ai/waired#1473): the
+	// instruction can arrive in the same frame as the revision that brings
+	// the model, and refusing it then would latch model_not_found for a
+	// model that is a fetch away. Nil means no custom models: nothing parks.
+	customModelKnown  func(modelID string) bool
+	fetchCustomModels func()
+
 	mu      sync.Mutex
 	desired setupDesired
 	active  bool // a desired instruction has been seen this session
@@ -976,6 +984,9 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, d setupDesired, 
 		}
 		return
 	}
+	if r.parkUnknownCustomModel(modelID) {
+		return
+	}
 	state, _, _ := r.provider.setupModelState(modelID)
 	// Converged means the preference names this model AND this build and
 	// cache type, and the named build is the one on the model's row —
@@ -1186,6 +1197,23 @@ func (r *setupReconciler) benchmarkTargetReady(modelID string) bool {
 // A retry clears the record along with modelApplied, so an operator who
 // bumps the generation gets the line again if the instruction is still
 // leftovers by then.
+// parkUnknownCustomModel reports whether modelID is a custom model this
+// device does not hold yet, and if so asks for the set and leaves the
+// instruction un-spent: the next frame, or the reconcile pass, applies it
+// once the model is here.
+func (r *setupReconciler) parkUnknownCustomModel(modelID string) bool {
+	if r.customModelKnown == nil || !catalog.IsCustomModelID(modelID) || r.customModelKnown(modelID) {
+		return false
+	}
+	if r.fetchCustomModels != nil {
+		r.fetchCustomModels()
+	}
+	if !r.noteLeftoverDesired("custom:"+modelID) && r.logger != nil {
+		r.logger.Info("setup: the desired custom model has not arrived yet; waiting for the account's set", "model", modelID)
+	}
+	return true
+}
+
 func (r *setupReconciler) noteLeftoverDesired(modelID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2996,7 +3024,7 @@ func (p *agentInferenceProvider) setupActiveModelID() string {
 // resolution, not offering, and the control plane may legitimately desire
 // a withheld model (the routing sentinel pins one).
 func (p *agentInferenceProvider) setupCanonicalModelID(name string) string {
-	return canonicalSetupModelID(name, p.manifests)
+	return canonicalSetupModelID(name, p.catalogManifests())
 }
 
 // canonicalSetupModelID is setupCanonicalModelID's whole body, as a free
@@ -3135,7 +3163,7 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID, v
 
 func (p *agentInferenceProvider) setupBuildChosen(modelID, variantID, kvType string) bool {
 	c := p.effectiveBuildChoice()
-	if canonicalSetupModelID(c.ModelID, p.manifests) != modelID || c.VariantID != variantID || c.KVCacheType != kvType {
+	if canonicalSetupModelID(c.ModelID, p.catalogManifests()) != modelID || c.VariantID != variantID || c.KVCacheType != kvType {
 		return false
 	}
 	if variantID == "" {

@@ -35,6 +35,12 @@ meta:
 qwen3-8b-instruct: failed — no space left on device
 ```
 
+ダウンロードの大きさが始める前に分かる場合、Wairedは先に空き容量を確かめ、収まらないダウンロードは始めません。
+
+```text
+qwen3-8b-instruct: failed — insufficient disk space for this model: it needs 5.2 GB and only 3.1 GB is free
+```
+
 ## <a id="setup-says-the-inference-engine-failed-to-start"></a>セットアップが推論エンジンを起動できなかったと言う
 
 ターミナルでは、セットアップはモデルを待つのをやめて、推論エンジンが原因だと伝えます。

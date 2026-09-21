@@ -1154,7 +1154,7 @@ func (p *agentInferenceProvider) persistHostSpeedLocked(turnedInferenceOff bool)
 // The counters really are ollama's; what was wrong is concluding from that
 // that the host cannot be measured.
 func (p *agentInferenceProvider) hostCutoffProbeVariant(ctx context.Context, engine string) (catalog.Variant, error) {
-	manifest, ok := catalog.LookupByAlias(hostfit.HostCutoffProbeModelID, p.manifests)
+	manifest, ok := catalog.LookupByAlias(hostfit.HostCutoffProbeModelID, p.catalogManifests())
 	if !ok {
 		return catalog.Variant{}, fmt.Errorf("the probe model %s is not in this build's catalog",
 			hostfit.HostCutoffProbeModelID)

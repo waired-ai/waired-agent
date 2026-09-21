@@ -95,6 +95,11 @@ const (
 	// Warn because the person chose it after being told the cost — doctor
 	// reports defects, and a choice honoured is not one.
 	KindLongContextWindow Kind = "long_context_window"
+	// KindCustomModelWithdrawn is a custom model the account deleted while
+	// this computer was using it (waired-ai/waired#1473). The computer
+	// keeps serving it until another model is chosen; standing, like
+	// KindLongContextWindow, for as long as that holds.
+	KindCustomModelWithdrawn Kind = "custom_model_withdrawn"
 )
 
 // Severity says how a surface should mark a notice, and whether a
@@ -241,6 +246,22 @@ func ModelDidNotLoad(model, alternative, reason string) Notice {
 		n.Target = sanitise(alternative)
 	}
 	return n
+}
+
+// CustomModelWithdrawn is a custom model, named by its display name, that
+// the account deleted while this computer was using it. Warn: the model
+// still answers here, but nothing will download it again, and the other
+// computers of the account and team no longer route to it.
+func CustomModelWithdrawn(name string) Notice {
+	return Notice{
+		Kind:     KindCustomModelWithdrawn,
+		Severity: SeverityWarn,
+		Subject:  "custom model",
+		Title:    sanitise(name + " was deleted from your account"),
+		Text: sanitiseText("This computer keeps running it until you choose another model. " +
+			"Your other computers and your team can no longer use it."),
+		Target: sanitise(name),
+	}
 }
 
 // UpdateAvailable is a newer release than the one this computer runs.

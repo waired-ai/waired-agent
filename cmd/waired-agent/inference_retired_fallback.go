@@ -27,7 +27,7 @@ import (
 // catalog.RetirementRefusal, because a person or a script is there to
 // choose another model.
 func (p *agentInferenceProvider) resolveWrittenModel(name string) (catalog.Manifest, catalog.Retirement, bool) {
-	m, r, ok := catalog.ResolveModel(name, p.manifests)
+	m, r, ok := catalog.ResolveModel(name, p.catalogManifests())
 	if ok || len(r.Names) == 0 || catalog.HasSuccessor(r) {
 		return m, r, ok
 	}
@@ -42,8 +42,8 @@ func (p *agentInferenceProvider) resolveWrittenModel(name string) (catalog.Manif
 // recommendedModelHere is PickModel over the offered catalog for this host
 // and the engine it serves with. ok=false when nothing fits.
 func (p *agentInferenceProvider) recommendedModelHere() (catalog.Manifest, bool) {
-	offered := make([]catalog.Manifest, 0, len(p.manifests))
-	for _, m := range p.manifests {
+	offered := make([]catalog.Manifest, 0, len(p.catalogManifests()))
+	for _, m := range p.catalogManifests() {
 		if m.InternalOnly == "" {
 			offered = append(offered, m)
 		}

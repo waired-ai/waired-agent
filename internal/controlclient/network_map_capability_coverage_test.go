@@ -39,10 +39,6 @@ var capabilityNotDeclared = map[string]string{
 	"CapabilityOnboardingV3": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV4": "conditional: appended when OnboardingCapable",
 	"CapabilityOnboardingV5": "conditional: appended when OnboardingCapable",
-	// The contract landed ahead of the agent that handles custom models
-	// (waired-ai/waired#1475). It is declared, and this entry deleted, by
-	// the agent change that fetches and serves them (waired-ai/waired#1479).
-	"CapabilityCustomModelsV1": "pending: declared once the agent handles custom models (waired-ai/waired#1479)",
 }
 
 // unconditionalCapabilities returns the names in the `caps := []string{…}`

@@ -175,3 +175,23 @@ func TestInferenceCatalog_RowsCarryTheSizeClass(t *testing.T) {
 		}
 	}
 }
+
+// Custom models (waired-ai/waired#1473) are their own group after every
+// bundled row — even a bundled row that cannot run — so a client that takes
+// the first family still gets a catalog model. Within the group the usual
+// order holds. A record of today's behaviour.
+func TestSortCatalogFamilies_CustomModelsComeLast(t *testing.T) {
+	fams := []CatalogFamily{
+		{ModelID: "custom-big-0000aaaa", Custom: true, Fits: true, Fit: &hostfit.Presentation{Runnable: true, QualityTier: 99}},
+		{ModelID: "bundled-too-big", Fits: false, Fit: &hostfit.Presentation{QualityTier: 10}},
+		{ModelID: "custom-small-0000bbbb", Custom: true, Fits: true, Fit: &hostfit.Presentation{Runnable: true, QualityTier: 0}},
+		{ModelID: "bundled-runs", Fits: true, Fit: &hostfit.Presentation{Runnable: true, QualityTier: 50}},
+	}
+	sortCatalogFamilies(fams)
+	want := []string{"bundled-runs", "bundled-too-big", "custom-big-0000aaaa", "custom-small-0000bbbb"}
+	for i, f := range fams {
+		if f.ModelID != want[i] {
+			t.Fatalf("order at %d = %s, want %v", i, f.ModelID, want)
+		}
+	}
+}

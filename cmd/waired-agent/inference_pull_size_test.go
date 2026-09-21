@@ -8,6 +8,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // swapTagSize installs a recording fake for the duration of one test and
@@ -116,5 +117,37 @@ func TestRunPullJob_ReadsTheSizeOncePerTagAcrossRetries(t *testing.T) {
 	}
 	if got := tags(); len(got) != 1 {
 		t.Errorf("size reads = %v, want one for the single tag across all three attempts", got)
+	}
+}
+
+// TestDiskShortfall is a record of today's behaviour for the check before
+// a pull (waired-ai/waired#1480): a pull whose whole size exceeds the free
+// space where the engine keeps models is refused with a failure setup
+// classifies as disk_full, and anything unknown lets the pull go ahead.
+func TestDiskShortfall(t *testing.T) {
+	prev := freeDiskFn
+	t.Cleanup(func() { freeDiskFn = prev })
+	var probed string
+	freeDiskFn = func(path string) (int64, error) { probed = path; return 5 << 30, nil }
+	p := &agentInferenceProvider{ollamaModelsDir: "/state/runtimes/ollama/models"}
+	if got := p.diskShortfall(4 << 30); got != "" {
+		t.Errorf("4 GiB into 5 GiB free refused: %q", got)
+	}
+	got := p.diskShortfall(6 << 30)
+	if got == "" || !isDiskFullText(got) || classifySetupFailure(got) != signer.SetupErrorDiskFull {
+		t.Errorf("6 GiB into 5 GiB free: %q (classified %q)", got, classifySetupFailure(got))
+	}
+	if probed != p.ollamaModelsDir {
+		t.Errorf("probed %q, want the engine's model store", probed)
+	}
+	if p.diskShortfall(0) != "" {
+		t.Error("an unknown size was refused")
+	}
+	freeDiskFn = func(string) (int64, error) { return 0, errors.New("statfs failed") }
+	if p.diskShortfall(6<<30) != "" {
+		t.Error("an unreadable disk was refused")
+	}
+	if (&agentInferenceProvider{}).diskShortfall(6<<30) != "" {
+		t.Error("a provider with no model store was refused")
 	}
 }

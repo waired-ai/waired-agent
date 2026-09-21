@@ -223,7 +223,7 @@ func (p *agentInferenceProvider) resolveVLLMStart(engineUp bool) (vllmStartResol
 	}
 	r.targetDownloading = p.pullInFlight(manifest.ModelID)
 	var hasPrev bool
-	r.prev, r.prevVariant, r.prevPath, hasPrev = vllmPreviousCandidate(st.Active, p.manifests, st,
+	r.prev, r.prevVariant, r.prevPath, hasPrev = vllmPreviousCandidate(st.Active, p.catalogManifests(), st,
 		manifest.ModelID, venv.Version, dirExists)
 	facts := vllmTargetFacts{
 		EngineUp:          engineUp,

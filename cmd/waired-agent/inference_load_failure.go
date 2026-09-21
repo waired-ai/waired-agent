@@ -183,7 +183,7 @@ func (p *agentInferenceProvider) smallerAlternative(ctx context.Context, failed 
 		return ""
 	}
 	ranked, err := router.RankModels(router.PickInput{
-		Catalog:       p.manifests,
+		Catalog:       p.catalogManifests(),
 		Hardware:      p.profiler.Profile(ctx),
 		Engine:        failed.Context.EngineKind,
 		EngineVersion: failed.Context.EngineVersion,
@@ -192,7 +192,7 @@ func (p *agentInferenceProvider) smallerAlternative(ctx context.Context, failed 
 	if err != nil {
 		return ""
 	}
-	failedWeight := variantWeightGB(p.manifests, failed.ModelID, failed.VariantID)
+	failedWeight := variantWeightGB(p.catalogManifests(), failed.ModelID, failed.VariantID)
 	here, shape := p.loadContextNow(ctx), p.loadShapeNow()
 	// On vLLM the product picks each model's shape itself, so a record for
 	// a candidate describes the start it would be given again; the ollama
@@ -205,7 +205,7 @@ func (p *agentInferenceProvider) smallerAlternative(ctx context.Context, failed 
 		if failedWeight > 0 && c.Variant.EstimatedWeightGB >= failedWeight {
 			continue
 		}
-		if sha := activeVariantSHA(p.manifests, c.Manifest.ModelID, c.Variant.VariantID); sha != "" {
+		if sha := activeVariantSHA(p.catalogManifests(), c.Manifest.ModelID, c.Variant.VariantID); sha != "" {
 			if rec, ok := st.FailedLoads[sha]; ok && rec.Context == here && (anyShape || rec.Shape == shape) {
 				continue
 			}

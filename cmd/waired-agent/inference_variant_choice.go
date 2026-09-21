@@ -45,7 +45,7 @@ func (p *agentInferenceProvider) chosenVariantFor(modelID string) string {
 	if c.VariantID == "" || c.ModelID == "" {
 		return ""
 	}
-	if m, _, ok := catalog.ResolveModel(c.ModelID, p.manifests); !ok || m.ModelID != modelID {
+	if m, _, ok := catalog.ResolveModel(c.ModelID, p.catalogManifests()); !ok || m.ModelID != modelID {
 		return ""
 	}
 	return c.VariantID

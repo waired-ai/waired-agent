@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
@@ -449,16 +450,18 @@ func lookupCatalogFamily(mgmt, model string) (catalogDetailFamily, catalogDetail
 			return f, cat.Host, true
 		}
 	}
-	// Short form: the arg may be a bare id or an alias whose trailing
-	// segment matches a model_id (the catalog keys on model_id).
-	seg := model
-	if i := strings.LastIndex(model, "/"); i >= 0 {
-		seg = model[i+1:]
-	}
-	if seg != model {
-		for _, f := range cat.Families {
-			if strings.EqualFold(f.ModelID, seg) {
-				return f, cat.Host, true
+	// An alias (`Qwen/Qwen3.5-27B`, `waired/tiny`), resolved against the
+	// catalog this binary ships, the way the daemon resolves it. It used to
+	// be matched by the name's last path element, which also matched a
+	// Hugging Face repository that merely ends like a catalog model — and a
+	// custom model imported from it (waired-ai/waired#1473) was then shown
+	// the catalog model's fit.
+	if ms, err := catalog.BundledManifestsIncludingInternal(); err == nil {
+		if m, _, ok := catalog.ResolveModel(model, ms); ok {
+			for _, f := range cat.Families {
+				if f.ModelID == m.ModelID {
+					return f, cat.Host, true
+				}
 			}
 		}
 	}

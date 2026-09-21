@@ -42,8 +42,9 @@ waired models check-agent         # will this model work with a coding agent?
 you find what `rm` would give you back. The figure comes from the inference
 engine, so a model that is downloaded but whose engine is stopped shows `-`.
 With `--detail`, every model in the catalog is listed with the memory it
-needs, whether it fits this computer, and which one Waired would choose. The
-table prints its own legend. Where the symbols cannot be written, they come
+needs, whether it fits this computer, and which one Waired would choose.
+Models imported from Hugging Face in the Waired console come last, under a
+**Custom models** line. The table prints its own legend. Where the symbols cannot be written, they come
 out as ASCII (`●` as `*`, `→` as `->`, `◦` as `o`, `↓` as `v`).
 
 **`pull`** waits until the model is ready. A model that runs here but is not

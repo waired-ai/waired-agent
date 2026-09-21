@@ -41,6 +41,13 @@ print the reason on the line that reports the failure:
 qwen3-8b-instruct: failed — no space left on device
 ```
 
+When the download's size is known before it starts, Waired checks the free
+space first and does not start a download that cannot fit:
+
+```text
+qwen3-8b-instruct: failed — insufficient disk space for this model: it needs 5.2 GB and only 3.1 GB is free
+```
+
 ## Setup says the inference engine failed to start
 
 In the terminal, setup stops waiting for the model and tells you the engine

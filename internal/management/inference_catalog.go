@@ -61,6 +61,12 @@ type CatalogConfig struct {
 	// so a killed terminal cannot park it forever. nil leaves the route
 	// answering 404, which the CLI treats as best-effort.
 	NoteModelChoicePending func(pending bool)
+
+	// Custom is the account's custom models (waired-ai/waired#1473). Its
+	// own models join the offered list after the bundled ones; resolving a
+	// named id also finds a model the account deleted that this device
+	// still uses. Nil means none.
+	Custom *catalog.CustomSource
 }
 
 // ErrModelSwitchUnavailable is ApplyModelSwitch reporting that the
@@ -267,8 +273,12 @@ func servingWindowsFor(m catalog.Manifest, engine string) []int {
 
 // fit logic.
 type CatalogFamily struct {
-	ModelID          string `json:"model_id"`
-	DisplayName      string `json:"display_name,omitempty"`
+	ModelID     string `json:"model_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	// Custom marks a model the account imported from Hugging Face
+	// (waired-ai/waired#1473). Custom rows come after every bundled row, so
+	// the first row of the list is the same as without them.
+	Custom           bool   `json:"custom,omitempty"`
 	BestFitVariantID string `json:"best_fit_variant_id,omitempty"`
 	Fits             bool   `json:"fits"`
 	Active           bool   `json:"active,omitempty"`
@@ -557,6 +567,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		f := CatalogFamily{
 			ModelID:            m.ModelID,
 			DisplayName:        m.DisplayName,
+			Custom:             m.Provenance == catalog.ProvenanceCustom,
 			ModelSize:          hostfit.ModelSize(m),
 			Fits:               fit.Fits,
 			Active:             m.ModelID == activeModelID,
@@ -667,7 +678,11 @@ func (s *Server) loadManifests() ([]catalog.Manifest, error) {
 	if s.catalog != nil && s.catalog.ManifestsFn != nil {
 		return s.catalog.ManifestsFn()
 	}
-	return catalog.BundledManifests()
+	ms, err := catalog.BundledManifests()
+	if err != nil || s.catalog == nil || s.catalog.Custom == nil {
+		return ms, err
+	}
+	return append(ms, s.catalog.Custom.Offerable()...), nil
 }
 
 // loadManifestsForResolve returns every shipped model, including
@@ -687,7 +702,11 @@ func (s *Server) loadManifestsForResolve() ([]catalog.Manifest, error) {
 	if s.catalog != nil && s.catalog.ManifestsFn != nil {
 		return s.catalog.ManifestsFn()
 	}
-	return catalog.BundledManifestsIncludingInternal()
+	ms, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil || s.catalog == nil || s.catalog.Custom == nil {
+		return ms, err
+	}
+	return append(ms, s.catalog.Custom.Serveable()...), nil
 }
 
 func hostFromProfile(hw hardware.Profile) CatalogHost {
@@ -779,6 +798,12 @@ func sortCatalogFamilies(fams []CatalogFamily) {
 		ai, bi, ci, di := rank(fams[i])
 		aj, bj, cj, dj := rank(fams[j])
 		switch {
+		// Custom models are their own group, after the catalog's: what
+		// the account imported is not ranked against what the catalog
+		// recommends, and a client that takes the first row still gets a
+		// bundled model.
+		case fams[i].Custom != fams[j].Custom:
+			return !fams[i].Custom
 		case ai != aj:
 			return ai < aj
 		// Below everything else: models this way of running AI has no

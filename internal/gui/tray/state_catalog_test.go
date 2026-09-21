@@ -220,10 +220,43 @@ func TestCatalogCapCoversBundledManifests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	if len(manifests) > MaxCatalogEntries {
-		t.Fatalf("bundled manifests (%d) exceed MaxCatalogEntries (%d): raise the cap, "+
-			"or the alphabetical tail silently falls off the Models submenu",
-			len(manifests), MaxCatalogEntries)
+	// Room for a full account of custom models and their header row too
+	// (waired-ai/waired#1473).
+	if need := len(manifests) + MaxCustomModelEntries + 1; need > MaxCatalogEntries {
+		t.Fatalf("bundled manifests (%d) + custom models (%d) + their header exceed MaxCatalogEntries (%d): raise the cap, "+
+			"or the tail silently falls off the Models submenu",
+			len(manifests), MaxCustomModelEntries, MaxCatalogEntries)
+	}
+}
+
+// TestCatalogCustomModelsHaveAHeader is a record of today's behaviour: the
+// custom models the daemon lists after the catalog's (waired-ai/waired#1473)
+// are headed by one row that names the group, greyed as a section header
+// and carrying no model, so a click on it chooses nothing.
+func TestCatalogCustomModelsHaveAHeader(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Families: []management.CatalogFamily{
+			{ModelID: "qwen3-8b-instruct", DisplayName: "Qwen3 8B Instruct", Fits: true},
+			{ModelID: "custom-tiny-0123abcd", DisplayName: "Tiny", Custom: true, Fits: true},
+			{ModelID: "custom-small-4567ef01", DisplayName: "Small", Custom: true, Fits: true},
+		},
+	}
+	got := Update(connectedSnapshotWithCatalog(c)).CatalogEntries
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ModelID)
+	}
+	if len(got) != 4 || !got[1].Header || got[1].Label != customModelsHeader || got[1].ModelID != "" {
+		t.Fatalf("entries %+v", got)
+	}
+	if got[2].ModelID != "custom-tiny-0123abcd" || got[3].ModelID != "custom-small-4567ef01" || got[0].Header {
+		t.Errorf("order %v", ids)
+	}
+	// Without custom models there is no header.
+	c.Families = c.Families[:1]
+	if rows := Update(connectedSnapshotWithCatalog(c)).CatalogEntries; len(rows) != 1 || rows[0].Header {
+		t.Errorf("a catalog with no custom model has a header: %+v", rows)
 	}
 }
 

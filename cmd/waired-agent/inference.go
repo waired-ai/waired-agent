@@ -291,6 +291,11 @@ func firstLine(s string) string {
 // the original (isPaused, isInferenceDisabled, inferenceState) tuple
 // so it stays comprehensible.
 type inferenceSubsystemDeps struct {
+	// CustomModels is the account's custom models (waired-ai/waired#1473),
+	// shared with the management API and fed by the control plane. nil
+	// means none, which is what unit tests that build a provider get.
+	CustomModels *catalog.CustomSource
+
 	IsPaused            func() bool
 	IsInferenceDisabled func() bool
 	InferenceState      func() (current, desired state.InferenceState)
@@ -461,6 +466,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		if err := m.Validate(); err != nil {
 			return nil, nil, fmt.Errorf("inference: bundled manifest %s invalid: %w", m.ModelID, err)
 		}
+	}
+	// Bundled first, then the account's custom models, so a bundled id or
+	// retired name always resolves before a custom one. Read on every
+	// call: the set changes when the control plane sends a new one.
+	withCustom := func() []catalog.Manifest {
+		return append(slices.Clip(manifests), deps.CustomModels.Serveable()...)
 	}
 
 	// Apply tray-driven preferred-model override (preferred-model.json)
@@ -670,7 +681,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	if decision.Engine == catalog.RuntimeOllama {
 		if tuneState, serr := store.Load(); serr != nil {
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
-		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
+		} else if tm, tv, ok := resolveTuningTarget(cfg, withCustom(), tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
 			win, winWarn := ollamaWindowRequestFor(cfg, tm, tv, bundledOllamaModels)
 			ollamaTune = computeOllamaTuningOpts(tm, tv, hwProfile, ollamaTuningOpts{
@@ -713,7 +724,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("spawn-time tuning: state.json unreadable; keeping engine-default context", "err", serr)
 			return nil, infruntime.ModelTuning{}, false
 		}
-		tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState)
+		tm, tv, ok := resolveTuningTarget(cfg, withCustom(), tuneState)
 		if !ok {
 			return nil, infruntime.ModelTuning{}, false
 		}
@@ -755,6 +766,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		logger:          logger,
 		agentCtx:        ctx,
 		manifests:       manifests,
+		custom:          deps.CustomModels,
 		store:           store,
 		profiler:        profiler,
 		registry:        registry,
@@ -890,7 +902,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	baseGatewayDeps := func() gateway.Deps {
 		return gateway.Deps{
 			Runtimes:      registry,
-			ListManifests: func() []catalog.Manifest { return manifests },
+			ListManifests: withCustom,
 			Recorder:      deps.Recorder,
 			// #623 over-window guard, on EVERY surface that forwards a
 			// prompt to an engine. It rode the intercept and the overlay
@@ -1325,7 +1337,15 @@ func (l *localOnlySelector) buildSelector(ctx context.Context) *router.Selector 
 	//     not affect this agent's in-flight bookkeeping, sticky
 	//     bindings, error window, reachability exclusions, or
 	//     selection telemetry.
-	return router.NewSelector(l.p.baseRouterInputs(ctx))
+	//
+	// LocalActiveOnly: a request from another computer is served only by
+	// the model this one is running. The agent advertises that model alone
+	// (narrowPublishedModels), so an honest peer never names another; this
+	// turns away one that does, which would otherwise swap the engine onto
+	// a model that is only on disk (waired-ai/waired#1477).
+	in := l.p.baseRouterInputs(ctx)
+	in.LocalActiveOnly = true
+	return router.NewSelector(in)
 }
 
 func (l *localOnlySelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {
@@ -1348,11 +1368,18 @@ type agentInferenceProvider struct {
 	// or pull ctx, which are cancelled the moment their handler/job returns.
 	agentCtx  context.Context
 	manifests []catalog.Manifest
-	store     *catalog.Store
-	profiler  *hardware.Profiler
-	registry  *infruntime.Registry
-	ollama    *infruntime.OllamaAdapter
-	puller    *download.Puller
+	// custom is the account's custom models (waired-ai/waired#1473). Read
+	// through catalogManifests / routableManifests, never directly.
+	custom *catalog.CustomSource
+	// onCustomModelChosen runs when a switch to a custom model starts: the
+	// session points it at the inference server's public-stream abort,
+	// after the provider is already serving, hence atomic.
+	onCustomModelChosen atomic.Pointer[func()]
+	store               *catalog.Store
+	profiler            *hardware.Profiler
+	registry            *infruntime.Registry
+	ollama              *infruntime.OllamaAdapter
+	puller              *download.Puller
 	// engineExits is the host-wide record of retired engines whose
 	// processes may still be running; every adapter this provider builds
 	// shares it (waired-ai/waired-agent#1443). nil in unit tests that
@@ -2693,7 +2720,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 			}
 		}
 		cur := p.ollama.AppliedTuning()
-		tm, tv, ok := resolveTuningTarget(p.effectiveCfg(), p.manifests, st)
+		tm, tv, ok := resolveTuningTarget(p.effectiveCfg(), p.catalogManifests(), st)
 		if !ok {
 			return
 		}
@@ -3046,7 +3073,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		rs[name] = p.runtimeStatusFor(ctx, name, hwProfile)
 	}
 	p.addRefusedEngineRow(rs, hwProfile)
-	models := modelsSnapshot(state.Models, p.manifests, p.dlProgress.aggregate)
+	models := modelsSnapshot(state.Models, p.catalogManifests(), p.dlProgress.aggregate)
 	endpoints := []management.ActiveEndpoint{}
 	for id, e := range state.Endpoints {
 		endpoints = append(endpoints, management.ActiveEndpoint{
@@ -3096,7 +3123,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		ActiveEndpoints:         endpoints,
 		Active:                  activeFromCatalog(state.Active),
 		BenchmarkRecommendation: lighter,
-		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx)),
+		AvailableUpdate:         computeAvailableUpdate(ctx, p.store, p.profiler, p.catalogManifests(), p.effectiveCfg(), p.servingEngineVersion(ctx)),
 		DesiredState:            desiredStateStr,
 		DesiredStateSet:         desiredStateSet,
 		NoModelSelected:         p.noModelSelected.Load(),
@@ -3541,7 +3568,7 @@ func (p *agentInferenceProvider) LocalModelChoiceAt() (modelID, at string) {
 	if err != nil || !ok || !pref.ChosenHere() || pref.SetAt.IsZero() {
 		return "", ""
 	}
-	return canonicalSetupModelID(pref.ModelID, p.manifests), pref.SetAt.UTC().Format(time.RFC3339Nano)
+	return canonicalSetupModelID(pref.ModelID, p.catalogManifests()), pref.SetAt.UTC().Format(time.RFC3339Nano)
 }
 
 // ContextWindowFor reports the effective input-token window the given model
@@ -3558,13 +3585,13 @@ func (p *agentInferenceProvider) LocalModelChoiceAt() (modelID, at string) {
 // the window can't be determined (no manifest, unknown sizing), so callers
 // fail open (no advertisement / no 400) rather than guessing.
 func (p *agentInferenceProvider) ContextWindowFor(modelID string) int {
-	m, ok := catalog.LookupByAlias(modelID, p.manifests)
+	m, ok := catalog.LookupByAlias(modelID, p.catalogManifests())
 	if !ok {
 		active, has := p.ActiveModelID()
 		if !has {
 			return 0
 		}
-		if m, ok = catalog.LookupByAlias(active, p.manifests); !ok {
+		if m, ok = catalog.LookupByAlias(active, p.catalogManifests()); !ok {
 			return 0
 		}
 	}
@@ -3649,7 +3676,7 @@ func (p *agentInferenceProvider) ServeTuning() (degraded bool, warning string) {
 	if !ok {
 		return false, ""
 	}
-	m, ok := catalog.LookupByAlias(active, p.manifests)
+	m, ok := catalog.LookupByAlias(active, p.catalogManifests())
 	if !ok {
 		return false, ""
 	}
@@ -3710,7 +3737,7 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	if !ok {
 		return 0
 	}
-	m, ok := catalog.LookupByAlias(active, p.manifests)
+	m, ok := catalog.LookupByAlias(active, p.catalogManifests())
 	if !ok {
 		return 0
 	}
@@ -4020,7 +4047,7 @@ func vllmVersionWarning(installed string) string {
 func (p *agentInferenceProvider) ListModels(_ context.Context) []management.ModelEntry {
 	state, _ := p.store.Load()
 	out := []management.ModelEntry{}
-	for _, m := range p.manifests {
+	for _, m := range p.catalogManifests() {
 		st := state.Models[m.ModelID]
 		entry := management.ModelEntry{
 			ModelID:   m.ModelID,
@@ -4166,7 +4193,7 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 	// A retired name pulls its successor (#200). `waired models pull
 	// <retired>` is a person typing a name they last saw in our own docs,
 	// and "unknown model" would be a wrong answer: we shipped it.
-	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
+	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.catalogManifests())
 	if !ok {
 		// Retired with no successor: a pull is an instruction given now,
 		// so it is refused with what to do next rather than "unknown"
@@ -5091,7 +5118,10 @@ func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pull
 					break
 				}
 			}
-			p.seedPullTotal(dlCtx, modelID, tag)
+			if short := p.diskShortfall(p.seedPullTotal(dlCtx, modelID, tag)); short != "" {
+				err, failure = errDiskShort, short
+				break
+			}
 		}
 		err = p.puller.Pull(dlCtx, tag, want, func(pr download.Progress) {
 			p.dlProgress.observe(modelID, pr)
@@ -5431,7 +5461,7 @@ func (p *agentInferenceProvider) bundledPrePullTarget(ctx context.Context) (stri
 	// resolve the configured value identically, and only one of the two
 	// used to know about retirements.
 	modelID := p.bundledModelID()
-	if _, ok := catalog.LookupByAlias(modelID, p.manifests); !ok {
+	if _, ok := catalog.LookupByAlias(modelID, p.catalogManifests()); !ok {
 		p.logger.Warn("bundled model not found in manifests; skipping pre-pull", "model", p.cfg.BundledModelID)
 		return "", false
 	}
@@ -5814,12 +5844,19 @@ func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOr
 			p.resumeAfterOutOfMemory("a different model was chosen")
 		}
 	}()
-	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
+	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.catalogManifests())
 	if !ok {
 		if len(retired.Names) > 0 {
 			return false, fmt.Errorf("swap preferred model: %s", catalog.RetirementRefusal(modelOrAlias, retired))
 		}
 		return false, fmt.Errorf("swap preferred model: unknown model %q", modelOrAlias)
+	}
+	// A custom model is never served to a Public Share guest
+	// (waired-ai/waired#1473 ruling 4): from the moment one is chosen, the
+	// guests already being served are cut rather than left to finish on
+	// the old model while the engine moves.
+	if fn := p.onCustomModelChosen.Load(); manifest.Provenance == catalog.ProvenanceCustom && fn != nil {
+		(*fn)()
 	}
 	// An explicit choice is honoured, not refused (owner ruling,
 	// 2026-09-20). Choosing a build this computer failed to load is the
@@ -5834,7 +5871,7 @@ func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOr
 	// the record for the build the person is leaving and keep the one they
 	// just overruled. A test that drove the helper directly could not see
 	// that; the one that drives this function could.
-	p.forgetLoadFailure(activeVariantSHA(p.manifests, manifest.ModelID, variantID))
+	p.forgetLoadFailure(activeVariantSHA(p.catalogManifests(), manifest.ModelID, variantID))
 	if retired.SuccessorModelID != "" {
 		p.logger.Info("model switch target was retired; switching to its successor",
 			"requested", modelOrAlias, "model", manifest.ModelID)
@@ -6142,7 +6179,10 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 	st, _ := p.store.Load()
 	hw := p.profiler.Profile(ctx)
 	return router.Inputs{
-		Manifests:      p.manifests,
+		// Routable: a teammate's custom model has to resolve here so a
+		// peer serving it can be matched (waired-ai/waired#1473), though
+		// this device never pulls it.
+		Manifests:      p.routableManifests(),
 		LocalState:     st,
 		Hardware:       hw,
 		Runtimes:       p.registry,
@@ -6676,7 +6716,7 @@ func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
 	if st, err := p.store.Load(); err != nil || st.Active == nil {
 		return
 	}
-	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.servingEngineVersion(ctx))
+	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.catalogManifests(), p.effectiveCfg(), p.servingEngineVersion(ctx))
 	if upd == nil {
 		return
 	}
@@ -6699,7 +6739,7 @@ func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
 	// Only pre-cache ollama-source variants in this milestone — vLLM
 	// pre-cache requires HF download wiring through the HFPuller +
 	// venv path resolution which is a follow-up.
-	manifest, ok := catalog.LookupByAlias(upd.ModelID, p.manifests)
+	manifest, ok := catalog.LookupByAlias(upd.ModelID, p.catalogManifests())
 	if !ok || len(manifest.Variants) == 0 {
 		return
 	}
@@ -6836,11 +6876,9 @@ func (p *agentInferenceProvider) activeVariantSHA() string {
 	}
 	// Including internal models: the active model may BE one (CI pins
 	// it), and a device serving a model it cannot name reads as broken.
-	manifests, err := catalog.BundledManifestsIncludingInternal()
-	if err != nil {
-		return ""
-	}
-	return activeVariantSHA(manifests, st.Active.ModelID, st.Active.VariantID)
+	// And the custom models: a load failure of one has to be recorded
+	// against its build like any other (waired-ai/waired#1473).
+	return activeVariantSHA(p.catalogManifests(), st.Active.ModelID, st.Active.VariantID)
 }
 
 // activeEngineTags resolves both engine-side names for the agent's
@@ -6878,4 +6916,25 @@ func (p *agentInferenceProvider) activeEngineTags() (advertise, serving string) 
 	advertise, _ = activeEngineTag(st)
 	serving, _ = activeEngineTag(st)
 	return advertise, serving
+}
+
+// catalogManifests is every model this device may pull, start and resolve:
+// the bundled catalog, internal entries included, then the account's
+// custom models (waired-ai/waired#1473). Bundled first, so a bundled id or
+// retired name resolves before a custom one.
+func (p *agentInferenceProvider) catalogManifests() []catalog.Manifest {
+	if p.custom == nil {
+		return p.manifests
+	}
+	return append(slices.Clip(p.manifests), p.custom.Serveable()...)
+}
+
+// routableManifests adds the routing copies of the models the owner's
+// teammates imported, which a router matches a peer's tag against and this
+// device never pulls.
+func (p *agentInferenceProvider) routableManifests() []catalog.Manifest {
+	if p.custom == nil {
+		return p.manifests
+	}
+	return append(slices.Clip(p.manifests), p.custom.Routable()...)
 }
