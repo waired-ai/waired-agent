@@ -98,11 +98,14 @@ func TestPreferredModel_InProcessSwapNoRestart(t *testing.T) {
 		PreferencePath:   filepath.Join(prefDir, "preferred-model.json"),
 		ManifestsFn:      func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
 		RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
-		ApplyModelSwitch: func(_ context.Context, modelID string) (bool, error) {
+		ApplyModelSwitch: func(_ context.Context, modelID string) (ModelSwitchOutcome, error) {
 			// Called synchronously by the handler, so plain vars are race-free.
 			swapCalls++
 			swapModel = modelID
-			return true, nil // report a background pull started
+			// A background pull started, on a vLLM host with nothing to
+			// answer meanwhile, for a build not expected to fit.
+			return ModelSwitchOutcome{Downloading: true, EngineRestarts: true, NothingAnswers: true,
+				NeedVRAMMB: 36864, HaveVRAMMB: 24463}, nil
 		},
 	}
 	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
@@ -119,8 +122,11 @@ func TestPreferredModel_InProcessSwapNoRestart(t *testing.T) {
 	if got.WillRestart {
 		t.Errorf("in-process swap must report WillRestart=false, got %+v", got)
 	}
-	if !got.Downloading {
-		t.Errorf("Downloading should mirror the swap hook's return (true)")
+	// Everything the switch reported reaches the client as it was reported
+	// (waired-agent#1515): the CLI and the app pick their sentence from it.
+	if !got.Downloading || !got.EngineRestarts || !got.NothingAnswers ||
+		got.NeedVRAMMB != 36864 || got.HaveVRAMMB != 24463 {
+		t.Errorf("response does not carry the switch's outcome: %+v", got)
 	}
 	if swapCalls != 1 || swapModel != "qwen3-8b-instruct" {
 		t.Errorf("ApplyModelSwitch: calls=%d model=%q, want 1 / qwen3-8b-instruct", swapCalls, swapModel)
@@ -148,9 +154,9 @@ func TestPreferredModel_SwapErrorFallsBackToRestart(t *testing.T) {
 		PreferencePath:   filepath.Join(prefDir, "preferred-model.json"),
 		ManifestsFn:      func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
 		RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
-		ApplyModelSwitch: func(_ context.Context, _ string) (bool, error) {
+		ApplyModelSwitch: func(_ context.Context, _ string) (ModelSwitchOutcome, error) {
 			swapCalls++
-			return false, errors.New("cross-engine target needs restart")
+			return ModelSwitchOutcome{}, errors.New("cross-engine target needs restart")
 		},
 	}
 	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
@@ -195,9 +201,9 @@ func TestPreferredModel_UnavailableSwitchIsReportedNotRestarted(t *testing.T) {
 		PreferencePath:   filepath.Join(prefDir, "preferred-model.json"),
 		ManifestsFn:      func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
 		RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
-		ApplyModelSwitch: func(_ context.Context, _ string) (bool, error) {
+		ApplyModelSwitch: func(_ context.Context, _ string) (ModelSwitchOutcome, error) {
 			swapCalls++
-			return false, fmt.Errorf("start the download: %w: %w",
+			return ModelSwitchOutcome{}, fmt.Errorf("start the download: %w: %w",
 				errors.New("pulls are disabled by config (allow_pull=false)"),
 				ErrModelSwitchUnavailable)
 		},
@@ -269,9 +275,9 @@ func TestPreferredModel_RetiredModelReturns409NamingTheSuccessor(t *testing.T) {
 			inf := &fakeInference{}
 			s := newPreferredModelTestServer(t, inf, prefDir, &restarts)
 			var swaps int32
-			s.catalog.ApplyModelSwitch = func(context.Context, string) (bool, error) {
+			s.catalog.ApplyModelSwitch = func(context.Context, string) (ModelSwitchOutcome, error) {
 				atomic.AddInt32(&swaps, 1)
-				return false, nil
+				return ModelSwitchOutcome{}, nil
 			}
 
 			w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",

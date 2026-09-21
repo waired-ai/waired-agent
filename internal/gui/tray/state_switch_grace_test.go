@@ -120,7 +120,23 @@ func TestModelSwitchAcceptedText(t *testing.T) {
 		{
 			"in-process swap needing a pull names the download",
 			&management.PreferredModelResponse{Downloading: true},
-			"Downloading Qwen3 8B Instruct. Your current model keeps answering until it is ready.",
+			"Downloading Qwen3 8B Instruct. Your current model keeps answering until it's ready.",
+		},
+		// Owner-approved copy (waired-agent#1515, 2026-09-22).
+		{
+			"vLLM: the old model answers during the download, then the engine restarts",
+			&management.PreferredModelResponse{Downloading: true, EngineRestarts: true},
+			"Downloading Qwen3 8B Instruct. Your current model keeps answering until it's ready. The engine then restarts to load it.",
+		},
+		{
+			"downloading with nothing answering meanwhile",
+			&management.PreferredModelResponse{Downloading: true, EngineRestarts: true, NothingAnswers: true},
+			"Downloading Qwen3 8B Instruct. Nothing answers on this computer until it's ready.",
+		},
+		{
+			"vLLM: on disk, the engine restarts to load it",
+			&management.PreferredModelResponse{EngineRestarts: true},
+			"Switching to Qwen3 8B Instruct. The engine restarts to load it, and this computer doesn't answer until it's ready.",
 		},
 		{
 			"in-process swap of on-disk weights",
@@ -267,5 +283,27 @@ func TestPeersRowVisible(t *testing.T) {
 				t.Errorf("peersRowVisible=%v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// The speed suggestion's question says what the switch does on the engine
+// this computer runs (waired-agent#1515; owner-approved copy, 2026-09-22).
+func TestRecommendationDialogBody(t *testing.T) {
+	rec := &management.BenchmarkRecommendation{FromModelID: "qwen3.5-9b", ToModelID: "qwen3.5-4b",
+		TurnSeconds: 60, BudgetSeconds: 45}
+	for _, c := range []struct {
+		engine, wantTail string
+	}{
+		{"ollama", "Switch to qwen3.5-4b, which answers faster? It applies live. Waired keeps answering."},
+		{"", "Switch to qwen3.5-4b, which answers faster? It applies live. Waired keeps answering."},
+		{"vllm", "Switch to qwen3.5-4b, which answers faster? The engine restarts to load it, and this computer doesn't answer until it's ready."},
+	} {
+		got := recommendationDialogBody(rec, c.engine)
+		if !strings.HasSuffix(got, c.wantTail) {
+			t.Errorf("engine %q: body =\n%s\nwant it to end with\n%s", c.engine, got, c.wantTail)
+		}
+		if !strings.HasPrefix(got, "This computer takes ") {
+			t.Errorf("engine %q: the measurement sentence is gone: %q", c.engine, got)
+		}
 	}
 }

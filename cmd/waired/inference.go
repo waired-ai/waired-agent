@@ -283,6 +283,32 @@ type inferenceStatusResponse struct {
 	// budget on a host whose engine had already given up — with the reason
 	// in the bytes it had just read (waired-agent#1134).
 	Runtimes map[string]management.RuntimeStatus `json:"runtimes"`
+	// A model switch still under way (waired-agent#1515). An older daemon
+	// omits it, which reads as nil and prints nothing.
+	ModelSwitch *management.ModelSwitchStatus `json:"model_switch"`
+}
+
+// modelSwitchLines is what `waired inference status` says under the engine
+// line while this computer is moving to the model chosen for it
+// (waired-agent#1515). Owner-approved copy, 2026-09-22. A switch the copy
+// has no sentence for — an ollama download with the old model answering,
+// which is the ordinary case — prints nothing, as before.
+func modelSwitchLines(ms *management.ModelSwitchStatus) []string {
+	if ms == nil || ms.ModelID == "" {
+		return nil
+	}
+	var out []string
+	switch {
+	case ms.Downloading && ms.AnsweringModelID == "":
+		out = append(out, ms.ModelID+" is downloading. Nothing answers on this computer until it finishes.")
+	case ms.Downloading && ms.EngineRestarts:
+		out = append(out, ms.ModelID+" is downloading. "+ms.AnsweringModelID+
+			" answers until it finishes; the engine then restarts to load "+ms.ModelID+".")
+	}
+	if line := formatNotExpectedToFit(ms.ModelID, ms.NeedVRAMMB, ms.HaveVRAMMB); line != "" {
+		out = append(out, line)
+	}
+	return out
 }
 
 // hostMemoryLine reports the memory measurement fit decisions are based
@@ -618,6 +644,9 @@ func runInferenceStatus(mgmt string) error {
 	// the rest are in the docs and on the console.
 	if s.EngineStoppedReason != "" {
 		fmt.Fprintf(stdout, "  %s\n", s.EngineStoppedReason)
+	}
+	for _, line := range modelSwitchLines(s.ModelSwitch) {
+		fmt.Fprintf(stdout, "  %s\n", line)
 	}
 	if line := hostMemoryLine(s.HostMemory); line != "" {
 		fmt.Fprintln(stdout, line)

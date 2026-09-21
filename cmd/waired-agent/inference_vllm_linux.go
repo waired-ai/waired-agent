@@ -114,9 +114,21 @@ var errVLLMNoModelChosen = errors.New("no model has been chosen for this compute
 // picker named; it is not a selection, and starting an engine is a
 // decision only a selection may drive.
 func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant, bool, error) {
+	m, v, chosen, fits, err := p.vllmTargetBuild()
+	if err == nil && !fits {
+		p.logger.Warn("vllm: no variant of the chosen model fits this host; starting on the first one it can load",
+			"model", m.ModelID, "variant", v.VariantID, "min_vram_mb", v.MinVRAMMB)
+	}
+	return m, v, chosen, err
+}
+
+// vllmTargetBuild is vllmTarget without its log line, for the readers that
+// ask on every status poll (waired-agent#1515): the build of the chosen
+// model this engine would start, and whether it fits this computer.
+func (p *agentInferenceProvider) vllmTargetBuild() (catalog.Manifest, catalog.Variant, bool, bool, error) {
 	m, ok := p.preferredManifest()
 	if !ok {
-		return catalog.Manifest{}, catalog.Variant{}, false, errVLLMNoModelChosen
+		return catalog.Manifest{}, catalog.Variant{}, false, false, errVLLMNoModelChosen
 	}
 	ctx := context.Background()
 	engineVersion := p.engineVersionFor(ctx, catalog.RuntimeVLLM)
@@ -134,12 +146,12 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 	// this host is recommended it (waired-agent#1348).
 	if want := p.chosenVariantFor(m.ModelID); want != "" {
 		if v, ok := variantByID(m, want); ok && router.VariantLoadable(v, catalog.RuntimeVLLM, engineVersion) {
-			return m, v, true, nil
+			return m, v, true, true, nil
 		}
 	}
 	if p.profiler != nil {
 		if best := router.FamilyDefaultBuild(m, catalog.RuntimeVLLM, engineVersion, p.Hardware(ctx)); best.Fits {
-			return m, best.Variant, true, nil
+			return m, best.Variant, true, true, nil
 		}
 	}
 	// No variant FITS. Falling back to the loadable-at-all answer keeps
@@ -150,13 +162,26 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 	// gates, and they run either way.
 	v, pullable := router.FirstPullableVariant(m, catalog.RuntimeVLLM, engineVersion)
 	if !pullable {
-		return catalog.Manifest{}, catalog.Variant{}, true, fmt.Errorf(
+		return catalog.Manifest{}, catalog.Variant{}, true, false, fmt.Errorf(
 			"the model chosen for this computer (%s) has no vllm/safetensors variant this engine can load;"+
 				" choose a model that does, or switch this computer to ollama", m.ModelID)
 	}
-	p.logger.Warn("vllm: no variant of the chosen model fits this host; starting on the first one it can load",
-		"model", m.ModelID, "variant", v.VariantID, "min_vram_mb", v.MinVRAMMB)
-	return m, v, true, nil
+	return m, v, true, false, nil
+}
+
+// vllmSwitchTarget is the build a switch to modelID will start and the two
+// figures that say whether it fits: the build's catalog minimum and this
+// computer's vLLM VRAM budget, as the model catalog's row compares them.
+func (p *agentInferenceProvider) vllmSwitchTarget(ctx context.Context, modelID string) (string, int, int, bool) {
+	m, v, _, _, err := p.vllmTargetBuild()
+	if err != nil || m.ModelID != modelID {
+		return "", 0, 0, false
+	}
+	have := 0
+	if p.profiler != nil {
+		have = router.VLLMVRAMBudgetMB(p.Hardware(ctx))
+	}
+	return v.VariantID, v.MinVRAMMB, have, true
 }
 
 // vllmStartPlan resolves everything a vLLM start needs before it can spawn:

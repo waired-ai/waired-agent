@@ -31,14 +31,16 @@ type CatalogConfig struct {
 	RestartScheduler func()
 
 	// ApplyModelSwitch applies an operator's preferred-model switch in
-	// process (#812) — no whole-agent restart — and reports whether a
-	// background pull was started. nil (or a non-nil error return) makes
+	// process (#812) — no whole-agent restart — and reports what happens
+	// before the chosen model answers: whether a background pull was
+	// started, whether the engine restarts, whether anything answers in the
+	// meantime (waired-agent#1515). nil (or a non-nil error return) makes
 	// /preferred-model fall back to RestartScheduler and answer
 	// WillRestart:true; a nil error means the switch is applying live and
 	// the response carries WillRestart:false. The one error the fallback
 	// is wrong for is ErrModelSwitchUnavailable — see below. Tests inject
 	// a stub here.
-	ApplyModelSwitch func(ctx context.Context, modelID string) (downloading bool, err error)
+	ApplyModelSwitch func(ctx context.Context, modelID string) (ModelSwitchOutcome, error)
 
 	// ManifestsFn returns the bundled manifests. nil falls back to
 	// catalog.BundledManifests. Tests inject a synthetic catalog.

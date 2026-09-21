@@ -100,6 +100,25 @@ type InferenceProvider interface {
 	LoadFailuresBySHA() map[string]string
 }
 
+// ModelSwitchStatus is a model switch that has not reached the chosen model
+// yet (waired-agent#1515).
+type ModelSwitchStatus struct {
+	// ModelID is the chosen model.
+	ModelID string `json:"model_id"`
+	// AnsweringModelID is the model answering on this computer meanwhile;
+	// empty when nothing does.
+	AnsweringModelID string `json:"answering_model_id,omitempty"`
+	// Downloading: the chosen model's weights are downloading.
+	Downloading bool `json:"downloading,omitempty"`
+	// EngineRestarts: the engine restarts to load the chosen model once it
+	// is on disk (vLLM).
+	EngineRestarts bool `json:"engine_restarts,omitempty"`
+	// NeedVRAMMB / HaveVRAMMB: set when the build this computer will start
+	// is not expected to fit (see PreferredModelResponse).
+	NeedVRAMMB int `json:"need_vram_mb,omitempty"`
+	HaveVRAMMB int `json:"have_vram_mb,omitempty"`
+}
+
 // InferenceStatus is the body of GET /waired/v1/inference/status.
 //
 // SubsystemState is one of (Step 2):
@@ -107,7 +126,8 @@ type InferenceProvider interface {
 //	"initializing"     boot sequence (brief)
 //	"ready"            active engine + model serving requests
 //	"awaiting_model"   active.model_id chosen but not on disk yet
-//	"loading"          on disk, engine restart in progress
+//	"loading"          the chosen model is downloading or loading, and
+//	                   nothing answers on this computer yet
 //	"pull_failed"      most recent download errored, no auto-retry
 //	"degraded"         fallback engine in use (chosen != current)
 //	"no_engine"        no engine alive — inference API returns 503
@@ -133,10 +153,14 @@ type InferenceStatus struct {
 	//
 	// The local management API only, never the wire: the control plane
 	// reads SubsystemState above and renders its own words.
-	EngineStoppedReason string                   `json:"engine_stopped_reason,omitempty"`
-	Runtimes            map[string]RuntimeStatus `json:"runtimes"`
-	Models              ModelsSnapshot           `json:"models"`
-	ActiveEndpoints     []ActiveEndpoint         `json:"active_endpoints"`
+	EngineStoppedReason string `json:"engine_stopped_reason,omitempty"`
+	// ModelSwitch is set while this computer is moving to the model chosen
+	// for it and something stands in the way: its download, or a build not
+	// expected to fit (waired-agent#1515). Local management API only.
+	ModelSwitch     *ModelSwitchStatus       `json:"model_switch,omitempty"`
+	Runtimes        map[string]RuntimeStatus `json:"runtimes"`
+	Models          ModelsSnapshot           `json:"models"`
+	ActiveEndpoints []ActiveEndpoint         `json:"active_endpoints"`
 
 	// Active is the engine + model the agent is committed to serving
 	// (mirrors state.json `active`). nil when no decision has been

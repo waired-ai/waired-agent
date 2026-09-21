@@ -34,3 +34,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(_ context.Context) {
 func (p *agentInferenceProvider) vllmStartRefusal() error {
 	return errors.New("vllm serving is only supported on linux")
 }
+
+// vllmSwitchTarget is the Linux lookup of the build a switch will start.
+// Here there is no vLLM build to start, so a switch reports no fit figures.
+func (p *agentInferenceProvider) vllmSwitchTarget(_ context.Context, _ string) (string, int, int, bool) {
+	return "", 0, 0, false
+}

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+
+	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // modelSwapController backs the management CatalogConfig.ApplyModelSwitch seam:
@@ -24,13 +26,23 @@ func newModelSwapController(ctx context.Context, provider *agentInferenceProvide
 	return &modelSwapController{provider: provider, agentCtx: ctx, logger: logger}
 }
 
-// ApplyModelSwitch applies the in-process switch and reports whether a
-// background pull was started. The request ctx is deliberately ignored (see the
-// type doc); the switch runs on agentCtx. A non-nil error (a cross-engine
-// target signalled by errSwapNeedsRestart, or a validation failure) tells the
-// handler to fall back to the supervised restart.
-func (c *modelSwapController) ApplyModelSwitch(_ context.Context, modelID string) (bool, error) {
-	return c.provider.SwapPreferredModel(c.agentCtx, modelID)
+// ApplyModelSwitch applies the in-process switch and reports what happens
+// before the chosen model answers (waired-agent#1515). The request ctx is
+// deliberately ignored (see the type doc); the switch runs on agentCtx. A
+// non-nil error (a cross-engine target signalled by errSwapNeedsRestart, or a
+// validation failure) tells the handler to fall back to the supervised
+// restart.
+func (c *modelSwapController) ApplyModelSwitch(_ context.Context, modelID string) (management.ModelSwitchOutcome, error) {
+	downloading, err := c.provider.SwapPreferredModel(c.agentCtx, modelID)
+	if err != nil {
+		return management.ModelSwitchOutcome{}, err
+	}
+	// The id the switch published, which is the successor for a retired
+	// name (#200); the facts are about that model.
+	if m, ok := c.provider.preferredManifest(); ok {
+		modelID = m.ModelID
+	}
+	return c.provider.modelSwitchOutcome(c.agentCtx, modelID, downloading), nil
 }
 
 // ApplyNoModelSelected applies the operator's "don't download a model
