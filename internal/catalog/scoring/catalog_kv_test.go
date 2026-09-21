@@ -134,6 +134,9 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
 	// carries the b10760 measurement; the b10969 one is in
 	// docs/knowledges/20260920/1400-engine-pins-0342-and-uv-01217.md.
+	// The pin is back on 0.34.0 (b10760) since 2026-09-22
+	// (waired-ai/waired-agent#1505), so the served engine holds 33792
+	// again until the next bump; the row does not move.
 	"qwen3.8-flash-next": {NumHiddenLayers: 48, HiddenSize: 2560, NumAttentionHeads: 24, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 512, NumExpertsPerTok: 10, IndexerKVHeads: 1, IndexerHeadDim: 128},
 	// qwen3-coder-next-80b-a3b-instruct sat here until #522 retired the
 	// 2025 generation. Its row is gone because this map is checked against

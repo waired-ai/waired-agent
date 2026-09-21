@@ -349,6 +349,49 @@ package runtime
 // and docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
 // §4 is struck in this PR.
 //
+// 0.34.2 -> 0.34.0 is a move BACK, taken for pulls rather than for the
+// engine (owner ruling 2026-09-22, waired-ai/waired-agent#1505). 0.34.2
+// refuses a cross-host redirect on the blob HEAD it sends before a FRESH
+// pull (ollama/ollama#18512), and Hugging Face redirects hf.co blob
+// requests to a different host, its CDN (every request observed on
+// 2026-09-21), so a computer that does not already hold an hf.co/ tag
+// cannot pull it. Four bundled variants are hf.co/ tags. The
+// upstream report is ollama/ollama#18526; the fix (ollama/ollama#18533)
+// ships only in v0.34.3-rc1, and a prerelease is not pinned. 0.34.1 is
+// older than the rule too, but 0.34.0 is the one this product measured.
+//
+// What was re-read against v0.34.0's source, because code merged after
+// the 0.34.2 bump was written against 0.34.2:
+//
+//   - discover/runner.go, discover/types.go and discover/gpu.go are
+//     byte-identical, so the integrated-GPU rule below, the "inference
+//     compute" and "dropping integrated GPU" lines ParseInferenceCompute
+//     reads, and the device order all hold.
+//   - server/routes.go Serve logs "Listening on %s (version %s)" and
+//     "vram-based default context" with the same fields, in the same
+//     order around the device block.
+//   - The runner argv flag set in llm/llama_server.go is the same set.
+//   - The one-slot family list in server/sched.go is the same eleven
+//     names (TestOllamaSingleRequestFamiliesMatchThePin re-reads it).
+//   - ml/device.go differs only by a helper 0.34.2 deleted; PreferredLibrary
+//     is unchanged, so the ROCm-over-Vulkan preference #1492 leans on holds.
+//   - envconfig differs only by OLLAMA_CREATE_REMOTE, which is new in
+//     0.34.2 and which nothing here sets.
+//
+// What going back costs, both measured at the 0.34.2 bump
+// (docs/knowledges/20260920/1400-engine-pins-0342-and-uv-01217.md §6, §7):
+//
+//   - Prefill throughput on the Vulkan unified-memory host was 15-25%
+//     lower on b10760 than on b10969. Decode and every term hostfit prices
+//     were identical, so no estimate moves.
+//   - b10760 allocates the QSA indexer's V half again
+//     (ggml-org/llama.cpp#28330): qwen3.8-flash-next holds 33,792 B/token
+//     where the catalog annotates the derivable 27,648. The annotation
+//     stays as it is, as it did the last time 0.34.0 was the pin.
+//
+// Move to 0.34.3 once it is a stable release; that bump is a
+// measurement like the 0.34.2 one, and it takes #1505 with it.
+//
 // AT EVERY BUMP, re-read which integrated GPUs the engine uses by default:
 // discover/runner.go integratedGPUAllowedByDefault and
 // defaultIntegratedROCmGFXTargets. At 0.34.2 that is CUDA devices and
@@ -369,4 +412,4 @@ package runtime
 // there makes the check report "not read" rather than compare.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.34.2"
+const OllamaPinnedVersion = "0.34.0"
