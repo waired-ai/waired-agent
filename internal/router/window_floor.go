@@ -3,6 +3,10 @@ package router
 import (
 	"errors"
 	"fmt"
+	"slices"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // WindowFloorError is ErrNoEndpointForWindow as the Selector returns it: a
@@ -154,4 +158,23 @@ func pinDeclineReason(d meshDrops) string {
 		return PinDeclinedPublicShare
 	}
 	return ""
+}
+
+// customWindowAdmits reports whether a computer serving a custom model under
+// 200,704 tokens may take a request whose floor is the coding window. The
+// owner ruled that the coding-agent rows set no minimum for custom models
+// (ruling 5 on waired-ai/waired#1473, 2026-09-22): such a model is reached,
+// and the overflow guard answers a prompt larger than its window with the
+// ordinary 400, which the clients compact on. The 1M floor stays a floor.
+func customWindowAdmits(minWindow int, m catalog.Manifest, customWindow int) bool {
+	return minWindow == hostfit.ServingWindow200k && customWindow > 0 && m.Provenance == catalog.ProvenanceCustom
+}
+
+// preferAtFloor drops the candidates admitted under the floor
+// (customWindowAdmits) when any candidate meets it.
+func preferAtFloor(cands []meshCandidate) []meshCandidate {
+	if !slices.ContainsFunc(cands, func(c meshCandidate) bool { return !c.belowWindow }) {
+		return cands
+	}
+	return slices.DeleteFunc(cands, func(c meshCandidate) bool { return c.belowWindow })
 }

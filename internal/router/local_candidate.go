@@ -55,6 +55,10 @@ type LocalNode struct {
 	// not an answer to a request with a window floor (waired-agent#1395),
 	// and never "serves nothing" to one without.
 	ContextWindow int
+	// CustomModelWindow is the window a custom model under 200,704 tokens is
+	// served with, where ContextWindow declares nothing
+	// (InferenceState.CustomModelWindow, waired-ai/waired#1481). 0 otherwise.
+	CustomModelWindow int
 	// Capacity is how many conversations this host holds warm, and
 	// CapacityUsed how many are in use right now — the same pair a peer
 	// publishes as capacity_total / capacity_used, read from the same
@@ -121,9 +125,13 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 	// both sides (waired#1031). 0 falls short of every floor, exactly as a
 	// peer's 0 does (waired-agent#1395), and like the peer rule it is
 	// tested after the model matched, so the drop is the floor's alone.
+	window, belowWindow := ln.ContextWindow, false
 	if minWindow > 0 && ln.ContextWindow < minWindow {
-		drop.belowWindow = true
-		return meshCandidate{}, false, drop
+		if !customWindowAdmits(minWindow, e.manifest, ln.CustomModelWindow) {
+			drop.belowWindow = true
+			return meshCandidate{}, false, drop
+		}
+		window, belowWindow = ln.CustomModelWindow, true
 	}
 	// The operator's floor, on this device's own engine as much as on a
 	// peer's (owner ruling 2026-08-29, waired-agent#1128). The same
@@ -142,7 +150,8 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 		runtime:     ln.Runtime,
 		tag:         ln.EngineTag,
 
-		contextWindow: ln.ContextWindow,
+		contextWindow: window,
+		belowWindow:   belowWindow,
 		capacity:      ln.Capacity,
 		capacityUsed:  ln.CapacityUsed,
 		score:         int64(e.variant.ParamCount) * int64(e.variant.QuantizationTier),

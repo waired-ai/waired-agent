@@ -416,6 +416,13 @@ type Inputs struct {
 	// runs, and could hand a Public Share guest a model imported for the
 	// owner's account only (waired-ai/waired#1473 ruling 4,
 	// waired-ai/waired#1477).
+	// LocalCustomModelWindow, when non-nil, returns the window this host
+	// serves a custom model under 200,704 tokens with, or 0
+	// (agentInferenceProvider.CustomModelWindow, waired-ai/waired#1481). The
+	// local-only arm admits such a model under the coding floor, as the
+	// mesh does (customWindowAdmits).
+	LocalCustomModelWindow func() int
+
 	LocalActiveOnly bool
 
 	// LocalNode, when non-nil, reports what THIS device is serving right
@@ -1673,7 +1680,11 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if s.in.LocalContextWindow != nil {
 			w = s.in.LocalContextWindow()
 		}
-		if w < req.MinContextWindow {
+		customWin := 0
+		if s.in.LocalCustomModelWindow != nil {
+			customWin = s.in.LocalCustomModelWindow()
+		}
+		if w < req.MinContextWindow && !customWindowAdmits(req.MinContextWindow, manifest, customWin) {
 			return nil, &WindowFloorError{
 				Need: req.MinContextWindow,
 				// Only local-only is a refusal about this computer alone;
@@ -1752,6 +1763,11 @@ type meshCandidate struct {
 	// nothing. The overflow guard reads that as "unknown"; a window floor
 	// has already dropped such a peer (waired-agent#1395).
 	contextWindow int
+	// belowWindow: admitted under the request's window floor because it
+	// serves a custom model under 200,704 tokens (customWindowAdmits);
+	// contextWindow is that model's window, which the overflow guard then
+	// enforces. Used only when nothing at the floor can take the request.
+	belowWindow bool
 	// priority is the admin routing preference the CP folded into the peer's
 	// InferenceState: High(1) / Middle(0) / Low(-1). It is the dominant sort
 	// key (sortMeshCandidates), so among peers that can serve the request the
@@ -1908,6 +1924,10 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 		raw = append(raw, lc)
 		localIn = true
 	}
+	// A custom model under the floor is used only when nothing at the floor
+	// can take the request: computers that meet 200,704 are preferred
+	// (owner ruling 5 on waired-ai/waired#1473).
+	raw = preferAtFloor(raw)
 	if r := localCandidateReason(local, localIn, localDropped, s.in.LocalServingOff,
 		localModelState(s.in.LocalState, local.ModelID), s.in.MinModelSize); r != "" {
 		reasons = withReason(reasons, r)
@@ -2822,10 +2842,14 @@ func (s *Selector) buildMeshCandidates(
 			// publishes (waired-agent#1395). Tested after the model matched,
 			// so the count is of peers the floor alone removed, which is
 			// what lets the refusal name the window.
+			window, belowWindow := p.InferenceState.ContextWindow, false
 			if minWindow > 0 && p.InferenceState.ContextWindow < minWindow {
-				drops.belowWindow++
-				drops.declaredWindow = p.InferenceState.ContextWindow
-				break
+				if !customWindowAdmits(minWindow, e.manifest, p.InferenceState.CustomModelWindow) {
+					drops.belowWindow++
+					drops.declaredWindow = p.InferenceState.ContextWindow
+					break
+				}
+				window, belowWindow = p.InferenceState.CustomModelWindow, true
 			}
 			// A custom model the request did not name, on a computer it
 			// did not name: the account's switch for the rows that name
@@ -2857,7 +2881,8 @@ func (s *Selector) buildMeshCandidates(
 				manifest:      e.manifest,
 				runtime:       kind,
 				tag:           m,
-				contextWindow: p.InferenceState.ContextWindow,
+				contextWindow: window,
+				belowWindow:   belowWindow,
 				priority:      p.InferenceState.Priority,
 				silent:        p.Silent,
 				capacity:      p.InferenceState.Capacity,

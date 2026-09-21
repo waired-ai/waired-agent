@@ -6257,6 +6257,7 @@ func (p *agentInferenceProvider) selectorInputs(ctx context.Context, pref state.
 	// re-applying the rule here would let a serving node veto work it had
 	// just been asked to do.
 	in.LocalContextWindow = p.DeclaredContextWindow
+	in.LocalCustomModelWindow = p.CustomModelWindow
 	// Phase 7 routing signals — all five are nil-safe inside
 	// the Selector. localOnlySelector deliberately leaves them
 	// unset so an overlay-arriving peer request never affects
