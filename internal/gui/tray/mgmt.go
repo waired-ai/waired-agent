@@ -391,10 +391,16 @@ func (c *Client) ModelCatalog(ctx context.Context) (*management.ModelCatalogResp
 // apply it: in process since waired#812, or by a supervised restart
 // when the swap layer cannot (the response's WillRestart says which).
 // 404 → ErrCatalogUnsupported, 409 → ErrModelSwitchUnavailable.
-func (c *Client) SetPreferredModel(ctx context.Context, modelID string) (*management.PreferredModelResponse, error) {
+//
+// window is the serving window chosen with the model (waired-ai/waired#1359):
+// hostfit.ServingWindow1M for the long one, 0 for the coding window, which
+// the request then leaves out. The daemon saves whatever it is sent, so 0
+// really does mean "the coding window" here — unlike the control plane's
+// setup write, where an absent field keeps what is stored.
+func (c *Client) SetPreferredModel(ctx context.Context, modelID string, window int) (*management.PreferredModelResponse, error) {
 	var resp management.PreferredModelResponse
 	err := c.postJSON(ctx, "/waired/v1/inference/preferred-model",
-		management.PreferredModelRequest{ModelID: modelID}, &resp)
+		management.PreferredModelRequest{ModelID: modelID, ContextWindow: window}, &resp)
 	if err != nil {
 		var hr *httpError
 		if errors.As(err, &hr) {

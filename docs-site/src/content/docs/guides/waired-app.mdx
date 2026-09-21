@@ -122,6 +122,12 @@ and runs as its default variant. When a different variant was chosen for the
 model that is running, its row names that variant. For when to go bigger or
 smaller, see [Change the model](/guides/choose-a-model/).
 
+While the context window is **1M** (**Context window** under
+[Inference](#inference)), a model that cannot be served at 1M is greyed out
+and cannot be selected. Its row ends in **— doesn't reach 1M**. A model this
+computer does not have the memory for is never greyed out for that reason:
+selecting it asks first, as at any window.
+
 ## Inference
 
 **Inference** holds the controls for the engine on this computer. Where your
@@ -138,6 +144,7 @@ requests go is the next submenu, **Inference routing**.
 | **Active: …** or **Model not loaded** | The model in use, and whether it is in memory. While this computer is working, the row also says how many requests it is on. |
 | **Unload model (free memory)** | Gives the model's memory back while the engine keeps running. The next request loads the model again. Greyed out when there is nothing to give back. |
 | **Keep-alive: …** | How long the model stays in memory after your last request: **Always**, **15 minutes**, **1 hour**, or **8 hours**. The default is **Always**, because reloading a model costs the next request a noticeable wait. |
+| **Context window: 200K** or **1M** | The context window the model in use is served with. **200K** is the coding window, which every model supports. **1M** is for models whose publisher documents a way to reach it, and only on Ollama. Choosing one serves the model in use at that window. Choosing **1M** asks first, because the model runs past the length it was trained for: **Use 1M anyway** switches, **Keep 200K** changes nothing. When the model in use cannot reach 1M, **1M** is greyed out. |
 
 <Aside type="note" title="Pause, Unload, and Stop are three different things">
 	**Pause local inference** stops answering and keeps the model in memory.
