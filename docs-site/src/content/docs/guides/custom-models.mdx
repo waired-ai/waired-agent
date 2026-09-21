@@ -1,0 +1,104 @@
+---
+title: Use a model from Hugging Face
+description: Import a model from Hugging Face into your account, run it on your own computers, and decide which requests may use it.
+meta:
+  audience: Anyone who wants to run a model that is not in Waired's list
+  needs: The Waired web console
+  time: 10 minutes, plus the download
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Waired's own list covers the models it recommends. You can also import a model
+from Hugging Face into your account. Waired calls these **custom models**.
+They run only on your own computers. Your team can send requests to a computer
+that runs one, and people outside your account never can.
+
+<Aside type="caution" title="Waired has not reviewed a custom model">
+	A custom model comes from Hugging Face, not from Waired. What it outputs,
+	whether its files are safe to run, and whether its license allows your use
+	are for you to judge. The console asks you to confirm this before your first
+	import.
+</Aside>
+
+## Import a model
+
+<Steps>
+
+1. In the web console, open **Settings**, and in **Custom models** select
+   **Import a model**.
+2. Paste the model's name (`org/model`) or its `huggingface.co` link, choose
+   **Ollama** or **vLLM**, and select **Check this model**.
+3. For Ollama, a repository usually offers several variants. Choose one.
+4. The console shows what it found: the size, the context window, the license,
+   the commit it will pin, and whether it fits each of your computers. Give it a
+   name, set the two switches (see [Requests that don't name a
+   computer](#requests-that-dont-name-a-computer)), and select **Import**.
+
+</Steps>
+
+An account can hold 10 custom models. Importing pins the exact files: when a
+repository later replaces a file under the same name, that is a different model,
+and importing it again adds a second entry.
+
+### What can't be imported
+
+The check refuses a model, and says why, when:
+
+- it is private, or asks people to accept terms before downloading it;
+- it is not a text-generation model;
+- it needs to run its own code to load, or its weights exist only in a format
+  that can run code when loaded;
+- for Ollama, the variant is published in parts, or the engine Waired installs
+  does not support the model's architecture;
+- for vLLM, the repository has no safetensors weights, or no chat template;
+- Waired's own list already has it. Choose it from the list instead.
+
+## Run it on a computer
+
+Open the computer's page in the console, open **Model list**, and choose the
+**Custom models** tab. The setup wizard shows the same tab. A model imported for
+the other engine is greyed there: a custom model runs only on the engine you
+imported it for.
+
+The computer downloads the model and switches to it, the same way as for a
+model from Waired's list. On the computer, `waired models ls --detail` and the
+Waired app's **Models** menu list custom models last, under **Custom models**.
+
+While a computer runs a custom model, it takes no Public Share guests, even with
+Public Share on. Its page says so, and guests are sent there again once it runs
+a model from Waired's list.
+
+## Requests that don't name a computer
+
+The **Waired** and **Waired peer** rows in Claude Code and the other coding
+agents let Waired choose the computer. Two switches decide whether it may choose
+one that runs this custom model:
+
+- **From your computers**: requests from your own computers.
+- **From your team**: requests from your teammates' computers. The team's owner
+  or an admin can stop a model for the whole team on the **Team** page.
+
+Both start on for a model whose context window is at least 200,704 tokens, and
+off below that. A row that names a computer (**Waired peer: *name***) always
+reaches it.
+
+## Small context windows
+
+A coding agent's session is sized for 200,704 tokens. A model with a smaller
+context window still runs, but a coding agent overflows it on every turn and has
+to cut down what it sends. The console says so wherever you choose such a
+model. When a request could go to a computer that holds 200,704
+tokens, Waired sends it there instead.
+
+## Delete a model
+
+Delete it from **Settings** → **Custom models**. A model that a computer runs,
+or has been told to run, can't be deleted: the console names those computers,
+and you choose another model on each of them first. Computers that downloaded
+it keep its files. To free that space, run `waired models rm <model id>` on
+each of them before you delete the model.
+
+If a model is deleted while a computer is still using it, that computer keeps
+running it and shows the notice **… was deleted from your account** until you
+choose another model. See [Notices](/guides/notices/).
