@@ -50,3 +50,41 @@ func TestOllamaBackendInputs(t *testing.T) {
 		})
 	}
 }
+
+// One overlay answer for the CLI's install and the daemon's start-up
+// converge, over every OS (waired-agent#1511). The daemon's used to be
+// "never", which took ROCm off an AMD host at each pin move.
+func TestOllamaROCmOverlayWanted(t *testing.T) {
+	amdCard := hardware.Profile{GPUs: []hardware.GPU{{Vendor: "amd", GFXTarget: "gfx1100"}}}
+	strixHalo := hardware.Profile{GPUs: []hardware.GPU{{Vendor: "amd", GFXTarget: "gfx1151", Integrated: true, IntegratedKnown: true}}}
+	nvidiaBesideAMDiGPU := hardware.Profile{
+		GPUs:       []hardware.GPU{{Vendor: "nvidia"}},
+		UnusedGPUs: []hardware.UnusedGPU{{GPU: hardware.GPU{Vendor: "amd", GFXTarget: "gfx1036"}}},
+	}
+	for _, tc := range []struct {
+		name    string
+		goos    string
+		prof    hardware.Profile
+		gpuMode string
+		want    bool
+	}{
+		{"linux AMD card", "linux", amdCard, "", true},
+		{"windows AMD card", "windows", amdCard, "", true},
+		{"darwin never", "darwin", amdCard, "rocm", false},
+		{"linux strix halo", "linux", strixHalo, "", true},
+		{"windows strix halo keeps its measured Vulkan arm", "windows", strixHalo, "", false},
+		{"an AMD iGPU set aside brings nothing", "linux", nvidiaBesideAMDiGPU, "", false},
+		{"no GPU", "linux", hardware.Profile{}, "", false},
+		{"windows mode rocm forces it", "windows", nvidiaBesideAMDiGPU, "rocm", true},
+		{"windows mode vulkan refuses it", "windows", amdCard, "Vulkan", false},
+		{"windows mode cpu-only refuses it", "windows", amdCard, "cpu-only", false},
+		{"windows unknown mode leaves it to the host", "windows", amdCard, "auto", true},
+		{"the mode is read on Windows only", "linux", amdCard, "cpu-only", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := OllamaROCmOverlayWanted(tc.goos, tc.prof, tc.gpuMode); got != tc.want {
+				t.Errorf("OllamaROCmOverlayWanted(%s, mode %q) = %v, want %v", tc.goos, tc.gpuMode, got, tc.want)
+			}
+		})
+	}
+}

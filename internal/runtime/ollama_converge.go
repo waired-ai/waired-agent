@@ -86,8 +86,9 @@ func DecideOllamaConverge(f OllamaConvergeFacts) OllamaConvergeDecision {
 
 // OllamaConvergeDeps are the seams, exported because the two real callers
 // install differently and the ORCHESTRATION is what must not be written
-// twice. The CLI's Install draws a progress bar, overlays ROCm on AMD and
-// hands the state dir back to the service user; the daemon's just fetches.
+// twice. The CLI's Install draws a progress bar and hands the state dir
+// back to the service user; the daemon's just fetches. Both fetch the ROCm
+// overlay by the same answer (setup.OllamaROCmOverlayWanted, #1511).
 // Both go through the same probe → decide → install sequence below.
 //
 // Each seam takes and returns what the real thing does, so a fake cannot
@@ -107,18 +108,28 @@ type OllamaConvergeDeps struct {
 	Probe func(ctx context.Context, path string) (bool, string)
 	// Install fetches and extracts the pinned release.
 	Install func(ctx context.Context) error
+	// Lock, when set, is held across probing, deciding and installing
+	// (OllamaInstaller.Lock). On the apt path the daemon's converge and the
+	// installer's run together and used to share one staging directory;
+	// the second now waits, probes again, and finds the engine at the pin.
+	Lock func(ctx context.Context) (func(), error)
 }
 
-// NewOllamaConvergeDeps wires the plain case: the bundled installer under
-// baseDir, with no progress rendering and no ROCm overlay decision. The
-// CLI builds its own deps instead, because it has both.
-func NewOllamaConvergeDeps(baseDir string, probe func(ctx context.Context, path string) (bool, string)) OllamaConvergeDeps {
+// NewOllamaConvergeDeps wires the daemon's case: the bundled installer
+// under baseDir, with no progress rendering. wantROCmOverlay is the host's
+// answer to setup.OllamaROCmOverlayWanted, the one the CLI gives too:
+// without it this converge replaced lib/ with the base archive's and took
+// ROCm off an AMD host at every pin move (waired-agent#1511). The CLI
+// builds its own deps, for its progress bar.
+func NewOllamaConvergeDeps(baseDir string, probe func(ctx context.Context, path string) (bool, string), wantROCmOverlay bool) OllamaConvergeDeps {
 	inst := NewOllamaInstaller(baseDir)
+	inst.WantROCmOverlay = wantROCmOverlay
 	return OllamaConvergeDeps{
 		Present:    inst.Active,
 		BinaryPath: inst.BinaryPath,
 		Probe:      probe,
 		Install:    func(ctx context.Context) error { return inst.Install(ctx, nil) },
+		Lock:       func(ctx context.Context) (func(), error) { return inst.Lock(ctx, nil) },
 	}
 }
 
@@ -126,13 +137,29 @@ func NewOllamaConvergeDeps(baseDir string, probe func(ctx context.Context, path 
 // and reports what it decided, so the caller can say so whether or not it
 // acted.
 func ConvergeOllama(ctx context.Context, d OllamaConvergeDeps) (OllamaConvergeDecision, error) {
-	facts := OllamaConvergeFacts{Installed: d.Present(), Pin: OllamaPinnedVersion}
-	if facts.Installed {
-		_, facts.Version = d.Probe(ctx, d.BinaryPath())
+	decide := func() OllamaConvergeDecision {
+		facts := OllamaConvergeFacts{Installed: d.Present(), Pin: OllamaPinnedVersion}
+		if facts.Installed {
+			_, facts.Version = d.Probe(ctx, d.BinaryPath())
+		}
+		return DecideOllamaConverge(facts)
 	}
-	decision := DecideOllamaConverge(facts)
+	decision := decide()
 	if !decision.Install {
+		// Decided unlocked, so a host with no engine never creates the
+		// lock file.
 		return decision, nil
+	}
+	if d.Lock != nil {
+		unlock, err := d.Lock(ctx)
+		if err != nil {
+			return decision, fmt.Errorf("converge bundled engine to %s: %w", OllamaPinnedVersion, err)
+		}
+		defer unlock()
+		// Whoever held the lock may have converged this host already.
+		if decision = decide(); !decision.Install {
+			return decision, nil
+		}
 	}
 	if err := d.Install(ctx); err != nil {
 		return decision, fmt.Errorf("converge bundled engine to %s: %w", OllamaPinnedVersion, err)

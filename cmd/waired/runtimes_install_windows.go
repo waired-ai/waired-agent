@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -92,12 +91,6 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 // base archive, which is why the old script downloaded nothing extra for
 // them either.
 func wantROCmOverlay(ctx context.Context, getenv func(string) string) bool {
-	switch strings.ToLower(strings.TrimSpace(getenv("WAIRED_OLLAMA_GPU_MODE"))) {
-	case "rocm":
-		return true
-	case "vulkan", "cuda-only", "cpu-only":
-		return false
-	}
-	return infruntime.WantsROCmOverlay(
-		setup.OllamaBackendInputs("windows", hardware.NewProfiler("").Profile(ctx)))
+	// The same answer the daemon's start-up converge gives (#1511).
+	return setup.OllamaROCmOverlayWanted("windows", hardware.NewProfiler("").Profile(ctx), getenv("WAIRED_OLLAMA_GPU_MODE"))
 }

@@ -1,11 +1,18 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260921/1937-engine-start-waits-for-the-engine-update.md
 ---
 
 # update は同梱エンジンを pin に揃える。無いホストには入れない (20260816 22:43)
 
 ## Status
-Accepted
+Accepted。ただし**2 か所は置き換えられている**:
+Decision の段落「デーモン側は動いているエンジンを止めない。ディスク上のバイナリを置き換えるのは実行中でも安全で…」と、
+Consequences の「server 行が優先なので、これまで正しかった答えは変わらない」
+(`docs/decisions/20260921/1937-engine-start-waits-for-the-engine-update.md`、waired-agent#1511)。
+入れ替えは走っているエンジンの runner と lib に対して安全ではなく、最初の起動は更新処理が終わるまで待つことになった。
+版は実行ファイル自身の client 行で読む。
 
 ## Context
 

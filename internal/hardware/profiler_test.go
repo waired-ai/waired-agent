@@ -396,15 +396,21 @@ func TestParseOllamaVersion(t *testing.T) {
 	}
 }
 
-// The server's version wins over the client's when both are somehow
-// present. They are the same binary for a waired-managed install, so the
-// case is theoretical — but stating the precedence keeps the client line
-// strictly additive: it can only fill in an answer that used to be empty,
-// never change one that was already right.
-func TestParseOllamaVersion_ServerLineWins(t *testing.T) {
-	const both = "Warning: client version is 0.31.1\nollama version is 0.32.13\n"
-	if got := ParseEngineVersion("ollama", both); got != "0.32.13" {
-		t.Errorf("ParseEngineVersion(both lines) = %q, want the server's 0.32.13", got)
+// Both lines appear when a server answers on 127.0.0.1:11434 with a
+// release other than the binary's — the user's own Ollama, never waired's
+// engine, which runs on its own port. The binary's own version wins: it is
+// what the question asks, and the server's made the converge re-download
+// the pin on every start (waired-agent#1511). Inverted: this used to pin
+// the server line as the winner. The order is ollama v0.34.2's
+// versionHandler: the server line, then the client line.
+func TestParseOllamaVersion_TheBinarysOwnVersionWins(t *testing.T) {
+	const both = "ollama version is 0.32.13\nWarning: client version is 0.34.2\n"
+	if got := ParseEngineVersion("ollama", both); got != "0.34.2" {
+		t.Errorf("ParseEngineVersion(both lines) = %q, want the binary's own 0.34.2", got)
+	}
+	// Same release on both sides: ollama prints the server line alone.
+	if got := ParseEngineVersion("ollama", "ollama version is 0.34.2\n"); got != "0.34.2" {
+		t.Errorf("ParseEngineVersion(server line only) = %q, want 0.34.2", got)
 	}
 }
 
