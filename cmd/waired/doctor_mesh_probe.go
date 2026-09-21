@@ -28,7 +28,7 @@ import (
 // rides" (ibid.).
 //
 // On the rc8 hosts that produced exactly the failure it should have
-// caught: macmini's overlay data path was dead in both directions, and
+// caught: the Mac mini's overlay data path was dead in both directions, and
 // all three machines' doctors reported `✓ mesh peers — 2/3 reachable, 2
 // ready` (waired-ai/waired#1137). Owner ruling 2026-08-12: measure it.
 //

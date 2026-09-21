@@ -23,7 +23,7 @@ import (
 // reversal of decision 20260829/1100 §2 but an application of its §1:
 // "what can be observed is derived, never typed". §2 bound `--host` to a
 // list precisely because it could not be observed, and declined to tell
-// a class from an identifier BY PATTERN — "sv-mag" and
+// a class from an identifier BY PATTERN — "gpu-desktop" and
 // "apple-unified-64gb" are both lowercase words joined by hyphens, so a
 // pattern would have to guess. A derived key is not in that bind: it is
 // not typed at all, it carries a topology as its first component, and

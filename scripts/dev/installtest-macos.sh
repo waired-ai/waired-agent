@@ -522,7 +522,7 @@ assert_inference_macos() {
   else
     case "$verdict" in
       probe\ *)
-        bad "this host got a probe, not a pick: the only model in the waired store is the host-cutoff probe (${verdict#probe }), and the daemon committed to no selection (#573)" ;;
+        bad "this host got a probe, not a pick: the only model in the waired store is the small benchmark model (${verdict#probe }), and the daemon committed to no selection (#573)" ;;
       none)
         bad "no model was selected on this host (mgmt API no_model_selected=true) — \`waired init --inference-enabled=true\` should have picked one" ;;
       *)

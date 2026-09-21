@@ -36,8 +36,8 @@ func TestEscapeMenuLabel(t *testing.T) {
 		{
 			// The row #1096 was found on. Win32 menus read `&` as the
 			// mnemonic prefix, so this drew as "Privacy  safety…" with an
-			// underlined s on pc-dell-premium. Both Linux renderers draw
-			// an ampersand as text.
+			// underlined s on the Intel Arc 140T Windows laptop. Both Linux
+			// renderers draw an ampersand as text.
 			name: "an ampersand survives on Windows only by being doubled",
 			in:   "Privacy & safety…",
 			want: map[string]string{

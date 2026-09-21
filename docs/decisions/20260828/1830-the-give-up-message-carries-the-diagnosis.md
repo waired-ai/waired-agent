@@ -60,7 +60,7 @@ bootstrap の隙間を埋める」。ollama にも同メソッドを足した。
 **4. `ollamaStartupDiagnosis` は腕 1 本で出す。** 双子が課す基準は
 「**このプロジェクトが名前の付いたホストから実際に採取したエンジンの文**」。
 入れたのは**ポート衝突の腕だけ**で、その文字列は本変更のために実機で採った
-（sv-mag、python の listener で :9475 を塞ぎ、同梱 ollama を起動）:
+（RTX PRO 4000 の Linux ホスト、python の listener で :9475 を塞ぎ、同梱 ollama を起動）:
 
 ```
 Error: listen tcp 127.0.0.1:9475: bind: address already in use

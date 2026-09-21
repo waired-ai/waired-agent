@@ -7,7 +7,7 @@ import (
 
 // The sentence the engine recorded on the reproduction host
 // (waired-agent#1038).
-const svMagServingWarning = "qwen3.8:27b-mtp-q4_K_M-wb2048 loaded with only 491 MB of GPU " +
+const rtx4000LinuxServingWarning = "qwen3.8:27b-mtp-q4_K_M-wb2048 loaded with only 491 MB of GPU " +
 	"memory left free (a prompt needs at least 768 MB here); real requests will fail with " +
 	"an out-of-memory error"
 
@@ -18,7 +18,7 @@ func degradedActiveRow() catalogDetailFamily {
 		Active:          true,
 		Downloaded:      true,
 		MeasuredTokps:   15.8,
-		ServingWarning:  svMagServingWarning,
+		ServingWarning:  rtx4000LinuxServingWarning,
 		ServingDegraded: true,
 	}
 }
@@ -50,7 +50,7 @@ func TestFormatCatalogDetail_FooterQuotesTheEngineSentence(t *testing.T) {
 		Engine:   "ollama",
 		Families: []catalogDetailFamily{degradedActiveRow()},
 	})
-	if !strings.Contains(out, svMagServingWarning) {
+	if !strings.Contains(out, rtx4000LinuxServingWarning) {
 		t.Errorf("the engine's own sentence is not printed:\n%s", out)
 	}
 	if !strings.Contains(out, "waired doctor") {
@@ -65,7 +65,7 @@ func TestFormatCatalogDetail_NoFooterWhenNothingIsDegraded(t *testing.T) {
 		Engine:   "ollama",
 		Families: []catalogDetailFamily{f},
 	})
-	if strings.Contains(out, svMagServingWarning) {
+	if strings.Contains(out, rtx4000LinuxServingWarning) {
 		t.Errorf("a working host must not grow a warning block:\n%s", out)
 	}
 }

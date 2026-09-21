@@ -27,7 +27,7 @@ truncate するので、**ファイル全体が常に 1 spawn 分**。関数の 
 明記している。副作用として、ollama の 3 回の試行のうち `engine.log` に残るのは
 3 回目だけ（2 回目は `.1`）。
 
-**3. ollama がポート衝突で書く文字列（実測）。** sv-mag で python の listener に
+**3. ollama がポート衝突で書く文字列（実測）。** RTX PRO 4000 の Linux ホストで python の listener に
 :9475 を握らせ、同梱 ollama を `OLLAMA_HOST=127.0.0.1:9475` で起動:
 
 ```

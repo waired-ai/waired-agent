@@ -66,7 +66,8 @@ func TestDesiredInference_PersistedRecordStopsARestartReplay(t *testing.T) {
 // inference off at the machine leaves the record still naming the
 // wizard's earlier "on"; without the stamp the console's "turn local AI
 // back on" writes a value the applier reads as already acted on, and the
-// button does nothing at all. Reproduced on sv-mag before the fix.
+// button does nothing at all. Reproduced on the RTX PRO 4000 Linux host
+// before the fix.
 func TestDesiredInference_ANewStampMakesTheSameAnswerANewAsk(t *testing.T) {
 	const (
 		first  = "2026-09-20T10:30:05.122205419Z"

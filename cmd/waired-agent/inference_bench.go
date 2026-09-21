@@ -196,7 +196,8 @@ const benchWarmupCompletionTokens = 8
 // 17–62 GB model cold-loading from disk takes tens of seconds, and
 // that load used to land INSIDE the measured window — a host that
 // decodes at ~100 tok/s warm read as ~5 tok/s cold and got a bogus
-// lighter-model recommendation (observed live on sv-mag, 2026-06-09).
+// lighter-model recommendation (observed live on the RTX PRO 4000
+// Linux host, 2026-06-09).
 const benchWarmupTimeout = 180 * time.Second
 
 // benchPrompt is the boilerplate user message the benchmark sends.

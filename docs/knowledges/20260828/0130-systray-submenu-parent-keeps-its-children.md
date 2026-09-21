@@ -3,13 +3,13 @@
 ## Issue
 
 Windows の tray が、起動のたびに**サブメニューの行をランダムに落としていた**。
-pc-dell-premium(0.0.3-rc4、`90dd4a5`)で tray を 3 回連続で再起動し、他は何も
+Intel Arc 140T の Windows ノート(0.0.3-rc4、`90dd4a5`)で tray を 3 回連続で再起動し、他は何も
 変えずに `This device` を採ると、8 行 / 5 行 / 4 行と毎回違った。トップレベルは
 3 回とも 17 行でバイト一致。欠けたのはこの機自身の名前と overlay IP、
 `Peers (4)` の見出し、ピア行 1 本。
 
 projection は正しかった。同じプロセスの `WAIRED_TRAY_DEBUG` ダンプは
-`"DeviceName": "pc-dell-premium"`, `"OverlayIP": "100.95.113.3"` を出していた。
+`"DeviceName": "arc-laptop"`, `"OverlayIP": "100.64.0.3"` を出していた。
 
 ## Learnings
 

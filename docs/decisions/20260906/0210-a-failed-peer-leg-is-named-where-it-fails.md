@@ -11,7 +11,7 @@ Accepted。
 
 ピアのデーモンが再起動している間に脚が飛ぶと、`postToEngine` の transport error は
 **ミリ秒で**返る。ウォッチはまだ猶予(`ClaudeTTFBBudgetMainMs`、60 秒)を眠っている
-最中なので、ヘルスチェックは 1 回も行われない。実測(sv-macmini → sv-mag、
+最中なので、ヘルスチェックは 1 回も行われない。実測(16 GB の M4 Mac mini → RTX PRO 4000 の Linux ホスト、
 `0de54fca`、脚が 13.3 秒飛んだところで `systemctl restart waired-agent`):
 
 ```
@@ -59,7 +59,7 @@ X-Waired-Local-Error: engine_request_failed
 
 - **実測(after、同じ 2 台)**: ピン脚の再起動は
   `400 waired_pinned_peer_unreachable` /「The computer this turn is pinned to,
-  sv-mag, is not answering.」。生の dial エラーもオーバーレイアドレスも本文に出ない
+  rtx4000-linux, is not answering.」。生の dial エラーもオーバーレイアドレスも本文に出ない
 - 反転する既存テストは無い。`internal/e2e/integration/budget.go` の
   `engine_request_failed` = 502 = `driveRetry` も、
   `internal/gateway/public_peer_display_test.go` の 3 面 502 も、どちらも**非ピン**

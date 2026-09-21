@@ -12,7 +12,7 @@ waired-agent#1233 の実測記録。同 issue は「Windows の ROCm allowlist
 1 台の機械で ollama のバックエンド 2 つを A/B しようとする人。先に §4 を
 読むこと — 最初の実験は 2 時間分まるごと無効で、しかも結果は正常に見えた。
 
-計測環境 (2026-09-06): sv-evox2 — Windows 11 26200 / AMD Ryzen AI Max+ 395
+計測環境 (2026-09-06): Strix Halo のホスト — Windows 11 26200 / AMD Ryzen AI Max+ 395
 (Strix Halo、Radeon 8060S) / ユニファイドメモリ 127.15 GB / ollama 0.33.3
 の base に ROCm オーバーレイを手で `C:\l100` へ展開。モデルは
 `qwen3.6:35b-a3b-q4_K_M` (21.80 GB、出荷済みカタログタグ)。
@@ -130,7 +130,7 @@ v6.1 overlay」) からの推論だった。** 同日に 2 つ確かめて、答
 
 2. カーネルが同梱されることと ROCm が応じることは同じではないので、そちらも
    測った。ollama **v0.31.1** と **v0.33.2** をそれぞれのオーバーレイと共に
-   同じ機械 (sv-evox2) に展開し、`OLLAMA_IGPU_ENABLE=1` で起動して、起動時の
+   同じ機械 (Strix Halo のホスト) に展開し、`OLLAMA_IGPU_ENABLE=1` で起動して、起動時の
    discovery 行を読んだ。モデルは要らない。両方とも、0.33.3 と字面まで同じ
    行を出す:
 

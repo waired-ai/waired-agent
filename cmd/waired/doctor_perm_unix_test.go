@@ -64,10 +64,11 @@ func TestCollectDoctorFindings_UnreadableStateIsReportedNotDropped(t *testing.T)
 	}
 }
 
-// TestStateDiskAnswerFor_SystemWide pins the shape measured on sv-mag and
-// pc-mbp14-m5 (waired-agent#1005): the caller's own state dir is readable
-// and empty, and the system-wide one holds the identity behind 0700
-// root/service ownership. Nothing about that is a missing identity.
+// TestStateDiskAnswerFor_SystemWide pins the shape measured on the RTX PRO
+// 4000 Linux host and the M5 Pro MacBook (waired-agent#1005): the caller's
+// own state dir is readable and empty, and the system-wide one holds the
+// identity behind 0700 root/service ownership. Nothing about that is a
+// missing identity.
 //
 // This is a product contract from #1005, not a record of today's
 // behaviour. Unix-only because os.Chmod(dir, 0) is a no-op on Windows;

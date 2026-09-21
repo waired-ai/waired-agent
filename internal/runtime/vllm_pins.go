@@ -30,7 +30,7 @@ package runtime
 // flag is an argparse exit 2, so a single missing name or flag costs the
 // whole engine rather than one feature.
 //
-// 0.24.0 -> 0.28.0, validated 2026-08-29 on sv-mag (RTX PRO 4000
+// 0.24.0 -> 0.28.0, validated 2026-08-29 on a Linux host (RTX PRO 4000
 // Blackwell, compute capability 12.0) by replaying THIS product's exact
 // serve argv against a scratch venv (waired-agent#1133). What came out
 // of that, in the order it costs:
@@ -62,7 +62,7 @@ package runtime
 // depend on the second — and on a host where nvcc is installed but not
 // on PATH (the default for /usr/local/cuda on Ubuntu) 0.28.0 dies at
 // start-up with "FlashInfer backend is not available". Reproduced on
-// sv-mag, which has nvcc at /usr/local/cuda/bin and neither the user's
+// the RTX PRO 4000 Linux host, which has nvcc at /usr/local/cuda/bin and neither the user's
 // nor root's PATH pointing at it. Pinning the cubin package back is not
 // available: PyPI's newest flashinfer-cubin is 0.6.13 and 0.28.0 wants
 // flashinfer-python 0.6.16.post3. The fix is therefore on our side —

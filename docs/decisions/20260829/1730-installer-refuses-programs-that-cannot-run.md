@@ -16,7 +16,7 @@ Accepted。オーナー裁定 2026-08-29(waired-agent#1087 の作業中)。
 で残った(waired-agent#1087)。`waired doctor` は #315/#653 でこの拒否を診断
 できるが、ここでは役に立たない — 実行すること自体が拒否されている。
 
-sv-xps15(Windows 11 Pro、SAC 有効)で実測した事実:
+RTX 4070 Laptop の Windows ノート(Windows 11 Pro、SAC 有効)で実測した事実:
 
 - **拒否はファイル単位**。同じ日に、edge ビルドは `waired.exe` が拒否されて
   `waired-agent.exe` は動き、リリースビルドは**その逆**だった。

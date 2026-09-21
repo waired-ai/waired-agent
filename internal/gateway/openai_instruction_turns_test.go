@@ -15,11 +15,11 @@ import (
 // TestNormalizeOpenAIBodyInstructionTurns covers the fold itself.
 //
 // A record of today's behaviour. The shapes it exercises are the ones
-// measured against a live engine on sv-mag, 2026-08-27 (ollama 0.32.13,
-// qwen3.8:27b-mtp-q4_K_M): [user, system], [system, system, user] and a
-// tool-call conversation with a system turn in the middle all answered
-// 500 "system message must be at the beginning", while [system, user]
-// and [system, user, developer, user] answered 200.
+// measured against a live engine on the RTX PRO 4000 Linux host,
+// 2026-08-27 (ollama 0.32.13, qwen3.8:27b-mtp-q4_K_M): [user, system],
+// [system, system, user] and a tool-call conversation with a system turn in
+// the middle all answered 500 "system message must be at the beginning",
+// while [system, user] and [system, user, developer, user] answered 200.
 func TestNormalizeOpenAIBodyInstructionTurns(t *testing.T) {
 	cases := []struct {
 		name    string

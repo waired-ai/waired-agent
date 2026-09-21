@@ -99,7 +99,7 @@ func TestNextTurnForClaude_BusyIsNotCannot(t *testing.T) {
 		want bool
 	}{
 		{"every computer busy", router.ErrAllPeersOverloaded, true},
-		{"a busy pin, which unwraps to it", &router.PinnedPeerBusyError{PeerName: "sv-mag"}, true},
+		{"a busy pin, which unwraps to it", &router.PinnedPeerBusyError{PeerName: "rtx4000-linux"}, true},
 		{"local inference off", router.ErrLocalInferenceOff, false},
 		{"the operator's floor", &router.SizeFloorError{Err: router.ErrModelNotReady, Floor: "large"}, false},
 		{"a pin that is not answering", router.ErrPinnedPeerUnreachable, false},

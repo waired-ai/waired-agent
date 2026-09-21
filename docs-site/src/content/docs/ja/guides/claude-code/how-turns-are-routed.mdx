@@ -84,13 +84,13 @@ Wairedが500ではなく400で答えるのは意図的で、コンテキスト�
 セッションの最初のターンがいちばん重い処理です。会話全体、指示、ファイルの内容を読み終えるまで最初の1語も返ってこず、ノート型のコンピュータや古いGPUでは数分かかることがあります。Wairedはこれを諦めません。このコンピュータが答える場合、ターンは推論エンジンが終わるまでいつまでも待ちます。自分の別のコンピュータが答える場合、そのコンピュータが「処理中」と報告し続けるかぎり待ちます。待つのをやめるのは、そのコンピュータが停止を報告したときか、応答が途絶えたときで、ターンはどちらかを示すメッセージで失敗します。
 
 ```
-API Error: 400 The peer sv-mag stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The peer rtx4000-linux stopped answering after 30s. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 相手のコンピュータがほかの処理、多くの場合はそのコンピュータの所有者のターンで手一杯のまま、待ち時間の上限に達することもあります。その場合、ターンは応答が途絶えたと言うのではなく、そのことを示して失敗します。次はサブエージェントのターンの例で、メッセージはサブエージェント向けの選択肢で終わります。
 
 ```
-API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and had not started this turn. This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.
+API Error: 400 The peer rtx4070-laptop was still busy with other work after 1m40s and had not started this turn. This is a subagent turn, and subagents are set to run on Waired. Run `waired claude subagents follow` to send them where their own model says, or run `waired doctor` to see what is missing.
 ```
 
 別のコンピュータを待つ時間には上限があります。メイン会話は30分、サブエージェントのターンは100秒です。「処理中」と言い続けて実際には動いていない場合のためのものです。同じセッションの後続のターンははるかに速くなります。読み終えた部分を読み直さないからです。
@@ -100,7 +100,7 @@ API Error: 400 The peer sv-xps15 was still busy with other work after 1m40s and 
 `waired worker set --pin`で自分のコンピュータを1台に固定していて、そのコンピュータが使えない場合、Wairedはこのコンピュータで代わりに答えることも、Anthropic APIに送ることもしません。ターンは失敗し、そのコンピュータの名前を表示します。
 
 ```
-API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The computer this turn is pinned to, rtx4000-linux, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 固定したコンピュータに届くが、このターンを受けられない場合も同じ形で失敗し、メッセージに理由が示されます。固定は`waired worker set --pin`によるものでも、**Waired peer: &lt;名前&gt;**の行によるものでも同じです。次は行のコンテキストウィンドウを満たさない例です。
@@ -114,7 +114,7 @@ API Error: 400 The computer this turn is pinned to, studio-desktop, cannot take 
 固定したコンピュータが起動しているがほかの処理で手一杯、というのがもう1つの場合です。Wairedは会話のどれかが空くのを最長1分ほど待ってから、400ではなく503で答えます。このターンは再試行する価値があるからです。
 
 ```
-API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+API Error: 503 m4-mac-mini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
 ```
 
 Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。`This is a server-side issue`以降は、503に対するClaude Code自身の文言で、Wairedの診断ではありません。待つのをやめるには、`/model`で別のコンピュータを選びます。

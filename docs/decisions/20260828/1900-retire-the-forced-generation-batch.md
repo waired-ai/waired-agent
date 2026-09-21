@@ -38,7 +38,7 @@ waired#642 は、スピルしている discrete GPU ホストで生成 ubatch �
 派生モデルはまさに `PARAMETER num_batch` を焼き込むので、**強制した瞬間に
 エンジンの段下げが丸ごと無効になる**。
 
-### 実測 (sv-mag、ollama 0.32.15、qwen3.8-27b mtp-q4、ctx 200704)
+### 実測 (RTX PRO 4000 の Linux ホスト、ollama 0.32.15、qwen3.8-27b mtp-q4、ctx 200704)
 
 | 構成 | runner の argv | ロード後の空き | ~2k | 26k | **171k** |
 |---|---|---|---|---|---|
@@ -46,7 +46,7 @@ waired#642 は、スピルしている discrete GPU ホストで生成 ubatch �
 | `-wb2048`(強制) | `-b 2048 -ub 2048` | 52 MiB | **OOM** | OOM | OOM |
 
 エンジンが選んだ 512 は **171,449 トークンを通し**、強制した 2048 は
-**2,000 トークンを通せない**。sv-evox2(Strix Halo / Windows / 同版 / 同窓)
+**2,000 トークンを通せない**。Strix Halo のホスト(Strix Halo / Windows / 同版 / 同窓)
 でも素タグは `-b 512 -ub 512` で、2 台・2 世代・2 OS で同じ挙動。
 
 つまり waired-agent#1038(FIT は収まると言うのに実機が OOM する)の真因は
@@ -72,7 +72,7 @@ waired#642 は、スピルしている discrete GPU ホストで生成 ubatch �
    降格は判断しない。
 4. **3 OS すべてで安全**であることを確認した:
    - `server/sched.go` に build tag も `runtime.GOOS` 分岐も無い
-   - linux(sv-mag)/ windows(sv-evox2)で自動サイジングの発火を実測
+   - linux(RTX PRO 4000 のホスト)/ windows(Strix Halo のホスト)で自動サイジングの発火を実測
    - **darwin では #642 はそもそも発火しない** — `Host.Class()` は
      `UnifiedMemory → ClassUnified` / `GPUCount > 0 → ClassDiscrete` で、
      arm64 Mac は `defaultUMA` が `UnifiedMemory` を立て、Intel Mac は

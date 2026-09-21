@@ -287,7 +287,7 @@ func HostKey(prof *Profile) string {
 // A grammar rather than a list is the point of waired-agent#1455: a new
 // machine produces a new key without anybody editing a slice, and the
 // keys still cannot be a machine's name, because nothing types them and
-// "sv-mag" has no topology on the front.
+// "gpu-desktop" has no topology on the front.
 var hostKeyGrammar = regexp.MustCompile(`^(unified|discrete|cpu)(-[a-z0-9]+)+$`)
 
 // ValidHostKey reports whether s is well formed as a derived host key.

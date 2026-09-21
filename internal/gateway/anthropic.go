@@ -1502,7 +1502,7 @@ func failClosedMessage(class, detail string) string {
 //
 // The router's own text is a diagnosis for a log — and, once the mesh error
 // wrapper has appended the model id after the peer, it reads as two quoted
-// values run together ("… is unreachable: \"sv-mag\": \"gpt-oss-20b\"").
+// values run together ("… is unreachable: \"rtx4000-linux\": \"gpt-oss-20b\"").
 // This is the one error whose whole point is that a person can act on it
 // (waired-agent#1180), so it says which computer, in words.
 func pinnedPeerUnreachableDetail(err error) string {

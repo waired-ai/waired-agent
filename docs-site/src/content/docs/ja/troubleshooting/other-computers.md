@@ -46,7 +46,7 @@ waired worker get
 Wairedアプリも同じことを表示します。［Worker: `<name>` (pinned) — unavailable, requests aren't served here］です。Claude Codeにも同じ答えが返ります。ターンはすぐに失敗し、パソコンの名前を表示します。
 
 ```
-API Error: 400 The computer this turn is pinned to, sv-mag, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
+API Error: 400 The computer this turn is pinned to, rtx4000-linux, is not answering. Pick an Anthropic model in /model to send this turn to the cloud, or run `waired doctor` to see what is missing.
 ```
 
 直すには、固定したパソコンを起動する（`waired peers list`と、そのパソコンでの`waired doctor`で確認）か、固定をやめます。
@@ -62,7 +62,7 @@ waired worker set --mode=auto
 固定したパソコンが起動していて共有もしているのに、ほかの処理で手一杯なことがあります。その場合、Claude Codeは400ではなく503で、別のメッセージを表示します。
 
 ```
-API Error: 503 sv-macmini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
+API Error: 503 m4-mac-mini is busy with other work — 1 of 1 conversations in use. This turn is pinned to that computer, so no other computer can take it. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (<host>).
 ```
 
 2つのメッセージは、向かう先が違います。**not answering**は、そのパソコンを見に行く、という意味です。オフか、スリープ中か、共有していません。**busy**は、パソコンは正常で、保持できる会話がすべて使用中、多くの場合はそのパソコンの所有者が使っている、という意味です。直すものはありません。Wairedは会話が空くのを最長1分ほど待ってからこの答えを返し、Claude Codeは503を自動で再試行するので、相手のターンが終われば、たいていそのまま通ります。待ちたくなければ、`/model`で別のパソコンを選びます。

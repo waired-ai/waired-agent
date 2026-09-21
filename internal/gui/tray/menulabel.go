@@ -15,7 +15,7 @@ import (
 //   - **Windows.** systray sets the item with MFT_STRING, and Win32 menus
 //     treat `&` as the mnemonic prefix (`&File` draws as F̲ile). So a label
 //     carrying an ampersand loses it: `Privacy & safety…` drew as
-//     `Privacy  safety…` on pc-dell-premium, in a packaged 0.0.3-rc4 tray
+//     `Privacy  safety…` on the Intel Arc 140T laptop, in a packaged 0.0.3-rc4 tray
 //     and in a build of main alike (waired-agent#1096). `&&` draws one `&`.
 //   - **Linux.** The dbusmenu spec says of `label`: "two consecutive
 //     underscore characters `__` are displayed as a single underscore, any

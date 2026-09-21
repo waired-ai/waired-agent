@@ -168,7 +168,7 @@ func TestLoginStart_ResumeRestoresTheIdentity(t *testing.T) {
 // PRODUCT CONTRACT — waired-agent#800, and the reason it is asserted here
 // rather than on a host: on a machine whose state dir was just wiped the
 // daemon's own log file went with it, so the line lands on a deleted inode
-// until the daemon restarts. Verified on sv-macmini 2026-08-15 — the
+// until the daemon restarts. Verified on the M4 Mac mini 2026-08-15 — the
 // repair worked, `waired logs` had nowhere to read it from.
 func TestRestoreIdentity_SaysSo(t *testing.T) {
 	dir := t.TempDir()

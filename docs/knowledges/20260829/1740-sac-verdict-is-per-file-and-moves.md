@@ -3,7 +3,7 @@
 ## Issue
 
 waired-agent#1087(更新が新バイナリを実行できずホストを落とす)の検証で、
-sv-xps15(Windows 11 Pro、`VerifiedAndReputablePolicyState=1`)を 1 日使った。
+RTX 4070 Laptop の Windows ノート(Windows 11 Pro、`VerifiedAndReputablePolicyState=1`)を 1 日使った。
 「拒否される状態」を再現したかったが、判定が動くので**待っても再現しない**。
 その動き方自体が製品判断の根拠になったので記録する。
 
@@ -63,7 +63,7 @@ zip に入れれば、インストーラから見える条件は拒否と同一�
 (Microsoft 署名済みなので SAC 有効の機でも通り、サービスとしては即終了する)。
 
 **8. `~RF*.TMP` は消えずに溜まる。** `[IO.File]::Replace` の作業一時ファイルで、
-消せなかったぶんがインストール先に残る。sv-evox2 に 4 本(旧 `waired.exe` と
+消せなかったぶんがインストール先に残る。Strix Halo の Windows ホストに 4 本(旧 `waired.exe` と
 旧 `waired-tray.exe`)あった。#1087 の報告者はこれをコピーして復旧している。
 
 ## Refs

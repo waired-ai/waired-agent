@@ -84,7 +84,7 @@ func TestRenderStatusline_TheThirdState(t *testing.T) {
 				Reason: "every computer is busy",
 			},
 		}
-		mesh := meshView{known: true, reachable: true, names: map[string]string{"dev_peer": "sv-macmini"}}
+		mesh := meshView{known: true, reachable: true, names: map[string]string{"dev_peer": "m4-mac-mini"}}
 		got := renderStatusline(route, "ready", nil, mesh, "")
 		if !strings.Contains(got, "on Waired") {
 			t.Errorf("a busy computer was rendered as a fault: %q", got)
@@ -92,7 +92,7 @@ func TestRenderStatusline_TheThirdState(t *testing.T) {
 		if !strings.Contains(got, "every computer is busy") {
 			t.Errorf("the line does not say why the turn will be slow: %q", got)
 		}
-		if !strings.Contains(got, "sv-macmini") {
+		if !strings.Contains(got, "m4-mac-mini") {
 			t.Errorf("the line stopped naming the computer: %q", got)
 		}
 	})

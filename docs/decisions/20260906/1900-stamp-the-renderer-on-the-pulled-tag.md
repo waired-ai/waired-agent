@@ -48,7 +48,7 @@ GGUF の `create` 経路は刻まず、公開者の誰も手で書かない。**
 刻印を waired 側の導入経路に置く。
 
 `ollama create <同じタグ名> -f Modelfile` は既存レイヤをすべて再利用し、
-書き換わるのは小さな config オブジェクトだけ。sv-evox2 での実測でディスク
+書き換わるのは小さな config オブジェクトだけ。Strix Halo の Windows ホストでの実測でディスク
 増加は **0.00 GB**、projector と license レイヤ(frob のタグだけが持つ
 Qwen Community License 1.0 全文)も残る。同名なので下流の識別子は 1 つも
 動かない。

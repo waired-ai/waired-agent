@@ -3,7 +3,7 @@
 # Runs a command and retries it on non-zero exit, sleeping between
 # attempts per a fixed backoff schedule. Built to absorb the transient
 # `iamcredentials.googleapis.com` 503 ("upstream connect error /
-# connection timeout") that the sv-mag self-hosted runner's
+# connection timeout") that the self-hosted runner's
 # Workload-Identity-Federation egress hits when terraform mints a
 # federated access token during `init` / `apply` (issue #433). A single
 # 503 there used to abort testnet teardown and leave the slot up.

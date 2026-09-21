@@ -77,7 +77,7 @@ Go には後者を出す手段がある: `panic(http.ErrAbortHandler)` は終端
 出荷する形は「HoldAfter まで黙り、そこで初めてコミットして padding する」。
 実測（240 s で コミット、500 s で応答）: **rc=0、511.0 s**。
 
-### 実機での通し（sv-macmini、Apple Silicon、macOS 26.5.1、ollama 0.33.3）
+### 実機での通し（16 GB の M4 Mac mini、Apple Silicon、macOS 26.5.1、ollama 0.33.3）
 
 スタブはクライアントの締切を測るためのもので、**実エンジンが本当にヘッダを
 withhold するか**と**実クライアントが padding 付きの本文を読めるか**は別の問い。

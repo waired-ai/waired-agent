@@ -271,8 +271,8 @@ func TestPeerDirectiveIDs(t *testing.T) {
 
 	t.Run("a name the cap cuts is hashed", func(t *testing.T) {
 		got := idsOf(
-			PeerFact{DisplayID: "sv-evo-box (alice.example@example.com)", Key: "dev_1"},
-			PeerFact{DisplayID: "sv-evo-box (alice.example@example.org)", Key: "dev_2"},
+			PeerFact{DisplayID: "strix-halo-box (alice.example@example.com)", Key: "dev_1"},
+			PeerFact{DisplayID: "strix-halo-box (alice.example@example.org)", Key: "dev_2"},
 		)
 		for i, id := range got {
 			if !hashed.MatchString(id) {
@@ -287,7 +287,7 @@ func TestPeerDirectiveIDs(t *testing.T) {
 		}
 		// Alone, too: yesterday's list may have held the other one, and
 		// its id must not come to name this computer today.
-		if id := idsOf(PeerFact{DisplayID: "sv-evo-box (alice.example@example.com)", Key: "dev_1"})[0]; id != got[0] {
+		if id := idsOf(PeerFact{DisplayID: "strix-halo-box (alice.example@example.com)", Key: "dev_1"})[0]; id != got[0] {
 			t.Errorf("alone, id = %q; want %q, the same id it had beside its namesake", id, got[0])
 		}
 		// A name exactly at the cap loses nothing and needs no hash.

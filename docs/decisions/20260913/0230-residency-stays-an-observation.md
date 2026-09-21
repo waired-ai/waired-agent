@@ -54,7 +54,7 @@ Claude Code がそれを 300 秒で諦めて無限に再試行することを記
 ### 3. 本当に望みの無いケースは、既に別の根拠で即座に失敗している
 
 - エンジンが park されている → `EnsureRunning` が落ちて数ミリ秒で 503
-  （2026-09-12 の sv-macmini で実測: 9 ms）。
+  （2026-09-12 の 16 GB の M4 Mac mini で実測: 9 ms）。
 - エンジンが入っていない / 選択が解決しない → `runtime_unavailable` /
   `runtime_unhealthy` で dispatch の前に終わる。
 
@@ -66,7 +66,7 @@ Claude Code がそれを 300 秒で諦めて無限に再試行することを記
 案 3 の根拠は「どうせ待っても無駄だから」の一点だった。#1331 の後、非ストリームの
 脚は 4 分黙ってからコミットして本文を埋め、**実測で 885 秒保持してもクライアントは
 諦めない**（上限が見つかっていない）。実機でも 95 秒かかったターンが完走した
-（sv-macmini、`docs/knowledges/20260912/2130-nonstream-leg-held-only-by-committing.md`）。
+（M4 Mac mini、`docs/knowledges/20260912/2130-nonstream-leg-held-only-by-committing.md`）。
 待つことが無駄でなくなった以上、早く断る理由が無い。
 
 ## Consequences

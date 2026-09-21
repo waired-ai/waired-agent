@@ -58,7 +58,7 @@ identity.json を書き戻すため、消したはずの登録が次のサイン
 ルートは mutating verb なので `writeGuard` が既にローカル IPC ソケットに限定
 する。ループバック TCP からは届かず、したがってブラウザからも届かない。
 
-そのソケットは `internal/platform/localipc` が 0666 で開いており(mbp14 で
+そのソケットは `internal/platform/localipc` が 0666 で開いており(48 GB の M5 Pro MacBook Pro で
 `srw-rw-rw-` を実測)、**同じソケットに載る `POST /login/start` は `auth_key` を
 受け取る** — ローカルの任意プロセスがブラウザを経ずにこのデバイスを別アカウント
 へ無言で再登録できるのが現状の境界。`ModeLogout` のサインアウトはそれより弱く、

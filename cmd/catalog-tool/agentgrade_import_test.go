@@ -155,10 +155,10 @@ func TestImportAgentGradeRefusals(t *testing.T) {
 		{
 			name: "a host that is not a declared hardware class",
 			rep:  valid(),
-			args: []string{"--host", "sv-mag"},
+			args: []string{"--host", "rtx4000-linux"},
 			// The refusal names the GRAMMAR now, not a list: the
 			// vocabulary stopped being a roster in
-			// waired-agent#1455 and "sv-mag" is rejected for having
+			// waired-agent#1455 and "rtx4000-linux" is rejected for having
 			// no topology on the front rather than for being absent
 			// from a slice.
 			want: "not a well-formed host key",

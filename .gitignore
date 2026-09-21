@@ -39,3 +39,7 @@ go.work.sum
 
 # Byte-cache from running the scripts/dev/*.py helpers
 __pycache__/
+
+# Snapshots and console logs the Playwright MCP browser writes into the
+# directory it was started from
+.playwright-mcp/

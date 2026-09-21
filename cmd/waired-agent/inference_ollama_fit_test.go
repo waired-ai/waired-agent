@@ -11,10 +11,10 @@ import (
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
-// The figures in this file were measured on sv-mag (NVIDIA RTX PRO 4000
-// Blackwell, 24467 MiB VRAM, 121 GB RAM) serving qwen3.8-27b mtp-q4 at
-// the 200,704-token coding window. A record of measured behaviour, not a
-// contract with the engine — except where a case says otherwise.
+// The figures in this file were measured on a Linux host (NVIDIA RTX PRO 4000
+// Blackwell, 24467 MiB VRAM, 121 GB RAM) serving qwen3.8-27b mtp-q4 at the
+// 200,704-token coding window. A record of measured behaviour, not a contract
+// with the engine — except where a case says otherwise.
 //
 // ollama 0.32.13, 2026-08-27 (waired-agent#1038):
 //
@@ -40,13 +40,13 @@ import (
 // and 945 MiB served a 152k one, while 491 MiB served nothing. The
 // number is recorded, and decides nothing.
 const (
-	svMagForcedBatchSize   = 21_730_000_000
-	svMagForcedBatchVRAM   = 15_540_000_000
-	svMagForcedBatchFreeMB = 491
-	svMagAutoBatchSize     = 20_070_000_000
-	svMagAutoBatchVRAM     = 15_680_000_000
-	svMagAutoBatchFreeMB   = 506
-	svMagSmallWindowFreeMB = 3141
+	rtx4000LinuxForcedBatchSize   = 21_730_000_000
+	rtx4000LinuxForcedBatchVRAM   = 15_540_000_000
+	rtx4000LinuxForcedBatchFreeMB = 491
+	rtx4000LinuxAutoBatchSize     = 20_070_000_000
+	rtx4000LinuxAutoBatchVRAM     = 15_680_000_000
+	rtx4000LinuxAutoBatchFreeMB   = 506
+	rtx4000LinuxSmallWindowFreeMB = 3141
 )
 
 func freeVRAM(mb int, ok bool) func(context.Context) (int, bool) {
@@ -79,8 +79,8 @@ func TestVerifyOllamaTuning_FreeVRAMUnknownKeepsTodaysBehaviour(t *testing.T) {
 	_ = m
 	// The 28.5 % configuration: without a reading this is the pre-#1038
 	// tuningSpill, exactly as before.
-	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: svMagForcedBatchSize,
-		psVRAM: svMagForcedBatchVRAM, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: rtx4000LinuxForcedBatchSize,
+		psVRAM: rtx4000LinuxForcedBatchVRAM, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 
@@ -107,8 +107,8 @@ func TestVerifyOllamaTuning_AllocationProbeOOMIsVRAMExhausted(t *testing.T) {
 	// plenty of free VRAM. Only making the runner allocate finds the
 	// cliff — which is why the free reading decides nothing
 	// (waired-agent#1079).
-	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: svMagAutoBatchSize,
-		psVRAM: svMagAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: rtx4000LinuxAutoBatchSize,
+		psVRAM: rtx4000LinuxAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 
@@ -118,7 +118,7 @@ func TestVerifyOllamaTuning_AllocationProbeOOMIsVRAMExhausted(t *testing.T) {
 	var probedTokens int
 	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL,
 		tn, "anchor:tag", hw, ollamaVerifyDeps{
-			FreeVRAMMB: freeVRAM(svMagAutoBatchFreeMB, true),
+			FreeVRAMMB: freeVRAM(rtx4000LinuxAutoBatchFreeMB, true),
 			Allocate: func(_ context.Context, tag string, tokens int) error {
 				probedTag, probedTokens = tag, tokens
 				return oom
@@ -142,8 +142,8 @@ func TestVerifyOllamaTuning_AllocationProbeOOMIsVRAMExhausted(t *testing.T) {
 func TestVerifyOllamaTuning_AllocationProbeNonOOMErrorIsIgnored(t *testing.T) {
 	m, _, hw, tn := anchorSpillFixture()
 	_ = m
-	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: svMagAutoBatchSize,
-		psVRAM: svMagAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: rtx4000LinuxAutoBatchSize,
+		psVRAM: rtx4000LinuxAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 
@@ -151,7 +151,7 @@ func TestVerifyOllamaTuning_AllocationProbeNonOOMErrorIsIgnored(t *testing.T) {
 	// would step a working host down for a slow probe.
 	verdict, detail := verifyOllamaTuning(context.Background(), srv.Client(), srv.URL,
 		tn, "anchor:tag", hw, ollamaVerifyDeps{
-			FreeVRAMMB: freeVRAM(svMagAutoBatchFreeMB, true),
+			FreeVRAMMB: freeVRAM(rtx4000LinuxAutoBatchFreeMB, true),
 			Allocate:   func(context.Context, string, int) error { return context.DeadlineExceeded },
 		})
 	if verdict == tuningVRAMExhausted {
@@ -231,8 +231,8 @@ func TestDegradeStep_MultiRungModelStepsTheWindow(t *testing.T) {
 // configuration twice is wasted boot time, not just a redundant call.
 func TestApplyOllamaTuningVerification_ProbesOncePerConfiguration(t *testing.T) {
 	m, v, hw, tn := anchorSpillFixture()
-	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: svMagAutoBatchSize,
-		psVRAM: svMagAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: rtx4000LinuxAutoBatchSize,
+		psVRAM: rtx4000LinuxAutoBatchSize, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 
@@ -240,7 +240,7 @@ func TestApplyOllamaTuningVerification_ProbesOncePerConfiguration(t *testing.T) 
 	sw := &fakeModelEnvSwitcher{}
 	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL,
 		srv.Client(), ollamaVerifyDeps{
-			FreeVRAMMB: freeVRAM(svMagSmallWindowFreeMB, true),
+			FreeVRAMMB: freeVRAM(rtx4000LinuxSmallWindowFreeMB, true),
 			Allocate: func(context.Context, string, int) error {
 				probes++
 				return nil
@@ -257,8 +257,8 @@ func TestApplyOllamaTuningVerification_ProbesOncePerConfiguration(t *testing.T) 
 // latch rather than restart the engine into the same configuration.
 func TestApplyOllamaTuningVerification_LadderTerminates(t *testing.T) {
 	m, v, hw, tn := anchorSpillFixture()
-	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: svMagForcedBatchSize,
-		psVRAM: svMagForcedBatchVRAM, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: rtx4000LinuxForcedBatchSize,
+		psVRAM: rtx4000LinuxForcedBatchVRAM, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 
@@ -266,7 +266,7 @@ func TestApplyOllamaTuningVerification_LadderTerminates(t *testing.T) {
 	sw := &fakeModelEnvSwitcher{}
 	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL,
 		srv.Client(), ollamaVerifyDeps{
-			FreeVRAMMB: freeVRAM(svMagForcedBatchFreeMB, true),
+			FreeVRAMMB: freeVRAM(rtx4000LinuxForcedBatchFreeMB, true),
 			Allocate:   func(context.Context, string, int) error { return oom },
 		}, testLogger())
 
@@ -285,15 +285,15 @@ func TestApplyOllamaTuningVerification_LadderTerminates(t *testing.T) {
 	}
 }
 
-// TestSvMag_Qwen38_27b_ServesTheCodingWindow drives the whole chain the
-// reproduction host walks, from the bundled manifest rather than a
-// hand-copied fixture — so a catalog change that invalidates the
-// measurement fails loudly rather than silently.
+// TestRTX4000Linux_Qwen38_27b_ServesTheCodingWindow drives the whole chain
+// the reproduction host walks, from the bundled manifest rather than a
+// hand-copied fixture — so a catalog change that invalidates the measurement
+// fails loudly rather than silently.
 //
 // PRODUCT CONTRACT for the window half: this host serves the ~200k
 // coding floor (#624; waired-ai/waired#1056 decision 3). A record of
-// measured behaviour for the memory figures (sv-mag, ollama 0.32.15,
-// 2026-08-28).
+// measured behaviour for the memory figures (the RTX PRO 4000 Linux host,
+// ollama 0.32.15, 2026-08-28).
 //
 // This used to assert the opposite of its middle section: the sizing
 // forced a generation ubatch, the load verified as unservable, and the
@@ -301,7 +301,7 @@ func TestApplyOllamaTuningVerification_LadderTerminates(t *testing.T) {
 // (waired-agent#1079) removes the configuration that failed, so the host
 // now verifies clean on the first try — which is the outcome the whole
 // ladder existed to reach.
-func TestSvMag_Qwen38_27b_ServesTheCodingWindow(t *testing.T) {
+func TestRTX4000Linux_Qwen38_27b_ServesTheCodingWindow(t *testing.T) {
 	m, ok := bundledManifest(t, "qwen3.8-27b")
 	if !ok {
 		t.Skip("qwen3.8-27b is no longer in the bundled catalog")
@@ -321,7 +321,7 @@ func TestSvMag_Qwen38_27b_ServesTheCodingWindow(t *testing.T) {
 	// model loads, and the sizing budget reads the free figure. Omitting
 	// it modelled a card with nothing else on it and predicted a 5.0 %
 	// spill where the host predicts 10.7 % (captured with scripts/dev/
-	// hwprobe on sv-mag itself, engine stopped, 2026-08-28).
+	// hwprobe on that host itself, engine stopped, 2026-08-28).
 	hw := hardware.Profile{
 		RAMTotalGB: 121,
 		GPUs: []hardware.GPU{{
@@ -348,7 +348,7 @@ func TestSvMag_Qwen38_27b_ServesTheCodingWindow(t *testing.T) {
 	// What the engine did with it: the plain tag, spilling as planned,
 	// and a probe that shows it can allocate a real prompt's working set.
 	f := &fakeOllamaAPI{psName: "qwen3.8:27b-mtp-q4_K_M",
-		psSize: svMagAutoBatchSize, psVRAM: svMagAutoBatchVRAM,
+		psSize: rtx4000LinuxAutoBatchSize, psVRAM: rtx4000LinuxAutoBatchVRAM,
 		psCtx: tn.ContextLength, tagSize: 17_741_872_171}
 	srv := f.server(t)
 	defer srv.Close()
@@ -359,7 +359,7 @@ func TestSvMag_Qwen38_27b_ServesTheCodingWindow(t *testing.T) {
 			// 506 MiB — below the floor this file used to carry, on a
 			// host that serves a 171,449-token prompt. The reading is
 			// recorded; the probe is what answers.
-			FreeVRAMMB: freeVRAM(svMagAutoBatchFreeMB, true),
+			FreeVRAMMB: freeVRAM(rtx4000LinuxAutoBatchFreeMB, true),
 			Allocate: func(context.Context, string, int) error {
 				probed++
 				return nil

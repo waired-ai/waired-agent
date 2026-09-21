@@ -174,8 +174,8 @@ func TestPinnedPeerDispatchFailureNamesTheComputer(t *testing.T) {
 		want  string
 	}{
 		{"a named peer is named", func(string) PeerFacts {
-			return PeerFacts{Name: "sv-mag", Known: true, EngineLive: true}
-		}, "The computer this turn is pinned to, sv-mag, is not answering."},
+			return PeerFacts{Name: "rtx4000-linux", Known: true, EngineLive: true}
+		}, "The computer this turn is pinned to, rtx4000-linux, is not answering."},
 		// A Public Share peer carries no name here by construction, so it
 		// keeps the pseudonym its caller already holds (spec §8.5).
 		{"an unnamed peer keeps its display identifier", func(string) PeerFacts {

@@ -30,13 +30,13 @@ func connectedModel() MenuModel {
 		Kind:              MenuConnected,
 		HeaderTitle:       "● Connected",
 		AccountEmail:      "someone@example.com",
-		DeviceName:        "pc-dell-premium",
+		DeviceName:        "arc-laptop",
 		OverlayIP:         "100.64.0.3",
 		NetworkName:       "example-net",
 		StatusEngineLabel: "○ Engine: off on this computer",
 		StatusPeersLabel:  "● Peers: 2 of 3 serving",
 		StatusClaudeLabel: "● Claude Code: routed through Waired",
-		WorkerActiveLabel: "Worker: sv-evox2 (pinned)",
+		WorkerActiveLabel: "Worker: strix-halo-win (pinned)",
 	}
 }
 
@@ -68,19 +68,19 @@ func servingPeer(id, name, model string) inferencemesh.PeerView {
 // (waired-agent#1032).
 func TestStatusReport_QuotesTheRowThatOpenedIt(t *testing.T) {
 	m := connectedModel()
-	snap := Snapshot{Health: HealthOnline, Mesh: meshWith(servingPeer("dev_b", "sv-evox2", "qwen3.6-35b-a3b"))}
+	snap := Snapshot{Health: HealthOnline, Mesh: meshWith(servingPeer("dev_b", "strix-halo-win", "qwen3.6-35b-a3b"))}
 
 	dialog, details := statusReport(m, snap, "0.0.3-rc4", "90dd4a5", testReportNow())
 
 	for _, want := range []string{
 		"Waired 0.0.3-rc4 (90dd4a5)",
-		"pc-dell-premium · 100.64.0.3 · example-net",
+		"arc-laptop · 100.64.0.3 · example-net",
 		"● Connected · read at 14:32:05",
 		"○ Engine: off on this computer",
 		"● Claude Code: routed through Waired",
-		"Worker: sv-evox2 (pinned)",
+		"Worker: strix-halo-win (pinned)",
 		"OTHER COMPUTERS — 2 of 3 serving",
-		"● sv-evox2 — qwen3.6-35b-a3b",
+		"● strix-halo-win — qwen3.6-35b-a3b",
 	} {
 		if !strings.Contains(dialog, want) {
 			t.Errorf("dialog is missing %q\n---\n%s", want, dialog)
@@ -183,7 +183,7 @@ func TestStatusReport_FallsBackToStatusPeers(t *testing.T) {
 	snap := Snapshot{
 		Health: HealthOnline,
 		Status: &management.Status{Peers: []management.PeerStatus{
-			{DeviceID: "dev_b", DeviceName: "sv-evox2", Hardware: &management.PeerHardware{
+			{DeviceID: "dev_b", DeviceName: "rtx4090-desktop", Hardware: &management.PeerHardware{
 				GPUModel: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24576,
 			}},
 		}},
@@ -191,7 +191,7 @@ func TestStatusReport_FallsBackToStatusPeers(t *testing.T) {
 
 	dialog, _ := statusReport(m, snap, "0.0.3-rc4", "90dd4a5", testReportNow())
 
-	if !strings.Contains(dialog, "sv-evox2 — RTX 4090 (24 GB)") {
+	if !strings.Contains(dialog, "rtx4090-desktop — RTX 4090 (24 GB)") {
 		t.Errorf("dialog does not fall back to the hardware rendering\n---\n%s", dialog)
 	}
 }
@@ -227,7 +227,7 @@ func TestStatusReport_DaemonDownSaysSo(t *testing.T) {
 // half with no length limit, so the diagnostics a support thread asks for
 // next live there and nowhere else.
 func TestStatusReport_DetailsCarryWhatTheDialogCannot(t *testing.T) {
-	peer := servingPeer("dev_b", "sv-evox2", "qwen3.6-35b-a3b")
+	peer := servingPeer("dev_b", "strix-halo-win", "qwen3.6-35b-a3b")
 	peer.OverlayIP = "100.64.0.4"
 	peer.Silent = true
 	m := connectedModel()
@@ -308,7 +308,7 @@ func TestOnShowStatus_CopiesOnlyWhenAsked(t *testing.T) {
 			tr := &tray{opts: Options{Version: "0.0.3-rc4", BuildSHA: "90dd4a5"}}
 			tr.last = connectedModel()
 			tr.lastSnap = Snapshot{Health: HealthOnline,
-				Mesh: meshWith(servingPeer("dev_b", "sv-evox2", "qwen3.6-35b-a3b"))}
+				Mesh: meshWith(servingPeer("dev_b", "strix-halo-win", "qwen3.6-35b-a3b"))}
 
 			tr.onShowStatus()
 

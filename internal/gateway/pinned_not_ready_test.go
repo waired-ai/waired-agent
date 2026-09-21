@@ -100,7 +100,7 @@ func TestSelectAndProbe_PinnedPeerNotReadyNamesTheReason(t *testing.T) {
 // The Claude listener gives the same error the same retryable status, with
 // the overloaded_error type Claude Code retries on.
 func TestRespondAnthropicSelectionError_PinnedPeerNotReady(t *testing.T) {
-	err := &pinnedPeerNotReadyError{display: "dev-1", name: "sv-mag", phrase: "running its benchmark (takes a few minutes)"}
+	err := &pinnedPeerNotReadyError{display: "dev-1", name: "rtx4000-linux", phrase: "running its benchmark (takes a few minutes)"}
 	w := httptest.NewRecorder()
 	respondAnthropicSelectionError(w, "", err, 0)
 	if w.Code != http.StatusServiceUnavailable {
@@ -116,7 +116,7 @@ func TestRespondAnthropicSelectionError_PinnedPeerNotReady(t *testing.T) {
 	if env.Error.Type != "overloaded_error" {
 		t.Errorf("error.type = %q, want overloaded_error", env.Error.Type)
 	}
-	want := `router: the computer this turn is pinned to is not ready (tried "sv-mag": running its benchmark (takes a few minutes))`
+	want := `router: the computer this turn is pinned to is not ready (tried "rtx4000-linux": running its benchmark (takes a few minutes))`
 	if env.Error.Message != want {
 		t.Errorf("message = %q\nwant      %q", env.Error.Message, want)
 	}

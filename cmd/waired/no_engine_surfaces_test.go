@@ -198,9 +198,9 @@ func TestModelPickerSaysWhenNoEngineIsInstalled(t *testing.T) {
 //
 //	Install one with `waired runtimes install ollama (from an elevated prompt)`.
 //
-// on pc-dell-premium — the backticks promised a command and delivered a
-// command plus a sentence. The elevation is still said; it is said
-// outside the quotes.
+// on the Intel Arc 140T Windows laptop — the backticks promised a command
+// and delivered a command plus a sentence. The elevation is still said; it is
+// said outside the quotes.
 func TestEngineInstallSentenceQuotesOnlyTheCommand(t *testing.T) {
 	for goos, want := range map[string]string{
 		"linux":   "Install one with `sudo waired runtimes install ollama`.",

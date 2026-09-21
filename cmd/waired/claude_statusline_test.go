@@ -89,7 +89,7 @@ func TestRenderStatusline(t *testing.T) {
 // looked.
 func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 	plainStatusline(t)
-	withPeer := meshView{known: true, reachable: true, names: map[string]string{"dev-mag": "sv-mag"}}
+	withPeer := meshView{known: true, reachable: true, names: map[string]string{"dev-rtx4000": "rtx4000-linux"}}
 	noPeer := meshView{known: true, reachable: false, names: map[string]string{}}
 	unread := meshView{}
 	servedByPeer := func(id string) func(*management.ClaudeRoutingState) {
@@ -111,18 +111,18 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 	}{
 		{
 			name:   "the reported case: engine off here, a peer is serving",
-			route:  routing(servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-rtx4000")),
 			health: "disabled", mesh: withPeer,
-			want: "waired: on Waired (peer sv-mag)",
+			want: "waired: on Waired (peer rtx4000-linux)",
 		},
 		{
 			// A peer whose turn predates the model being recorded (an agent
 			// older than #755's header, or a selection that named no catalog
 			// id): the machine still gets named.
 			name:   "a named peer with no model recorded",
-			route:  routing(servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-rtx4000")),
 			health: "disabled", mesh: withPeer,
-			want: "waired: on Waired (peer sv-mag)",
+			want: "waired: on Waired (peer rtx4000-linux)",
 		},
 		{
 			// Nothing has been served yet, so there is no name to give. The
@@ -159,14 +159,14 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// answered the last turn — a worker pin, or a peer row picked in
 			// `/model`. The footer used to decide the form from this
 			// computer's engine health, so it printed the peer's model in
-			// the local form: on sv-mag, whose only model is gpt-oss-20b,
-			// "on Waired (qwen3.6-35b-a3b)" for a turn a MacBook answered,
-			// while `waired claude status` named the peer from the same
-			// record.
+			// the local form: on the RTX PRO 4000 Linux host, whose only
+			// model is gpt-oss-20b, "on Waired (qwen3.6-35b-a3b)" for a turn
+			// a MacBook answered, while `waired claude status` named the peer
+			// from the same record.
 			name:   "a ready local engine does not make a peer's turn local",
-			route:  routing(servedByPeer("dev-mag"), withModel("qwen3-8b-instruct")),
+			route:  routing(servedByPeer("dev-rtx4000"), withModel("qwen3-8b-instruct")),
 			health: "ready", mesh: withPeer,
-			want: "waired: on Waired (peer sv-mag: qwen3-8b-instruct)",
+			want: "waired: on Waired (peer rtx4000-linux: qwen3-8b-instruct)",
 		},
 		{
 			// The same, on the branch where the name cannot be resolved:
@@ -181,9 +181,9 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// a serving peer is not "down" — it is doing exactly what it was
 			// set up to do.
 			name:   "an engine-less host with a peer is not down",
-			route:  routing(servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-rtx4000")),
 			health: "disabled", mesh: withPeer,
-			want: "waired: on Waired (peer sv-mag)",
+			want: "waired: on Waired (peer rtx4000-linux)",
 		},
 		{
 			name:   "nothing anywhere is what the red row is for",
@@ -206,9 +206,9 @@ func TestRenderStatusline_PeersAreATarget(t *testing.T) {
 			// off it — an engine-less host would have grown a permanent
 			// "model not loaded".
 			name:   "the residency clause does not follow a peer",
-			route:  routing(servedByPeer("dev-mag")),
+			route:  routing(servedByPeer("dev-rtx4000")),
 			health: "disabled", mesh: withPeer, resident: &no,
-			want: "waired: on Waired (peer sv-mag)",
+			want: "waired: on Waired (peer rtx4000-linux)",
 		},
 		{
 			// The same clause on the branch it IS about, so the row above
@@ -235,7 +235,7 @@ func TestMeshViewOf_NamesPeersLikeEverySurface(t *testing.T) {
 	snap := &inferencemesh.Snapshot{
 		Reachable: true,
 		Peers: []inferencemesh.PeerView{
-			{DeviceID: "dev-a", DeviceName: "sv-mag"},
+			{DeviceID: "dev-a", DeviceName: "rtx4000-linux"},
 			{DeviceID: "dev-b"}, // unnamed: falls back to its id
 			{DeviceID: "dev-c", DeviceName: "stranger-workstation",
 				Grant: &signer.PeerGrant{ID: "g1", Kind: "public", Role: "provider", Pseudonym: "guest-a7f3"}},
@@ -245,8 +245,8 @@ func TestMeshViewOf_NamesPeersLikeEverySurface(t *testing.T) {
 	if !v.known || !v.reachable {
 		t.Fatalf("view = %+v, want a known reachable mesh", v)
 	}
-	if got := v.peerName("dev-a"); got != "sv-mag" {
-		t.Errorf("peerName(dev-a) = %q, want sv-mag", got)
+	if got := v.peerName("dev-a"); got != "rtx4000-linux" {
+		t.Errorf("peerName(dev-a) = %q, want rtx4000-linux", got)
 	}
 	if got := v.peerName("dev-b"); got != "dev-b" {
 		t.Errorf("peerName(dev-b) = %q, want the device id it has no name for", got)
@@ -444,7 +444,7 @@ func TestFetchRouteAndHealth_ReadsTheMesh(t *testing.T) {
 		case meshSnapshotPath:
 			_ = json.NewEncoder(w).Encode(inferencemesh.Snapshot{
 				Reachable: true,
-				Peers:     []inferencemesh.PeerView{{DeviceID: "dev-mag", DeviceName: "sv-mag"}},
+				Peers:     []inferencemesh.PeerView{{DeviceID: "dev-rtx4000", DeviceName: "rtx4000-linux"}},
 			})
 		default:
 			http.NotFound(w, r)
@@ -462,8 +462,8 @@ func TestFetchRouteAndHealth_ReadsTheMesh(t *testing.T) {
 	if !mesh.known || !mesh.reachable {
 		t.Fatalf("mesh = %+v, want a known reachable mesh", mesh)
 	}
-	if got := mesh.peerName("dev-mag"); got != "sv-mag" {
-		t.Errorf("peerName = %q, want sv-mag", got)
+	if got := mesh.peerName("dev-rtx4000"); got != "rtx4000-linux" {
+		t.Errorf("peerName = %q, want rtx4000-linux", got)
 	}
 }
 

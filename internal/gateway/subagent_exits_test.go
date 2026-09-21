@@ -58,14 +58,14 @@ func TestFailClosedMessage_CarriesTheClassExits(t *testing.T) {
 // what a subagent leg cut at 20 s told the reader on real hardware
 // (waired-agent#1303, S7).
 func TestPreCommitAbortMessage_StillBusy(t *testing.T) {
-	got := preCommitAbortMessage("peer sv-xps15", LocalErrorPeerStillBusy, 100*time.Second)
+	got := preCommitAbortMessage("peer rtx4070-laptop", LocalErrorPeerStillBusy, 100*time.Second)
 	if !strings.Contains(got, "busy") {
 		t.Errorf("message = %q, want it to say the computer is busy", got)
 	}
 	if strings.Contains(got, "produced no response") {
 		t.Errorf("message = %q, still gives the old account of a working peer", got)
 	}
-	if !strings.Contains(got, "sv-xps15") {
+	if !strings.Contains(got, "rtx4070-laptop") {
 		t.Errorf("message = %q, want it to name the computer", got)
 	}
 	// The other three arms are unchanged.

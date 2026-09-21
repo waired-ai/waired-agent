@@ -20,7 +20,7 @@ Accepted
 許容するかの判断が要る」を明示的に未決として残している。
 
 rc10 のオーナーレビュー (waired#1223 / waired-agent#835) で、その未決部分が
-実害として出た。macOS の M5 Pro / 48 GiB (`pc-mbp14-m5`) の実測 (2026-08-19):
+実害として出た。macOS の M5 Pro / 48 GiB (MacBook Pro) の実測 (2026-08-19):
 
 | 出所 | 値 |
 |---|---|
@@ -84,6 +84,6 @@ fit 判定は「入らない → 入る」の一方向にしか動かない。**
 - CLI の文言と `docs-site` のリファレンスから「インストール時に測り、次の
   インストールまで固定」という記述が消える。
 - 既存ホストは agent 更新後の最初のクリーンな起動で自動的に追いつく。
-  `pc-mbp14-m5` は 23 → 33 GB に上がる見込み。
+  48 GB の M5 Pro MacBook Pro は 23 → 33 GB に上がる見込み。
 
 Refs waired-ai/waired-agent#835 / waired-ai/waired#1223 / waired-ai/waired#1227

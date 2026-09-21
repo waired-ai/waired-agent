@@ -611,7 +611,7 @@ func observeRunnerFlags(t ollamaTuning, listProcs runnerProcLister) (proclist.Ru
 	//     — left argv[0] as a fragment and nothing matched. proclist now
 	//     rebuilds it from the path the OS reports separately.
 	//   - the runner has to belong to a LIVE engine. Measured on
-	//     sv-macmini: a runner orphaned fourteen hours earlier still
+	//     the M4 Mac mini: a runner orphaned fourteen hours earlier still
 	//     carried the same window and -np as the real one, so the
 	//     unique-match test below saw two and abstained — and the host
 	//     recorded no observation at all.

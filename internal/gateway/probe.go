@@ -423,7 +423,7 @@ func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
 		// device's own daemon restarted, its probes to EVERY peer went
 		// unanswered while the mesh snapshot still listed all three as
 		// reachable. A pinned turn was refused at 2.0 s with "the computer
-		// this turn is pinned to, sv-macmini.local-1, is not answering" —
+		// this turn is pinned to, m4-mac-mini.local-1, is not answering" —
 		// a statement about a peer, produced by this computer's own
 		// overlay not being ready yet. Once the pin is exempted the same
 		// round reports what actually happened: no peer answered its

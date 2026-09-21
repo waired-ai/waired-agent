@@ -255,13 +255,13 @@ func TestWarnModelDoesNotFit_Breakdown(t *testing.T) {
 // gigabytes of a coding session off the graphics card, and the surfaces
 // say so before the download rather than after it.
 //
-// The figures are the rc8 Windows host's own (sv-xps15, RTX 4070 Laptop):
+// The figures are the rc8 Windows host's own (RTX 4070 Laptop GPU):
 // qwen3.5-9b needed 10719 MB to serve the coding window against an
 // 8188 MB budget, was marked "fits · recommended", and measured 5 tok/s
 // once 6.6 GB had been fetched. qwen3.5-4b needed 7539 MB on the same
 // host — it fits on the card, and it is where the benchmark ended up.
 func TestContextCacheSpill(t *testing.T) {
-	const xps15Budget = 8188
+	const rtx4070LaptopBudget = 8188
 	for _, tc := range []struct {
 		name string
 		host catalogDetailHost
@@ -269,12 +269,12 @@ func TestContextCacheSpill(t *testing.T) {
 		want int
 	}{{
 		name: "recommended model that spills (the #632 row)",
-		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: xps15Budget},
+		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: rtx4070LaptopBudget},
 		fit:  &catalogDetailFit{Runnable: true, RequiredWindowResidentMB: 10719},
 		want: 2531,
 	}, {
 		name: "the model the benchmark switched to",
-		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: xps15Budget},
+		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: rtx4070LaptopBudget},
 		fit:  &catalogDetailFit{Runnable: true, RequiredWindowResidentMB: 7539},
 	}, {
 		// No card is not a small card. "0 GB spills" would be true and
@@ -285,11 +285,11 @@ func TestContextCacheSpill(t *testing.T) {
 		fit:  &catalogDetailFit{Runnable: true, RequiredWindowResidentMB: 10719},
 	}, {
 		name: "variant the projection could not price",
-		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: xps15Budget},
+		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: rtx4070LaptopBudget},
 		fit:  &catalogDetailFit{Runnable: true},
 	}, {
 		name: "row with no projection at all",
-		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: xps15Budget},
+		host: catalogDetailHost{RAMTotalGB: 32, GPUBudgetMB: rtx4070LaptopBudget},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := contextCacheSpillMB(tc.host, tc.fit); got != tc.want {

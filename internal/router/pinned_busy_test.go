@@ -106,13 +106,13 @@ func TestSelectK_UnpinnedAndSaturatedStaysGeneric(t *testing.T) {
 // (2026-09-12: keep the 503 and the retry, fix the sentence), not on these
 // words. The user-facing copy is quoted in docs-site and moves with it.
 func TestPinnedPeerBusyError_Wording(t *testing.T) {
-	withSlots := &PinnedPeerBusyError{PeerName: "sv-macmini", PeerDisplayID: "dev_x", CapacityUsed: 1, CapacityTotal: 1}
-	if got := withSlots.Error(); !strings.Contains(got, "sv-macmini") || !strings.Contains(got, "1 of 1") {
+	withSlots := &PinnedPeerBusyError{PeerName: "m4-mac-mini", PeerDisplayID: "dev_x", CapacityUsed: 1, CapacityTotal: 1}
+	if got := withSlots.Error(); !strings.Contains(got, "m4-mac-mini") || !strings.Contains(got, "1 of 1") {
 		t.Errorf("Error() = %q, want the name and the slot count", got)
 	}
 	// A wait that ended before any probe reported figures says what it
 	// knows and no more, rather than printing "0 of 0".
-	noFigures := &PinnedPeerBusyError{PeerName: "sv-macmini", PeerDisplayID: "dev_x"}
+	noFigures := &PinnedPeerBusyError{PeerName: "m4-mac-mini", PeerDisplayID: "dev_x"}
 	if got := noFigures.Error(); strings.Contains(got, "0 of 0") {
 		t.Errorf("Error() = %q, want no slot count when none was read", got)
 	}

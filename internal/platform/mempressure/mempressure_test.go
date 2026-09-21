@@ -18,14 +18,14 @@ func TestLevelFrom(t *testing.T) {
 
 	// The three hosts, as they actually read.
 	const (
-		magTotal = 124000 // linux, idle
-		magAvail = 113548
-		macTotal = 16384 // macOS, idle, 3.28 GB already in swap
-		macAvail = 11468 // = total * kern.memorystatus_level(70) / 100
-		winTotal = 32440 // windows, 84% used - the busiest host measured
-		winAvail = 5072
-		refTotal = 130199 // the #1443 reference host
-		refAvail = 28809  // its worst moment across seven large loads
+		linuxTotal = 124000 // linux, idle
+		linuxAvail = 113548
+		macTotal   = 16384 // macOS, idle, 3.28 GB already in swap
+		macAvail   = 11468 // = total * kern.memorystatus_level(70) / 100
+		winTotal   = 32440 // windows, 84% used - the busiest host measured
+		winAvail   = 5072
+		refTotal   = 130199 // the #1443 reference host
+		refAvail   = 28809  // its worst moment across seven large loads
 	)
 
 	for _, tc := range []struct {
@@ -37,7 +37,7 @@ func TestLevelFrom(t *testing.T) {
 	}{
 		// ---- nothing wrong ----
 		{"linux: idle", "linux",
-			Facts{AvailMB: magAvail, TotalMB: magTotal, SwapOutMBPerSec: 0}, LevelNormal, false},
+			Facts{AvailMB: linuxAvail, TotalMB: linuxTotal, SwapOutMBPerSec: 0}, LevelNormal, false},
 		// CONTRACT: the reference host's WORST failing load must read Normal.
 		// It failed on the device with 28.8 GB of host memory to spare, and a
 		// guard that stopped it would stop loads this product has to serve.
@@ -79,30 +79,30 @@ func TestLevelFrom(t *testing.T) {
 		// CONTRACT: swap alone is never enough. Another program or the OS may
 		// swap hard while there is plenty of memory, and that is its business.
 		{"CONTRACT: linux, swapping hard with 113 GB free", "linux",
-			Facts{AvailMB: magAvail, TotalMB: magTotal, SwapOutMBPerSec: 640},
+			Facts{AvailMB: linuxAvail, TotalMB: linuxTotal, SwapOutMBPerSec: 640},
 			LevelNormal, false},
 
 		// ---- short, but not yet dangerous ----
 		{"linux: under the floor with no surge is a warning, not a stop", "linux",
-			Facts{AvailMB: 900, TotalMB: magTotal, SwapOutMBPerSec: 0}, LevelWarn, false},
+			Facts{AvailMB: 900, TotalMB: linuxTotal, SwapOutMBPerSec: 0}, LevelWarn, false},
 		{"windows: under the floor with a trickle is still a warning", "windows",
 			Facts{AvailMB: 800, TotalMB: winTotal, WindowsLowSignaled: 0, SwapOutMBPerSec: 4},
 			LevelWarn, false},
 		{"linux: some pressure, nothing fully stalled", "linux",
-			Facts{AvailMB: magAvail, TotalMB: magTotal, LinuxSomeAvg10: 4.0}, LevelWarn, false},
+			Facts{AvailMB: linuxAvail, TotalMB: linuxTotal, LinuxSomeAvg10: 4.0}, LevelWarn, false},
 		{"darwin: the advisory level, reached at 53% free", "darwin",
 			Facts{AvailMB: macAvail, TotalMB: macTotal, DarwinLevel: 2}, LevelWarn, false},
 
 		// ---- dangerous ----
 		{"nothing left AND swapping hard", "linux",
-			Facts{AvailMB: 700, TotalMB: magTotal, SwapOutMBPerSec: 640}, LevelCritical, false},
+			Facts{AvailMB: 700, TotalMB: linuxTotal, SwapOutMBPerSec: 640}, LevelCritical, false},
 		{"windows: nothing left AND swapping hard", "windows",
 			Facts{AvailMB: 500, TotalMB: winTotal, WindowsLowSignaled: 0, SwapOutMBPerSec: 64},
 			LevelCritical, false},
 		// The backstops: each OS's own word for "I am in trouble", which is
 		// enough on its own and is what catches a thrash too slow to surge.
 		{"linux: everything stalled on memory", "linux",
-			Facts{AvailMB: magAvail, TotalMB: magTotal, LinuxSomeAvg10: 8.51, LinuxFullAvg10: 8.51},
+			Facts{AvailMB: linuxAvail, TotalMB: linuxTotal, LinuxSomeAvg10: 8.51, LinuxFullAvg10: 8.51},
 			LevelCritical, false},
 		{"darwin: the critical level", "darwin",
 			Facts{AvailMB: macAvail, TotalMB: macTotal, DarwinLevel: 4}, LevelCritical, false},

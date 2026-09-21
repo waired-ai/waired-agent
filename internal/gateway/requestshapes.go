@@ -74,7 +74,7 @@ type EngineShape struct {
 //
 // The six rows and their measured outcomes are recorded verbatim in
 // docs/knowledges/20260827/1330-qwen38-on-a-24gb-card.md §1
-// (sv-mag, ollama 0.32.13, qwen3.8:27b-mtp-q4_K_M, 2026-08-27):
+// (the RTX PRO 4000 Linux host, ollama 0.32.13, qwen3.8:27b-mtp-q4_K_M, 2026-08-27):
 // rows 3, 4 and 5 answered 500 "system message must be at the
 // beginning" on that model, and qwen3.6-35b-a3b and qwen3.5-9b answered
 // 200 to all six on the same engine on the same day. That per-model

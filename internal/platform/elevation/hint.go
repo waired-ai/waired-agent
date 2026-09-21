@@ -42,7 +42,7 @@ func HintFor(goos, cmdline string) string {
 // command was promised — `waired runtimes install ollama (from an
 // elevated prompt)` inside backticks, and the tray copied that whole
 // string to the clipboard, so pasting it could only fail (#852,
-// observed on pc-dell-premium).
+// observed on the Intel Arc 140T laptop).
 //
 // Hint is the wrong shape here too: it phrases a RE-run of something
 // already attempted, which reads as repeating a step that never

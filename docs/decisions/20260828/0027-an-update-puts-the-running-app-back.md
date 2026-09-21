@@ -39,7 +39,7 @@ LaunchAgent plist を書き、`firstLaunchAutostartApplies` は darwin で true 
 2307 は当初、Windows について「POSIX シグナルの等価物はウィンドウメッセージで
 あり、`Stop-Tray` はまず `CloseMainWindow` で頼み、`Stop-Process -Force` を
 最後の砦に残す」と書いていた。**それは読んで書いたもので、測っておらず、誤り
-だった。** sv-evox2 (Windows 11、PowerShell 5.1、2026-08-27)、走っている rc4 の
+だった。** Strix Halo のホスト (Windows 11、PowerShell 5.1、2026-08-27)、走っている rc4 の
 実トレイに対する実測:
 
 ```
@@ -105,7 +105,7 @@ taskkill /IM waired-tray.exe     -> ERROR: ... could not be terminated.
    止め、サービス復帰後に `explorer.exe` 経由で開き直す。前に止めるのは、直後に
    開き直す以上スワップと競走させないためである。`Move-IntoInstallDir` に
    held image を退避させずに済むという副次効果もあるが、**それは機構ではない** —
-   sv-evox2 の実測 (2026-08-27) では動いているトレイに対しても置換が成功し、
+   Strix Halo のホストの実測 (2026-08-27) では動いているトレイに対しても置換が成功し、
    `.displaced-` は 1 つも残らなかった。版ずれを起こしていたのは単に
    「プロセスを誰も再起動しない」ことだった。この開き直しは、新規
    インストールの起動と違って意図的に `Test-InteractiveStdin` でゲートしない —
@@ -113,7 +113,7 @@ taskkill /IM waired-tray.exe     -> ERROR: ... could not be terminated.
    アップデートは昇格経由でコンソール無しにインストーラへ届くから、その
    ゲートは閉じたアプリを閉じたままにしてしまう。正しい質問は
    `Get-ConsoleUser` である。
-   同じ実機調査から出たガードがもう 1 つある: evox2 では **ssh ログインが
+   同じ実機調査から出たガードがもう 1 つある: Strix Halo のホストでは **ssh ログインが
    session 0、デスクトップが session 2** で、`Start-Process` は自セッションに
    しか届かない。つまり ssh から回したインストーラはアプリを見つけて止められ、
    戻せない — それは版ずれより悪い(次のサインインまでアイコンが消える)。

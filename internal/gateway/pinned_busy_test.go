@@ -95,7 +95,7 @@ func (p *pinnedCapacitySelector) Select(_ context.Context, r router.Request) (ro
 	p.calls = append(p.calls, r)
 	if len(p.calls) <= p.fullFor {
 		return router.Selection{}, &router.PinnedPeerBusyError{
-			PeerDisplayID: "peer-pin", PeerName: "sv-mag", CapacityUsed: 1, CapacityTotal: 1,
+			PeerDisplayID: "peer-pin", PeerName: "rtx4000-linux", CapacityUsed: 1, CapacityTotal: 1,
 		}
 	}
 	return p.sel, nil
@@ -105,7 +105,7 @@ func (p *pinnedCapacitySelector) SelectK(_ context.Context, r router.Request, _ 
 	p.calls = append(p.calls, r)
 	if len(p.calls) <= p.fullFor {
 		return nil, &router.PinnedPeerBusyError{
-			PeerDisplayID: "peer-pin", PeerName: "sv-mag", CapacityUsed: 1, CapacityTotal: 1,
+			PeerDisplayID: "peer-pin", PeerName: "rtx4000-linux", CapacityUsed: 1, CapacityTotal: 1,
 		}
 	}
 	c := router.NewLocalCandidate(p.sel)
@@ -157,14 +157,14 @@ func TestSelectAndProbe_PinnedBusyKeepsItsWordingAfterTheQueue(t *testing.T) {
 // TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp: a pin is not named
 // unreachable on the strength of a probe that learned nothing.
 //
-// Measured 2026-09-12 (waired-agent#1303): seconds after pc-mbp14-m5's own
-// daemon restarted, its probes to all three peers went unanswered while its
-// own mesh snapshot still listed every one of them reachable (sv-macmini at
-// rtt 53 ms). The pinned turn was refused at 2.0 s with "the computer this
-// turn is pinned to, sv-macmini.local-1, is not answering" — a claim about
-// the peer, caused by this computer. With the pin exempted the same round
-// says what happened: no peer answered its readiness probe from this
-// computer.
+// Measured 2026-09-12 (waired-agent#1303): seconds after the M5 Pro
+// MacBook's own daemon restarted, its probes to all three peers went
+// unanswered while its own mesh snapshot still listed every one of them
+// reachable (the M4 Mac mini at rtt 53 ms). The pinned turn was refused at
+// 2.0 s with "the computer this turn is pinned to, m4-mac-mini.local-1, is
+// not answering" — a claim about the peer, caused by this computer. With the
+// pin exempted the same round says what happened: no peer answered its
+// readiness probe from this computer.
 //
 // PRODUCT CONTRACT. The rule is the one
 // docs/decisions/20260906/0200-the-wait-reads-the-observer-the-mesh-already-has.md
@@ -180,7 +180,7 @@ func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
 
 	t.Run("the mesh says the engine is live: keep waiting", func(t *testing.T) {
 		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
-			return PeerFacts{Name: "sv-macmini", EngineLive: true, Known: true}
+			return PeerFacts{Name: "m4-mac-mini", EngineLive: true, Known: true}
 		}})
 		if err := h.pinnedProbeFailure(unanswered); err != nil {
 			t.Fatalf("err = %v, want nil — the mesh's own view contradicts \"not answering\"", err)
@@ -189,7 +189,7 @@ func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
 
 	t.Run("the mesh says the engine is not live: name it", func(t *testing.T) {
 		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
-			return PeerFacts{Name: "sv-macmini", EngineLive: false, Known: true}
+			return PeerFacts{Name: "m4-mac-mini", EngineLive: false, Known: true}
 		}})
 		err := h.pinnedProbeFailure(unanswered)
 		var pin *router.PinnedPeerUnreachableError
@@ -216,7 +216,7 @@ func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
 		// sentence now: not "is not answering", but the reason, as a wait
 		// (waired-agent#1369).
 		h := NewHandlerSet(Deps{PeerFacts: func(string) PeerFacts {
-			return PeerFacts{Name: "sv-macmini", EngineLive: true, Known: true}
+			return PeerFacts{Name: "m4-mac-mini", EngineLive: true, Known: true}
 		}})
 		answered := probedSelection{
 			cands: []router.Candidate{pinned},
@@ -230,7 +230,7 @@ func TestPinnedProbeFailure_UnansweredButTheMeshSaysItIsUp(t *testing.T) {
 		if e == nil {
 			t.Fatalf("err = %v, want the not-ready pin error", err)
 		}
-		if !strings.Contains(err.Error(), `(tried "sv-macmini": engine not ready)`) {
+		if !strings.Contains(err.Error(), `(tried "m4-mac-mini": engine not ready)`) {
 			t.Errorf("err = %v, want it to name the computer and the reason", err)
 		}
 	})

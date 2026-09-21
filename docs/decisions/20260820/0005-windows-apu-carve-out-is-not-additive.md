@@ -21,7 +21,7 @@ Context §1 は「Strix Halo は報告 RAM がカーブアウト控除後なの�
 
 ## Context
 
-`sv-evox2` 相当のホスト (Ryzen AI Max+ 395 / 128 GB) で、AMD Variable
+Strix Halo の Windows ホストに相当するホスト (Ryzen AI Max+ 395 / 128 GB) で、AMD Variable
 Graphics Memory の値だけを変えて同じモデル (`qwen3.5-122b-a10b` q4、
 76.3 GB) を同じエンジンでロードした
 (waired-ai/waired-agent#863)。

@@ -114,7 +114,7 @@ Windows の `AvailPhys` とは意味が違う (jetsam の会計であって、�
 |---|---|---|
 | Linux 124 GB | normal 90 / warn 0 / critical 0(最低空き 113,525 MB) | 107,520 MB 確保時に critical、977 MB/s、82 秒。**PSI 側で先に発火** |
 | macOS 16 GB | normal 90 / warn 0 / critical 0(最低空き 11,468 MB) | 10,752 MB 確保時に critical、68.5 MB/s、26 秒 |
-| Windows 31.7 GB (xps15) | normal 90 / warn 0 / critical 0(最低空き 5,050 MB) | Device Guard に拒否され未実施 (§9) |
+| Windows 31.7 GB (RTX 4070 Laptop のノート) | normal 90 / warn 0 / critical 0(最低空き 5,050 MB) | Device Guard に拒否され未実施 (§9) |
 | Windows 127 GiB (参照機) | normal 90 / warn 0 / critical 0(最低空き 61,236 MB) | 59,392 MB 確保時に critical、45 秒 |
 
 3 OS とも、平常運転では 1 度も止めず、本当に使い切ったときは止める。
@@ -130,14 +130,14 @@ Windows の `AvailPhys` とは意味が違う (jetsam の会計であって、�
 ### 9. 補足: Windows の低メモリ通知は多少スケールする
 
 参照機 (127 GiB) では、空き **2,766 MB では鳴らず、1,740 MB で鳴った**。
-xps15 (31.7 GiB) の 887 MB と比べると、完全な固定値ではなく RAM に応じて
+RTX 4070 Laptop のノート (31.7 GiB) の 887 MB と比べると、完全な固定値ではなく RAM に応じて
 多少は動くらしい。ただしどちらも RAM の 3%(参照機で 3,905 MB)よりずっと
 下なので、**大容量機では遅すぎる**という §2 の結論は変わらない。割合の項
 を足した判断はそのままでよい。
 
-### 10. Windows: xps15 では Device Guard でテストバイナリが走らない
+### 10. Windows: RTX 4070 Laptop のノートでは Device Guard でテストバイナリが走らない
 
-sv-xps15 では `press.exe` (テストバイナリ) は 1 回目は走ったが、その後
+RTX 4070 Laptop のノートでは `press.exe` (テストバイナリ) は 1 回目は走ったが、その後
 「アプリケーション制御ポリシーによってこのファイルがブロックされました」
 で実行できなくなった。この fleet は WDAC が効いている
 (`internal/platform/appcontrol` が CodeIntegrity のログを読む機能を
@@ -150,7 +150,7 @@ sv-xps15 では `press.exe` (テストバイナリ) は 1 回目は走ったが�
 - 判断は実測値を使ったテーブルテストで固定してある。
 - 低メモリ通知の発火点 (空き 887 MB) はこのホストで測った。
 
-**参照機 (sv-evox2) では同じバイナリがそのまま走った**ので、Windows の
+**参照機 (Strix Halo のホスト) では同じバイナリがそのまま走った**ので、Windows の
 通しはそちらで取れている (§8)。ポリシーはホストごとに違う。
 
 ### 9. 測るときの注意

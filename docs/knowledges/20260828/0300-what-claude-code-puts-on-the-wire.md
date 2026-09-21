@@ -5,7 +5,7 @@
 waired-agent#1036 / #1037（親 waired-ai/waired#1283 レーン L81）の設計判断を、推測ではなく
 実測で決めるために採った。計測環境:
 
-- ホスト sv-evox2（Windows、edge `0.0.3-edge.20260827153153+4117821`、ollama qwen3.5-122b-a10b）
+- Strix Halo のホスト（Windows、edge `0.0.3-edge.20260827153153+4117821`、ollama qwen3.5-122b-a10b）
 - Claude Code **2.1.245**。`waired claude route` は `main: anthropic`（既存設定、変えていない）
 - ワイヤ捕捉は `waired` リポの `scripts/dev/coding-agent-verify/capture_proxy.py` を
   `127.0.0.1:9482` に置き、managed settings の `ANTHROPIC_BASE_URL` を一時的にそこへ向けた。

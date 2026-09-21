@@ -51,7 +51,7 @@ type ProcInfo struct {
 	// ollama exits the runner is reparented and keeps running with the
 	// window and the -np of a model nobody is serving any more.
 	//
-	// Measured on sv-macmini (2026-09-12): a runner orphaned fourteen hours
+	// Measured on the M4 Mac mini (2026-09-12): a runner orphaned fourteen hours
 	// earlier still carried `-c 200704 -np 1`, matched the live tuning
 	// exactly as the real runner did, and made the unique-match test
 	// abstain — so the host recorded no observation at all and went on

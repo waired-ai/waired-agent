@@ -90,7 +90,7 @@ type PinnedPeerDeclinedError struct {
 
 func (e *PinnedPeerDeclinedError) Error() string {
 	// Worded like the pin's unreachable refusal ("The computer this turn is
-	// pinned to, sv-mag, is not answering"), which is also what keeps a
+	// pinned to, rtx4000-linux, is not answering"), which is also what keeps a
 	// computer's name from being capitalised by the Claude surface's
 	// sentence-casing.
 	who := e.PeerName
