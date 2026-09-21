@@ -137,6 +137,52 @@ func TestCompareEngineDiscovery(t *testing.T) {
 	}
 }
 
+// The engine's real output from three hosts (the fixtures' first lines say
+// which), read by the real parser and compared with what waired predicted
+// there. These are records of 2026-09-21's behaviour on those hosts.
+func TestCompareEngineDiscovery_RealLogs(t *testing.T) {
+	strix := hardware.GPU{Vendor: "amd", Model: "AMD Radeon(TM) 8060S Graphics", GFXTarget: "gfx1151",
+		Integrated: true, IntegratedKnown: true}
+	m4 := hardware.GPU{Vendor: "apple", Model: "Apple M4"}
+	for _, tc := range []struct {
+		fixture string
+		goos    string
+		pred    enginePrediction
+		wants   []string
+	}{
+		{"cuda-rtx-pro-4000.log", "linux", enginePrediction{
+			gpus:     []hardware.GPU{{Vendor: "nvidia", Model: "NVIDIA RTX PRO 4000 Blackwell", ComputeCap: "12.0"}},
+			setAside: []hardware.UnusedGPU{{GPU: hardware.GPU{Vendor: "amd", Model: "AMD GPU 1002:13c0", Integrated: true, IntegratedKnown: true}}},
+		}, nil},
+		{"vulkan-strix-halo.log", "windows", enginePrediction{gpus: []hardware.GPU{strix}, igpuEnable: "1"}, nil},
+		{"metal-apple-m4.log", "darwin", enginePrediction{gpus: []hardware.GPU{m4}}, nil},
+		// The engine's own discovery timed out, so it kept no GPU although
+		// the machine has one: a true difference, and the report says why.
+		{"metal-discovery-timeout.log", "darwin", enginePrediction{gpus: []hardware.GPU{m4}},
+			[]string{"the engine uses 0 apple GPU(s); waired expected 1"}},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			b, err := os.ReadFile(filepath.Join("..", "..", "internal", "runtime", "testdata", "ollama", "discovery", tc.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := infruntime.ParseInferenceCompute(string(b))
+			if !ok {
+				t.Fatal("the fixture's block was not read")
+			}
+			diffs := compareEngineDiscovery(tc.goos, tc.pred, got)
+			if len(diffs) != len(tc.wants) {
+				t.Fatalf("differences = %q, want %q", diffs, tc.wants)
+			}
+			for i, w := range tc.wants {
+				if !strings.Contains(diffs[i], w) {
+					t.Errorf("difference %d = %q, want it to contain %q", i, diffs[i], w)
+				}
+			}
+		})
+	}
+}
+
 func TestIGPUEnableFor(t *testing.T) {
 	env := func(v string) func(string) string { return func(string) string { return v } }
 	if got := igpuEnableFor([]string{"OLLAMA_IGPU_ENABLE=1"}, env("0")); got != "1" {
@@ -179,5 +225,16 @@ func TestReportEngineDiscovery(t *testing.T) {
 	if out := run(t, enginePrediction{}); !strings.Contains(out, "level=WARN") ||
 		!strings.Contains(out, "the engine uses 1 nvidia GPU(s); waired expected 0") {
 		t.Errorf("difference logged %q", out)
+	}
+
+	// A discovery that did not finish is named in the WARN: the reader can
+	// tell "the engine looked and found nothing" from "it gave up looking".
+	fixture, err = os.ReadFile(filepath.Join("..", "..", "internal", "runtime", "testdata", "ollama", "discovery", "metal-discovery-timeout.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := run(t, enginePrediction{gpus: []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}}}); !strings.Contains(out, "level=WARN") ||
+		!strings.Contains(out, `engine_discovery_error="context deadline exceeded"`) {
+		t.Errorf("a timed-out discovery logged %q", out)
 	}
 }

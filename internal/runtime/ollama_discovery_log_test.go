@@ -41,6 +41,38 @@ func TestParseInferenceCompute(t *testing.T) {
 		}
 	})
 
+	t.Run("Vulkan iGPU", func(t *testing.T) {
+		got, ok := ParseInferenceCompute(readDiscoveryFixture(t, "vulkan-strix-halo.log"))
+		if !ok || len(got.Devices) != 1 || got.DiscoveryError != "" {
+			t.Fatalf("= %+v, %v; want one device", got, ok)
+		}
+		if d := got.Devices[0]; d.Library != "Vulkan" || d.Description != "AMD Radeon(TM) 8060S Graphics" ||
+			d.Type != "iGPU" || d.Total != "102.2 GiB" {
+			t.Errorf("device = %+v", d)
+		}
+	})
+	t.Run("Metal", func(t *testing.T) {
+		got, ok := ParseInferenceCompute(readDiscoveryFixture(t, "metal-apple-m4.log"))
+		if !ok || len(got.Devices) != 1 || got.DiscoveryError != "" {
+			t.Fatalf("= %+v, %v; want one device", got, ok)
+		}
+		if d := got.Devices[0]; d.Library != "Metal" || d.Compute != "0.0" || d.Description != "Apple M4" ||
+			d.Type != "iGPU" || d.Total != "11.8 GiB" {
+			t.Errorf("device = %+v", d)
+		}
+	})
+	// The engine's discovery gave up (its watchdog fired) and it kept no
+	// GPU on a machine that has one.
+	t.Run("a discovery that timed out", func(t *testing.T) {
+		got, ok := ParseInferenceCompute(readDiscoveryFixture(t, "metal-discovery-timeout.log"))
+		if !ok || !got.CPUOnly || len(got.Devices) != 0 {
+			t.Fatalf("= %+v, %v; want CPU only", got, ok)
+		}
+		if got.DiscoveryError != "context deadline exceeded" {
+			t.Errorf("DiscoveryError = %q, want the engine's own error", got.DiscoveryError)
+		}
+	})
+
 	listening := `time=2026-09-21T00:00:00.000Z level=INFO source=routes.go:2000 msg="Listening on 127.0.0.1:9475 (version 0.34.2)"` + "\n"
 	end := `time=2026-09-21T00:00:01.000Z level=INFO source=routes.go:2050 msg="vram-based default context" total_vram="0 B" default_num_ctx=4096` + "\n"
 	// Synthetic, from discover/types.go LogDetails and discover/runner.go.

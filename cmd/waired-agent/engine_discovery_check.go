@@ -251,9 +251,14 @@ func (p *agentInferenceProvider) reportEngineDiscovery() {
 		engine = []string{"cpu"}
 	}
 	if diffs := compareEngineDiscovery(runtime.GOOS, pred, got); len(diffs) > 0 {
-		p.logger.Warn("the engine's GPU discovery differs from waired's prediction",
-			"differences", diffs, "engine", engine, "engine_dropped", describeEngineDevices(got.Dropped),
-			"predicted", predicted, "set_aside", setAside, "igpu_enable", pred.igpuEnable)
+		args := []any{"differences", diffs, "engine", engine, "engine_dropped", describeEngineDevices(got.Dropped),
+			"predicted", predicted, "set_aside", setAside, "igpu_enable", pred.igpuEnable}
+		// Whether the engine looked and found nothing, or did not finish
+		// looking: the second is gone at the next start.
+		if got.DiscoveryError != "" {
+			args = append(args, "engine_discovery_error", got.DiscoveryError)
+		}
+		p.logger.Warn("the engine's GPU discovery differs from waired's prediction", args...)
 		return
 	}
 	p.logger.Info("the engine's GPU discovery matches waired's prediction",

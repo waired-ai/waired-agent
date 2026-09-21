@@ -14,7 +14,9 @@ import (
 // `msg="inference compute"` line per device it kept (discover/types.go
 // LogDetails) — or a single `library=cpu` line when it kept none — then
 // `msg="vram-based default context"`. Integrated GPUs it set aside are each
-// logged as `msg="dropping integrated GPU; …"` (discover/runner.go). By the
+// logged as `msg="dropping integrated GPU; …"` (discover/runner.go), and a
+// discovery that failed as `msg="failure during llama-server GPU discovery"`
+// with its error (discover/runner.go). By the
 // time the readiness poll passes, the block is in engine.log, which keeps
 // its start when it reaches its cap. The output reaches the file through a
 // pipe, so the block can still be a line short when it is read: without the
@@ -40,6 +42,13 @@ type EngineDiscovery struct {
 	CPUOnly bool
 	// Dropped is the integrated GPUs it set aside.
 	Dropped []EngineDevice
+	// DiscoveryError is the error of the engine's own GPU discovery when
+	// that failed ("context deadline exceeded" when its watchdog fired).
+	// A failed discovery keeps no GPU, so the block then reads CPU only
+	// whatever the machine has: on a Mac, the first start after the bundled
+	// engine moved to a new version did this, and the model it loaded next
+	// ran on Metal all the same.
+	DiscoveryError string
 }
 
 // ParseInferenceCompute reads the device block of the last engine start in
@@ -65,6 +74,10 @@ func ParseInferenceCompute(head string) (EngineDiscovery, bool) {
 			out.Devices = append(out.Devices, d)
 		case "dropping integrated GPU; to enable, set OLLAMA_IGPU_ENABLE=1":
 			out.Dropped = append(out.Dropped, engineDeviceFrom(kv))
+		case "failure during llama-server GPU discovery":
+			if out.DiscoveryError == "" {
+				out.DiscoveryError = kv["error"]
+			}
 		case "vram-based default context":
 			complete = true
 		}

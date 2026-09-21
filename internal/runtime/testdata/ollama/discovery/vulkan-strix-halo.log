@@ -1,0 +1,5 @@
+# provenance: verbatim from ollama 0.34.2's engine.log on a Windows host with an AMD Ryzen AI Max+ 395 (Radeon 8060S iGPU, gfx1151), 2026-09-21, the first start after the bundled engine moved from 0.33.3 to 0.34.2, with the Vulkan backend waired selects there. Line ends are LF here; the lines were read through PowerShell. Nothing else is synthetic.
+time=2026-09-21T21:38:24.737+09:00 level=INFO source=routes.go:2000 msg="Listening on 127.0.0.1:9475 (version 0.34.2)"
+time=2026-09-21T21:38:24.739+09:00 level=INFO source=runner.go:60 msg="discovering available GPUs..."
+time=2026-09-21T21:38:26.330+09:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=Vulkan compute=0.0 name=Vulkan0 description="AMD Radeon(TM) 8060S Graphics" libdirs=ollama,vulkan driver=0.0 pci_id="" type=iGPU total="102.2 GiB" available="97.1 GiB"
+time=2026-09-21T21:38:26.330+09:00 level=INFO source=routes.go:2050 msg="vram-based default context" total_vram="102.2 GiB" default_num_ctx=262144
