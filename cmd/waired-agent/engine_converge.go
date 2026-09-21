@@ -35,9 +35,10 @@ import (
 // daemon start, so holding the first start costs one `--version` on a
 // host already at the pin and the download on one that is not — an
 // engine off the pin was not going to serve what this build claims
-// anyway. vLLM reaches the same place by a different route: its install
-// builds a new versioned venv and swaps a symlink at the end, so the venv
-// in use is never edited at all.
+// anyway. vLLM builds its new venv in a directory of its own and swaps a
+// symlink, so the venv a running engine was started from is neither
+// edited nor removed; the daemon reclaims it once nothing uses it
+// (vllmVenvKeeper, waired-agent#1431).
 //
 // engineConvergeTimeout is a backstop, not the working bound: the download
 // itself is bounded by download.Fetch's no-progress watchdog (#189), the
@@ -88,13 +89,6 @@ func convergeVLLMVenv(ctx context.Context, logger *slog.Logger, deps infruntime.
 	default:
 		logger.Debug("vLLM venv needs no converge", "reason", decision.Reason)
 	}
-	if len(decision.Pruned) > 0 {
-		logger.Info("removed the superseded vLLM venv(s)", "versions", decision.Pruned)
-	}
-	if decision.PruneErr != nil {
-		logger.Warn("could not remove a superseded vLLM venv; it is unused but still on disk",
-			"err", decision.PruneErr)
-	}
 }
 
 // startEngineConverge kicks the converge off in the background, once per
@@ -113,7 +107,11 @@ func convergeVLLMVenv(ctx context.Context, logger *slog.Logger, deps infruntime.
 // ended; the ollama adapter's StartGate waits on it (engineStartGate).
 // wantROCmOverlay is setup.OllamaROCmOverlayWanted for this host — the
 // answer the CLI's install gives too (#1511).
-func startEngineConverge(logger *slog.Logger, stateDir string, wantROCmOverlay bool) <-chan struct{} {
+//
+// After the vLLM pass it reclaims the venvs nothing uses. That covers a
+// host whose vLLM venv is not the engine it runs, which no engine start
+// would otherwise reclaim for; a venv the engine is running from is kept.
+func startEngineConverge(logger *slog.Logger, stateDir string, wantROCmOverlay bool, vllmVenvs *vllmVenvKeeper) <-chan struct{} {
 	vllmBase := filepath.Join(stateDir, "runtimes", "vllm")
 	vllmDeps := infruntime.NewVLLMConvergeDeps(vllmBase, func() int64 {
 		free, err := hardware.FreeDiskBytes(vllmBase)
@@ -142,6 +140,7 @@ func startEngineConverge(logger *slog.Logger, stateDir string, wantROCmOverlay b
 		convergeBundledEngine(ctx, logger, deps)
 		close(ollamaDone)
 		convergeVLLMVenv(ctx, logger, vllmDeps)
+		vllmVenvs.reclaim(ctx, logger)
 	}()
 	return ollamaDone
 }

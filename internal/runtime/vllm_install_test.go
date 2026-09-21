@@ -496,7 +496,7 @@ func TestVLLMInstall_Uninstall(t *testing.T) {
 	if _, ok := inst.Active(); !ok {
 		t.Fatalf("expected Active=true after Install")
 	}
-	if err := inst.Uninstall(context.Background(), "0.11.0"); err != nil {
+	if err := inst.Uninstall(context.Background(), "0.11.0"); err != nil { // the directory name
 		t.Fatalf("Uninstall: %v", err)
 	}
 	if _, ok := inst.Active(); ok {

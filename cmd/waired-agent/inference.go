@@ -527,9 +527,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// Started once the profiler exists, because the ollama pass needs the
 	// host's ROCm-overlay answer (waired-ai/waired-agent#1511); still ahead
 	// of everything that can fail this function, so a host whose engine
-	// choice errors below is still converged.
+	// choice errors below is still converged. The vLLM pass reclaims unused
+	// venvs through the keeper the provider shares (waired-agent#1431).
+	vllmVenvs := newVLLMVenvKeeper(stateDir)
 	ollamaConverged := startEngineConverge(logger, stateDir,
-		setup.OllamaROCmOverlayWanted(runtime.GOOS, profiler.Profile(ctx), os.Getenv("WAIRED_OLLAMA_GPU_MODE")))
+		setup.OllamaROCmOverlayWanted(runtime.GOOS, profiler.Profile(ctx), os.Getenv("WAIRED_OLLAMA_GPU_MODE")),
+		vllmVenvs)
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
@@ -756,6 +759,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		notices:         deps.Notices,
 		stateDir:        stateDir,
 		ollamaModelsDir: bundledOllamaModels,
+		vllmVenvs:       vllmVenvs,
 		preferencePath:  deps.PreferencePath,
 		dlProgress:      newDownloadProgress(),
 		ollamaUsable:    func() bool { _, e := ollamaResolver(); return e == nil },
@@ -1380,6 +1384,19 @@ type agentInferenceProvider struct {
 	ollamaModelsDir string
 	engine          atomic.Pointer[string]
 	vllm            atomic.Pointer[infruntime.Adapter]
+	// vllmVenvs knows which vLLM venvs this daemon uses and reclaims the
+	// rest (waired-agent#1431); shared with the start-up converge. Reach
+	// it through vllmVenvKeeper, which builds one for a provider a test
+	// constructs without it.
+	vllmVenvs     *vllmVenvKeeper
+	vllmVenvsOnce sync.Once
+	// vllmHeld* is the venv the registered vLLM adapter spawns from, held
+	// for as long as that adapter is the registered one: every respawn it
+	// makes — its own retries, the gateway's EnsureRunning — reuses the
+	// interpreter path it was built with (holdVLLMVenvForAdapter).
+	vllmHeldMu      sync.Mutex
+	vllmHeldDir     string
+	vllmHeldRelease func()
 	// vllmParked is the operator's hard engine-power latch for the vLLM
 	// engine (#881). Reach it through setVLLMParked / vllmIsParked; see
 	// engine_power.go for why it lives here rather than on the adapter, the
@@ -3792,6 +3809,13 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 	case "vllm":
 		if hwProfile.Engines.VLLM.Installed {
 			entry.Version = hwProfile.Engines.VLLM.Version
+		}
+		// The release the running engine was started from, which is not
+		// the installed one between a converge and the next engine start
+		// (waired-agent#1431): the new venv takes effect then, and the old
+		// one is kept until it does. Printed as live= beside the pin.
+		if p.vllmAdapter() != nil {
+			entry.LiveVersion = p.vllmAdapterVenvVersion()
 		}
 		// #843: ollama parity for the pin. Until the converge shipped
 		// there was nothing to report — a venv could sit several

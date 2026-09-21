@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -17,13 +18,21 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 	origInstall := vllmInstall
 	t.Cleanup(func() { vllmInstall = origInstall })
 	var gotBaseDir string
-	gotRecreate := false
 	called := false
-	vllmInstall = func(_ context.Context, baseDir string, recreate bool, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	var events []string
+	vllmInstall = func(_ context.Context, baseDir string, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		called = true
 		gotBaseDir = baseDir
-		gotRecreate = recreate
+		events = append(events, "install")
 		return infruntime.InstallResult{Version: "0.11.0", VenvPath: filepath.Join(baseDir, "0.11.0", ".venv")}, nil
+	}
+	origLock := vllmLock
+	t.Cleanup(func() { vllmLock = origLock })
+	var lockedDir string
+	vllmLock = func(_ context.Context, baseDir string, _ func()) (func(), error) {
+		lockedDir = baseDir
+		events = append(events, "lock")
+		return func() { events = append(events, "unlock") }, nil
 	}
 
 	origFix := fixStateOwnership
@@ -42,16 +51,14 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 	if !called {
 		t.Fatal("vllmInstall seam was not invoked")
 	}
-	// The explicit verb answers "put a clean environment here", so it
-	// recreates. The converge answers "make what is here match" and does
-	// not — it may be running while the host serves, and clearing the
-	// environment out from under it is what destroyed a working venv on a
-	// real host before #843 separated the two.
-	if !gotRecreate {
-		t.Error("`runtimes install vllm` did not ask for a clean environment")
+	// The build runs under the vLLM base's lock, taken once: the daemon's
+	// converge and its reclaim of unused venvs take the same one
+	// (waired-agent#1431).
+	if want := filepath.Join("/var/lib/waired", "runtimes", "vllm"); gotBaseDir != want || lockedDir != want {
+		t.Errorf("install baseDir = %q, lock dir = %q; want both %q", gotBaseDir, lockedDir, want)
 	}
-	if want := filepath.Join("/var/lib/waired", "runtimes", "vllm"); gotBaseDir != want {
-		t.Errorf("install baseDir = %q, want %q", gotBaseDir, want)
+	if got := strings.Join(events, ","); got != "lock,install,unlock" {
+		t.Errorf("events = %s, want lock,install,unlock", got)
 	}
 	// The whole state dir (not just runtimes/vllm) is handed back, so a
 	// root-run install can't leave the daemon locked out of its identity.
@@ -75,7 +82,7 @@ func TestInstallVLLM_StateDirAndHandoff(t *testing.T) {
 func TestInstallVLLM_Error(t *testing.T) {
 	origInstall := vllmInstall
 	t.Cleanup(func() { vllmInstall = origInstall })
-	vllmInstall = func(context.Context, string, bool, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	vllmInstall = func(context.Context, string, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		return infruntime.InstallResult{}, errors.New("uv venv failed")
 	}
 

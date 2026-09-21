@@ -63,10 +63,14 @@ const vllmProbeStartTimeout = 15 * time.Minute
 // must route to it, nothing must report it as this host's engine, and
 // stopping it must not look like the serving engine going down.
 func (p *agentInferenceProvider) measureHostCutoffVLLM(ctx context.Context, variant catalog.Variant, onWeightsReady func()) (hostCutoffMeasurement, error) {
-	puller, python, err := p.vllmServingDeps()
+	// Held for the whole probe: its download and its engine both run from
+	// this venv (waired-agent#1431).
+	puller, venv, release, err := p.vllmServingDeps()
+	defer release()
 	if err != nil {
 		return hostCutoffMeasurement{}, fmt.Errorf("probe engine unavailable: %w", err)
 	}
+	python := filepath.Join(venv.BinDir, "python")
 
 	// Claimed BEFORE the download, not before the spawn. The download is
 	// the minutes-long part and it is exactly when the operator is reading

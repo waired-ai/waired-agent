@@ -74,20 +74,20 @@ func resolveVenvHFCLI(binDir string) string {
 }
 
 // vllmServingDeps resolves the venv the operator installed and returns an
-// HFPuller wired to its CLI plus the venv's python interpreter. err is
-// non-nil when the venv isn't active (the operator opted into vLLM but never
-// ran `waired runtimes install vllm`, or it landed under the wrong home; cf.
-// #525).
-func (p *agentInferenceProvider) vllmServingDeps() (*download.HFPuller, string, error) {
-	inst := infruntime.NewVLLMInstallerAt(filepath.Join(p.stateDir, "runtimes", "vllm"))
-	active, ok := inst.Active()
+// HFPuller wired to its CLI plus the venv itself, held in use until release
+// is called (vllmVenvKeeper, waired-agent#1431): whatever runs from it — an
+// engine, a download — must not have it reclaimed underneath. err is non-nil
+// when the venv isn't active (the operator opted into vLLM but never ran
+// `waired runtimes install vllm`, or it landed under the wrong home; cf.
+// #525), and release is then a no-op.
+func (p *agentInferenceProvider) vllmServingDeps() (*download.HFPuller, infruntime.InstallResult, func(), error) {
+	venv, release, ok := p.vllmVenvKeeper().hold()
 	if !ok {
-		return nil, "", fmt.Errorf("vllm venv not active under %s (run `waired runtimes install vllm`)",
+		return nil, venv, release, fmt.Errorf("vllm venv not active under %s (run `waired runtimes install vllm`)",
 			filepath.Join(p.stateDir, "runtimes", "vllm"))
 	}
-	hfBin := resolveVenvHFCLI(active.BinDir)
-	python := filepath.Join(active.BinDir, "python")
-	return download.NewHFPuller(hfBin, download.DefaultHFRunner{}), python, nil
+	hfBin := resolveVenvHFCLI(venv.BinDir)
+	return download.NewHFPuller(hfBin, download.DefaultHFRunner{}), venv, release, nil
 }
 
 // errVLLMNoModelChosen is "nobody has picked a model for this computer
@@ -173,15 +173,18 @@ func (p *agentInferenceProvider) vllmTarget() (catalog.Manifest, catalog.Variant
 // The download-policy arm (weights absent with inference.allow_pull=false) is
 // deliberately NOT here: it needs the resolved local path, which is the
 // spawn's own input, so it stays beside the spawn.
-func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, catalog.Manifest, catalog.Variant, error) {
-	puller, python, err := p.vllmServingDeps()
+//
+// The venv comes back held (release); every error return has released it.
+func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, infruntime.InstallResult, func(), catalog.Manifest, catalog.Variant, error) {
+	puller, venv, release, err := p.vllmServingDeps()
 	if err != nil {
-		return nil, "", catalog.Manifest{}, catalog.Variant{},
+		return nil, venv, release, catalog.Manifest{}, catalog.Variant{},
 			fmt.Errorf("venv not ready; local inference unavailable: %w", err)
 	}
 	manifest, variant, _, err := p.vllmTarget()
 	if err != nil {
-		return nil, "", catalog.Manifest{}, catalog.Variant{}, err
+		release()
+		return nil, venv, func() {}, catalog.Manifest{}, catalog.Variant{}, err
 	}
 	// Someone else is already fetching these weights. Spawning now would run
 	// a second `hf download` into the same directory, because the bootstrap's
@@ -189,11 +192,12 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, ca
 	// job asks for the engine on its way out (noteWeightsLanded), so this is
 	// a wait, not a dead end (waired-agent#1170).
 	if p.pullInFlight(manifest.ModelID) {
-		return nil, "", catalog.Manifest{}, catalog.Variant{}, fmt.Errorf(
+		release()
+		return nil, venv, func() {}, catalog.Manifest{}, catalog.Variant{}, fmt.Errorf(
 			"the weights for %s are still downloading; the engine starts when they land",
 			manifest.ModelID)
 	}
-	return puller, python, manifest, variant, nil
+	return puller, venv, release, manifest, variant, nil
 }
 
 // vllmStartRefusal reports why a vLLM start cannot begin, or nil when it can.
@@ -201,7 +205,8 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, string, ca
 // The untagged half of vllmStartPlan: engineController lives in an untagged
 // file and must not name download.HFPuller, which exists only on this leg.
 func (p *agentInferenceProvider) vllmStartRefusal() error {
-	_, _, _, _, err := p.vllmStartPlan()
+	_, _, release, _, _, err := p.vllmStartPlan()
+	release()
 	return err
 }
 
@@ -354,7 +359,9 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 // serving swap to the new weights happens on the next agent restart (the same
 // restart-to-swap contract ollama uses for a model change, #347).
 func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJob, manifest catalog.Manifest, variant catalog.Variant) error {
-	puller, _, err := p.vllmServingDeps()
+	// The download runs the venv's own hf CLI, so the venv is held until
+	// the job ends (waired-agent#1431).
+	puller, _, release, err := p.vllmServingDeps()
 	if err != nil {
 		return fmt.Errorf("vllm HF pull unavailable: %w", err)
 	}
@@ -373,6 +380,7 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJo
 			State:     catalog.ModelStateQueued,
 		}
 	}); err != nil {
+		release()
 		return err
 	}
 	// spawnPull, not a bare `go`: it releases the model's in-flight slot
@@ -380,6 +388,7 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJo
 	// waitForPulls() now joins them too (#377) — and clears the row a
 	// cancelled job leaves behind (waired-agent#641).
 	p.spawnPull(job, func() {
+		defer release()
 		p.runHFPullJob(ctx, manifest.ModelID, variant, puller, job.jobID, refresh)
 	})
 	return nil
@@ -466,7 +475,17 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// success so a refusal later in this function is the one that stands.
 	p.clearEngineBootstrapRefusal()
 
-	puller, python, manifest, variant, err := p.vllmStartPlan()
+	puller, venv, release, manifest, variant, err := p.vllmStartPlan()
+	// Held until the adapter below is registered, which then holds it for
+	// as long as it is the registered one; every return before that
+	// releases it (waired-agent#1431).
+	held := false
+	defer func() {
+		if !held {
+			release()
+		}
+	}()
+	python := filepath.Join(venv.BinDir, "python")
 	if errors.Is(err, errVLLMNoModelChosen) {
 		// Not a fault, so nothing is recorded: a refusal reaches the
 		// surfaces as engine_failed, and telling an operator who is
@@ -529,7 +548,10 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// that costs the whole engine, not one feature. Decided before the
 	// sizing, because it decides whether an MTP draft runs and the draft
 	// is sized into the window (waired-ai/waired#1432).
-	activeVer, _ := vllmActiveVersion(p.stateDir)
+	// The held venv's version, not a fresh read of `current`: that is the
+	// venv the engine is spawned from, and a converge may have swapped
+	// `current` since.
+	activeVer := venv.Version
 	serveFlags := vllmServeFlagsSupported(activeVer)
 	if !serveFlags {
 		p.logger.Warn("vllm venv predates this build's serve flags; starting without them",
@@ -620,6 +642,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	adapter.SetAppliedTuning(tuning)
 	p.registry.Register(adapter)
 	p.setVLLM(adapter)
+	p.holdVLLMVenvForAdapter(venv.Dir, release)
+	held = true
 
 	// Same reason the ollama arm clears it before its loop: while these
 	// attempts are in flight the honest answer is "still trying"
@@ -700,6 +724,10 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		"prompt_tokens_details", serveFlags,
 		"max_num_batched_tokens", batchedTokens,
 		"kv_offloading_gib", kvOffloadGiB)
+	// The engine now runs from the venv `current` names, and the previous
+	// adapter's hold went when this one replaced it: whatever a converge
+	// superseded can go (waired-agent#1431).
+	go p.vllmVenvKeeper().reclaim(context.WithoutCancel(ctx), p.logger)
 
 	// Commit the ActiveSelection (Runtime is derived from servingEngine(),
 	// == vllm here). activateBundledIfUnset fills a fresh install's empty

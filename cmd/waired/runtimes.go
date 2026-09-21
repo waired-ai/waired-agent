@@ -248,7 +248,7 @@ func runRuntimesInstallBody(autoVal bool, preferVal string, yesVal bool, stateDi
 
 func newRuntimesUninstallCmd() *cobra.Command {
 	var yes bool
-	var stateDir string
+	var stateDir, mgmt string
 	cmd := &cobra.Command{
 		Use:   "uninstall <engine>",
 		Short: "Uninstall an inference engine (vllm)",
@@ -260,15 +260,26 @@ func newRuntimesUninstallCmd() *cobra.Command {
 			}
 			// Resolve the venv from the same <state-dir>/runtimes/vllm the
 			// installer wrote, not a $HOME-relative default (#525).
-			inst := infruntime.NewVLLMInstallerAt(filepath.Join(stateDir, "runtimes", "vllm"))
+			baseDir := filepath.Join(stateDir, "runtimes", "vllm")
+			inst := infruntime.NewVLLMInstallerAt(baseDir)
 			active, ok := inst.Active()
 			if !ok {
 				return errors.New("vLLM isn't installed")
 			}
+			// Removing the venv under a running engine fails its next
+			// request, not its start (waired-agent#1431).
+			if vllmEngineRunning(mgmt) {
+				return errors.New("the vLLM engine is running from this venv; stop it first with `waired inference engine stop`")
+			}
 			if !yes && !confirmTTY(fmt.Sprintf("Remove vLLM %s and its venv (about 6 GB)?", active.Version)) {
 				return errors.New("aborted, no changes made")
 			}
-			if err := inst.Uninstall(context.Background(), active.Version); err != nil {
+			unlock, err := vllmLock(context.Background(), baseDir, announceVLLMInstallWait)
+			if err != nil {
+				return err
+			}
+			defer unlock()
+			if err := inst.Uninstall(context.Background(), active.Dir); err != nil {
 				return err
 			}
 			// With the last venv gone, the managed uv, its download cache
@@ -285,7 +296,33 @@ func newRuntimesUninstallCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip interactive confirmation")
 	cmd.Flags().StringVar(&stateDir, "state-dir", defaultStateDir(), "agent state dir (vllm venv lives under <state-dir>/runtimes/vllm)")
+	addMgmtFlag(cmd, &mgmt)
 	return cmd
+}
+
+// vllmEngineRunning asks the daemon whether its vLLM engine has a process:
+// up, or on its way up. A daemon that does not answer has no engine to
+// break, so that reads as not running.
+func vllmEngineRunning(mgmt string) bool {
+	body, err := httpGet(mgmt + "/waired/v1/inference/runtimes")
+	if err != nil {
+		return false
+	}
+	var resp struct {
+		Runtimes []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		} `json:"runtimes"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return false
+	}
+	for _, r := range resp.Runtimes {
+		if r.Name == "vllm" && (r.State == infruntime.StateReady || r.State == infruntime.StateStarting) {
+			return true
+		}
+	}
+	return false
 }
 
 // runtimesRefreshApplyHint is how an engine change is applied.
@@ -480,8 +517,28 @@ func announceEngineInstallWait() {
 // vllmInstall is a seam so tests exercise installVLLM's path/ownership
 // orchestration without building a real ~6 GB venv. It roots the install
 // at the given baseDir (see NewVLLMInstallerAt's #525 rationale).
-var vllmInstall = func(ctx context.Context, baseDir string, recreate bool, onProgress func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
-	return infruntime.NewVLLMInstallerAt(baseDir).Install(ctx, infruntime.InstallOpts{Recreate: recreate}, onProgress)
+var vllmInstall = func(ctx context.Context, baseDir string, onProgress func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	return infruntime.NewVLLMInstallerAt(baseDir).Install(ctx, infruntime.InstallOpts{}, onProgress)
+}
+
+// vllmLock is the installer's cross-process lock on <baseDir>, a seam so
+// tests can record that an install takes it exactly once. Every build,
+// activation and removal under the vLLM base happens under it; the
+// daemon's converge and its reclaim of unused venvs take the same one
+// (waired-agent#1431).
+var vllmLock = func(ctx context.Context, baseDir string, onWait func()) (func(), error) {
+	return infruntime.NewVLLMInstallerAt(baseDir).Lock(ctx, onWait)
+}
+
+// announceVLLMInstallWait is what a person sees while another install of
+// the vLLM venv — the daemon's converge, usually — holds the lock.
+func announceVLLMInstallWait() {
+	fmt.Fprintln(stdout, "Another vLLM install is running on this computer; waiting for it to finish...")
+}
+
+// lockVLLMInstalls takes vllmLock for a hand-run or setup install.
+func lockVLLMInstalls(ctx context.Context, stateDir string) (func(), error) {
+	return vllmLock(ctx, filepath.Join(stateDir, "runtimes", "vllm"), announceVLLMInstallWait)
 }
 
 // setupVLLMInstallTimeout bounds a vLLM venv build. vLLM's ~6 GB download
@@ -494,7 +551,7 @@ var vllmInstall = func(ctx context.Context, baseDir string, recreate bool, onPro
 // neither this timeout nor the residency budget is pinned to it.
 const setupVLLMInstallTimeout = 45 * time.Minute
 
-// vllmInstallCore builds (or rebuilds) the vLLM venv rooted at
+// vllmInstallCore builds a new vLLM venv rooted at
 // <state-dir>/runtimes/vllm — the same path the daemon resolves, so a
 // sudo-run install isn't stranded under root's home (#525) — and renders
 // staged progress in the "[N/6] stage..." format to stdout. It is the
@@ -506,9 +563,13 @@ const setupVLLMInstallTimeout = 45 * time.Minute
 // lease, so the browser wizard draws the download the terminal is drawing
 // (waired-agent#255). It may be nil, which is what a hand-run install
 // looks like; the two are peers and neither may suppress the other.
-func vllmInstallCore(ctx context.Context, stateDir string, recreate bool, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+//
+// It does not take vllmLock: its callers do, once, around everything they
+// do under the vLLM base (the upgrade through ConvergeVLLM). flock is per
+// open file, so a second take in this process would wait on the first.
+func vllmInstallCore(ctx context.Context, stateDir string, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 	baseDir := filepath.Join(stateDir, "runtimes", "vllm")
-	return vllmInstall(ctx, baseDir, recreate, teeProgress(renderVLLMInstallProgress(stdout), sink))
+	return vllmInstall(ctx, baseDir, teeProgress(renderVLLMInstallProgress(stdout), sink))
 }
 
 // renderVLLMInstallProgress is the terminal half: one line per event in
@@ -554,7 +615,12 @@ func renderVLLMInstallProgress(w io.Writer) func(infruntime.InstallProgress) {
 func installVLLMForSetup(stateDir string, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
-	return vllmInstallCore(ctx, stateDir, true, sink)
+	unlock, err := lockVLLMInstalls(ctx, stateDir)
+	if err != nil {
+		return infruntime.InstallResult{}, err
+	}
+	defer unlock()
+	return vllmInstallCore(ctx, stateDir, sink)
 }
 
 // blockingVLLMAdvisories returns the texts of the advisories that say the
@@ -574,9 +640,17 @@ func blockingVLLMAdvisories(advisories []infruntime.VLLMAdvisory) []string {
 func installVLLM(stateDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
+	// A new venv beside whatever is there, never over it: the engine may
+	// be running from the one there now, and it takes effect at the next
+	// engine start (waired-agent#1431).
+	unlock, err := lockVLLMInstalls(ctx, stateDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// No sink: `waired runtimes install` is a hand-run command, with
 	// nothing on the other side of a lease to report to.
-	res, err := vllmInstallCore(ctx, stateDir, true, nil)
+	res, err := vllmInstallCore(ctx, stateDir, nil)
 	// The venv was just built under sudo (root-owned); hand the state dir
 	// back to the waired-agent service user so the daemon can read/manage
 	// it — matching the ollama bundle install (#484/#525). No-op off Linux

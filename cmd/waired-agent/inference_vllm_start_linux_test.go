@@ -27,7 +27,8 @@ import (
 func TestVLLMStartPlan_RefusalsAreOneStringInOnePlace(t *testing.T) {
 	t.Run("no venv", func(t *testing.T) {
 		p := vllmTestProvider(t)
-		_, _, _, _, err := p.vllmStartPlan()
+		_, _, release, _, _, err := p.vllmStartPlan()
+		release()
 		if err == nil || !strings.Contains(err.Error(), "venv not ready") {
 			t.Errorf("vllmStartPlan with no venv = %v, want a venv refusal", err)
 		}
@@ -38,7 +39,8 @@ func TestVLLMStartPlan_RefusalsAreOneStringInOnePlace(t *testing.T) {
 		fakeVLLMVenv(t, p.stateDir)
 		p.manifests = vllmSwapManifests()
 		p.cfg.PreferredModelID = "ollama-only"
-		_, _, _, _, err := p.vllmStartPlan()
+		_, _, release, _, _, err := p.vllmStartPlan()
+		release()
 		if err == nil || !strings.Contains(err.Error(), "has no vllm/safetensors variant") {
 			t.Errorf("vllmStartPlan with an ollama-only chosen model = %v,"+
 				" want the no-vLLM-variant refusal", err)
@@ -59,7 +61,8 @@ func TestVLLMStartPlan_RefusalsAreOneStringInOnePlace(t *testing.T) {
 		p.manifests = vllmSwapManifests()
 		p.cfg.PreferredModelID = ""
 		p.cfg.BundledModelID = "ollama-only"
-		_, _, _, _, err := p.vllmStartPlan()
+		_, _, release, _, _, err := p.vllmStartPlan()
+		release()
 		if !errors.Is(err, errVLLMNoModelChosen) {
 			t.Errorf("vllmStartPlan with nothing chosen = %v, want errVLLMNoModelChosen", err)
 		}
@@ -71,23 +74,38 @@ func TestVLLMStartPlan_RefusalsAreOneStringInOnePlace(t *testing.T) {
 		if _, joined := p.beginPull(&pullJob{modelID: "gpt-oss-20b"}); joined {
 			t.Fatal("precondition: the first claim must not join")
 		}
-		_, _, _, _, err := p.vllmStartPlan()
+		_, _, release, _, _, err := p.vllmStartPlan()
+		release()
 		if err == nil || !strings.Contains(err.Error(), "still downloading") {
 			t.Errorf("vllmStartPlan while a pull is in flight = %v, want the still-downloading refusal\n"+
 				"(the bootstrap's own fetch does not pass through beginPull, so proceeding here\n"+
 				" runs a second `hf download` into the same directory)", err)
+		}
+		// A refusal holds nothing: the venv it resolved is free to be
+		// reclaimed (waired-agent#1431).
+		if held := p.vllmVenvKeeper().refs; len(held) != 0 {
+			t.Errorf("a refused start still holds %v", held)
 		}
 	})
 
 	t.Run("a host that can start", func(t *testing.T) {
 		p := vllmTestProvider(t)
 		fakeVLLMVenv(t, p.stateDir)
-		puller, python, m, v, err := p.vllmStartPlan()
+		puller, venv, release, m, v, err := p.vllmStartPlan()
 		if err != nil {
 			t.Fatalf("vllmStartPlan on a ready host = %v, want nil", err)
 		}
-		if puller == nil || python == "" {
-			t.Errorf("plan returned puller=%v python=%q; the spawn needs both", puller, python)
+		if puller == nil || venv.BinDir == "" {
+			t.Errorf("plan returned puller=%v venv=%+v; the spawn needs both", puller, venv)
+		}
+		// The venv the spawn will run from is held until the caller lets
+		// go of it (waired-agent#1431).
+		if p.vllmVenvKeeper().refs[venv.Dir] != 1 {
+			t.Errorf("held = %v, want %s held once", p.vllmVenvKeeper().refs, venv.Dir)
+		}
+		release()
+		if len(p.vllmVenvKeeper().refs) != 0 {
+			t.Errorf("held after release = %v, want nothing", p.vllmVenvKeeper().refs)
 		}
 		if m.ModelID != "gpt-oss-20b" || v.VariantID != "mxfp4-safetensors" {
 			t.Errorf("plan target = %s/%s, want gpt-oss-20b/mxfp4-safetensors", m.ModelID, v.VariantID)

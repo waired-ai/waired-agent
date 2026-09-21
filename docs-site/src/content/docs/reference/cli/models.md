@@ -120,10 +120,11 @@ target, it offers a faster model that fits this computer and names both. See
 **`upgrade`** is what `waired update` runs for you. It changes an engine this
 computer already has, and does nothing on a computer that has none. For
 vLLM, `upgrade` is a rebuild rather than a swap. The new environment is built
-next to the one in use and takes over only once it is ready, so nothing stops
-answering while it runs. An update that moves the vLLM version downloads
-about 4 GB, takes 5 to 15 minutes, and needs about 8 GB free while both are
-on disk.
+next to the one in use, so nothing stops answering while it runs. The engine
+keeps running from the old environment until it next starts, and uses the new
+one from then on. Waired removes the old environment once nothing uses it. An
+update that moves the vLLM version downloads about 4 GB, takes 5 to 15
+minutes, and needs about 8 GB free while both are on disk.
 
 ## `waired inference`
 
