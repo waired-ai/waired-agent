@@ -147,6 +147,12 @@ func TestSwitchFactsFor_OnlyAModelThatCanStartAnswers(t *testing.T) {
 				return []hardware.GPU{{Vendor: "nvidia", Model: "card", VRAMTotalMB: 24576}}, hardware.Accelerators{}, nil
 			}),
 			hardware.WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
+			// A 24 GB card on Linux, whatever runs the test: on an Apple
+			// Silicon runner the default UMA step makes the profile unified
+			// memory (the GPU's wired limit, else 3/4 of RAM — 96 GB of the
+			// 128 here), and the 35B fitted the runner.
+			hardware.WithOSArch(func() (string, string) { return "linux", "amd64" }),
+			hardware.WithUMA(func(context.Context, *hardware.Profile) {}),
 		)
 		if err := p.store.Update(func(s *catalog.State) {
 			s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: previous, VariantID: "st"}
