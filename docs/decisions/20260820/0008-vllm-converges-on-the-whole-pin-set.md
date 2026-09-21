@@ -44,6 +44,9 @@ argparse の exit 2 で、`EnsureRunning` のリトライが全部落ちる）�
    `<base>/<version>/.venv` を**新しく作り**、最後に `current` symlink を張り替える。
    使用中の venv は編集されず、失敗しても手つかずで残る。Ollama のバイナリ上書きに
    要る「走っているプロセスは自分の inode を握る」という議論が、こちらには要らない。
+   **（2026-09-21 訂正: この主張は成り立っていなかった。付随 pin の移動は使用中の
+   venv に pip を回し、張り替えの直後に旧 venv を消していた。下の「実機で判明した
+   こと」4 と waired-agent#1431。）**
 2. **ディスクが二重に要る。** 新旧が同時に載るうえ、古いほうを消す仕組みは
    `waired runtimes uninstall` しか無かった。converge を入れるなら回収も要る。
 3. **バージョンはディレクトリ名から読める。** サブプロセス不要。ただし
@@ -55,21 +58,21 @@ argparse の exit 2 で、`EnsureRunning` のリトライが全部落ちる）�
 **すでに入っている venv を pin の組に揃える。無いホストには入れない。**
 
 - **判定の単位は「pin の組」**: `VLLMPinnedVersion` /
-  `HFTransferPinnedVersion` / `TransformersConstraint` / `VLLMPythonVersion`。
+  `TransformersConstraint` / `VLLMPythonVersion`（`HFTransferPinnedVersion` は
+  0.29.0 の pin で組から外れた。`internal/runtime/vllm_pins.go`）。
   インストール時にこの組を venv の隣（バージョンディレクトリ内）へ記録し、
   converge はその記録と比較する。ディレクトリ名だけを鍵にすると、
   付随 pin の移動が既存ホストに永久に届かない。
-  付随 pin だけの差分は既存ディレクトリへの pip 実行なので torch は再取得されず安い。
-- **ただしインタプリタだけは converge が閉じられない**ので、その差分は
-  実行せず「保留」と言う（`waired runtimes install vllm` を案内する）。
-  理由は下の「実機で判明したこと」。venv を作り直せば閉じられるが、
-  作り直しは使用中の環境を消すことであり、converge がやってはならないことである。
-  実行しないだけでなく**記録も書き換えない** — 書き換えれば
-  「venv が持っていない組」を記録した状態になり、次回以降ズレが見えなくなる。
-- **`install` と converge を別の意図として分ける**（`InstallOpts.Recreate`）。
-  `waired runtimes install vllm` は「ここに綺麗な環境を置け」なので作り直す。
-  converge は「ここにあるものを揃えろ」なので**既存の環境に対して pip を回すだけ**で、
-  環境を消さない。
+- **どの差分でも、作るのは必ず新しいディレクトリ**（`<version>`、その名が
+  埋まっていれば `<version>~N`。2026-09-21 改定、waired-agent#1431）。
+  付随 pin だけの差分も、インタプリタの差分も、`waired runtimes install vllm` も同じ。
+  uv は同じファイルシステム上のキャッシュからハードリンクするので、
+  付随 pin だけの差分で torch を再取得することはない。
+  改定前は、付随 pin の差分を**使用中の venv への pip 実行**で閉じ、
+  インタプリタの差分は閉じられないので「保留」と言い、`install` だけが
+  `InstallOpts.Recreate` で環境を作り直していた。どれも
+  使用中の環境を書き換えるか消す操作で、下の「実機で判明したこと」4 のとおり、
+  走っているエンジンを壊していた。
 - **記録が無い venv は「ズレの証拠なし」として放置する**（#843 以前の全ホスト）。
   ファイルが無いことを理由に ~6 GB を再構築するのは、当のホストが悪いことを
   何もしていないのに課される費用になる。vLLM の版が pin と違えば従来どおり発火する。
@@ -91,10 +94,15 @@ argparse の exit 2 で、`EnsureRunning` のリトライが全部落ちる）�
   「やるべきだが今はできない」を同じ顔にしない（`Blocked`）。**読めなかった場合は
   通す** — statfs の失敗は「ディスクが一杯である」証拠ではないし、install 自身が
   ENOSPC を持っている。
-- **成功して symlink を張り替えたあとにのみ、旧 venv を回収する。** 先に消すと、
-  install が失敗したときに消えるのは「まだ serve に使っている venv」になる。
-  回収の失敗は converge の失敗ではない（エンジンはどちらでも pin に在る）ので、
-  結果は別建てで報告する。
+- **converge は旧 venv を消さない。回収するのはデーモンで、使っていないものだけ。**
+  （2026-09-21 改定、waired-agent#1431。改定前は「張り替えのあとに旧 venv を回収する」
+  だった。）どの venv が使われているかは、エンジン・速度測定・重みのダウンロードを
+  venv から起こすデーモンにしか分からない（`current` は converge が張り替えた後も、
+  古いエンジンは古い venv で走り続ける）。デーモンはそれらが解決した venv を
+  保持中として数え（`cmd/waired-agent/vllm_venv_keeper.go`）、起動時の converge の
+  あとと、エンジンが ready になった直後に、`current` と保持中のもの以外を消す
+  （`VLLMInstaller.PruneUnused`）。インストール・張り替え・回収はすべて `<base>` の
+  flock の下で行い、apt 経路で CLI とデーモンが同時に作り始めても 1 回で済む。
 - **ズレを見えるようにする。** `RuntimeStatus` に ollama と同じ
   `PinnedVersion` / `VersionWarning` を出す。converge が直すのが本筋だが、
   converge が走れなかったホストが黙るのは #843 が指摘した状態そのものである。
@@ -123,6 +131,7 @@ sv-mag (RTX PRO 4000 Blackwell) に実際に venv を作って converge を回�
 **この2つを直すまで成立していなかった**。`Recreate` の導入と
 「作っていないものは消さない」規則はここから来ている。
 インタプリタ差分を保留にするのも同じ理由 — 閉じるには作り直しが要るためである。
+（`Recreate` とインタプリタの保留は 4 の改定で無くなった。）
 
 3. **uv は cwd から上へ設定ファイルを探す**ので、インストーラは
    「呼び出した人がいたディレクトリ」の影響を受けていた。サービスユーザーで
@@ -134,6 +143,20 @@ sv-mag (RTX PRO 4000 Blackwell) に実際に venv を作って converge を回�
    `uv.toml` が在るディレクトリからなら、**誰も意図していない設定で解決される**。
    → `UV_NO_CONFIG=1` を全ステージの env に足した（実機の uv で塞がることを確認）。
    ここで作る venv は上の引数だけで定義される。
+
+4. **張り替えの直後の回収が、走っているエンジンの venv を消していた**
+   （waired-agent#1431、同じ Linux ホストで 2 回）。
+   - 2026-09-16: venv 0.28.0 のホストに pin 0.29.0 の agent を入れた。
+     デーモンの converge が 0.29.0 を作って張り替え、0.28.0 を消した。
+     起動を試行中だった adapter は、起動時に解決した 0.28.0 の python を
+     spawn し続け、3 回とも `no such file or directory` で、再起動まで推論が止まった。
+   - 2026-09-21: 0.28.0 から起動済みのエンジンの下で同じことが起き、
+     次のリクエストが flashinfer の JIT テンプレートを初めて読みに行って
+     `FileNotFoundError` → HTTP 500 になった。Python は遅延でファイルを読むので、
+     消されても次の未読ファイルまでは動き続ける。
+   → 旧 venv の回収をデーモンに移し、使用中のものを除く形に改めた。
+   付随 pin の移動が使用中の venv に pip を回していたのも同じ型なので、
+   どの差分も新しいディレクトリに作る形に改めた（Decision の 2 項目）。
 
 ## Consequences
 
@@ -159,8 +182,15 @@ sv-mag (RTX PRO 4000 Blackwell) に実際に venv を作って converge を回�
 * **`waired runtimes upgrade vllm` が動くようになった**（従来はエラー）。
   確認プロンプトは出さない — インストーラが非対話で呼ぶ経路であり、
   判定そのものが確認だからである。
+* **（2026-09-21 追記）新しい venv が効くのは次のエンジン起動から**で、
+  それまで旧 venv は残る。デーモン経路（`apt upgrade`）ではエンジンを
+  再起動しないので、旧 venv の約 6 GB は次の起動まで残る。
+  `waired runtimes status` の vLLM 行は、走っているエンジンの版を `live=` に出す。
+* **（2026-09-21 追記）`waired runtimes uninstall vllm` は、デーモンが vLLM
+  エンジン稼働中と答えたら断る**（`waired inference engine stop` を案内する）。
 
 ## Refs
+- https://github.com/waired-ai/waired-agent/issues/1431
 - https://github.com/waired-ai/waired-agent/issues/843
 - https://github.com/waired-ai/waired-agent/issues/826
 - https://github.com/waired-ai/waired-agent/issues/778

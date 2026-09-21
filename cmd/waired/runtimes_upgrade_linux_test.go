@@ -10,8 +10,11 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -35,34 +38,37 @@ func seedActiveVLLMVenv(t *testing.T, stateDir, version string) {
 	}
 }
 
-// The converge must never ask for a clean environment. It runs
-// unattended, possibly while vLLM is serving, and `uv venv` over an
-// existing environment either refuses outright or clears it — on a real
-// host the refusal path took the working venv with it, because the
-// rollback then removed a directory this call had not created (#843).
-func TestRuntimesUpgrade_VLLMNeverRecreatesTheEnvironment(t *testing.T) {
+// The upgrade builds under the vLLM base's lock, takes it once (the install
+// inside the converge must not take it again: flock is per open file, and a
+// second take in this process would wait on the first), and removes
+// nothing — the venv it replaces may be the one the engine is running from
+// (waired-agent#1431).
+func TestRuntimesUpgrade_VLLMBuildsUnderTheLockAndRemovesNothing(t *testing.T) {
 	prev := vllmInstall
 	t.Cleanup(func() { vllmInstall = prev })
+	prevLock := vllmLock
+	t.Cleanup(func() { vllmLock = prevLock })
 
-	asked := false
-	sawRecreate := false
-	vllmInstall = func(_ context.Context, _ string, recreate bool, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
-		asked = true
-		sawRecreate = recreate
-		return infruntime.InstallResult{}, errors.New("stop here; what this pins is what the installer was asked for")
+	var events []string
+	vllmInstall = func(_ context.Context, _ string, _ func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+		events = append(events, "install")
+		return infruntime.InstallResult{}, nil
+	}
+	vllmLock = func(context.Context, string, func()) (func(), error) {
+		events = append(events, "lock")
+		return func() { events = append(events, "unlock") }, nil
 	}
 
 	dir := t.TempDir()
 	seedActiveVLLMVenv(t, dir, "0.20.0")
-	// The error is expected — the fake refuses — so the assertion is on
-	// the request, not the outcome.
-	_ = runVLLMUpgrade(dir, true)
-
-	if !asked {
-		t.Fatal("a venv one release behind the pin never reached the installer")
+	if err := runVLLMUpgrade(dir, true); err != nil {
+		t.Fatalf("runVLLMUpgrade: %v", err)
 	}
-	if sawRecreate {
-		t.Error("the converge asked for a clean environment; that clears the venv the host may be serving from")
+	if got := strings.Join(events, ","); got != "lock,install,unlock" {
+		t.Errorf("events = %s, want lock,install,unlock", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "runtimes", "vllm", "0.20.0", ".venv", "bin", "python")); err != nil {
+		t.Errorf("the upgrade removed the venv it replaced: %v", err)
 	}
 }
 
@@ -72,7 +78,7 @@ func TestRuntimesUpgrade_VLLMNeverRecreatesTheEnvironment(t *testing.T) {
 func TestRuntimesUpgrade_VLLMFailedBuildStillHandsStateBack(t *testing.T) {
 	prev := vllmInstall
 	t.Cleanup(func() { vllmInstall = prev })
-	vllmInstall = func(context.Context, string, bool, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+	vllmInstall = func(context.Context, string, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 		return infruntime.InstallResult{}, errors.New("uv pip install failed")
 	}
 	origFix := fixStateOwnership
@@ -117,13 +123,45 @@ func TestRuntimesUninstall_VLLMRemovesUVWithTheLastVenv(t *testing.T) {
 			}
 
 			cmd := newRuntimesUninstallCmd()
-			cmd.SetArgs([]string{"vllm", "--yes", "--state-dir", dir})
+			// A management address nothing answers on: no daemon, so no
+			// engine to protect, whatever runs on the machine the test is on.
+			cmd.SetArgs([]string{"vllm", "--yes", "--state-dir", dir, "--mgmt", "http://127.0.0.1:1"})
 			if err := cmd.Execute(); err != nil {
 				t.Fatalf("uninstall: %v", err)
 			}
 			_, err := os.Stat(uvRoot)
 			if gone := os.IsNotExist(err); gone != tc.wantUVGone {
 				t.Errorf("runtimes/uv gone = %v, want %v (stat err %v)", gone, tc.wantUVGone, err)
+			}
+		})
+	}
+}
+
+// Removing the venv under a running engine fails its next request
+// (waired-agent#1431), so uninstall asks the daemon first and refuses while
+// the vLLM engine has a process.
+func TestRuntimesUninstall_VLLMRefusesWhileTheEngineRuns(t *testing.T) {
+	for _, state := range []string{infruntime.StateReady, infruntime.StateStarting} {
+		t.Run(state, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/waired/v1/inference/runtimes" {
+					http.NotFound(w, r)
+					return
+				}
+				_, _ = w.Write([]byte(`{"runtimes":[{"name":"vllm","state":"` + state + `"}]}`))
+			}))
+			defer srv.Close()
+			dir := t.TempDir()
+			seedActiveVLLMVenv(t, dir, "0.29.0")
+
+			cmd := newRuntimesUninstallCmd()
+			cmd.SetArgs([]string{"vllm", "--yes", "--state-dir", dir, "--mgmt", srv.URL})
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), "waired inference engine stop") {
+				t.Fatalf("uninstall = %v, want a refusal naming the stop command", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "runtimes", "vllm", "0.29.0", ".venv")); err != nil {
+				t.Errorf("the venv was removed anyway: %v", err)
 			}
 		})
 	}

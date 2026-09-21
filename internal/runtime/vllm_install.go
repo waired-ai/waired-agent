@@ -103,7 +103,10 @@ type InstallProgress struct {
 
 // InstallResult is the venv that Install successfully materialised.
 type InstallResult struct {
+	// Version is the vLLM release; Dir is the directory under BaseDir the
+	// venv lives in, which is Version or Version~N (VLLMVersionOfDir).
 	Version     string
+	Dir         string
 	VenvPath    string
 	BinDir      string
 	InstalledAt time.Time
@@ -130,15 +133,6 @@ type InstallOpts struct {
 	PythonVersion    string // e.g. "3.12"
 	KeepFailed       bool   // leave the broken venv in place under ".failed-<ts>"
 	ExtraPipPackages []string
-
-	// Recreate replaces an environment that is already there instead of
-	// reconciling the wheels into it. It is the difference between the
-	// two verbs: `waired runtimes install vllm` answers "put a clean
-	// environment here" and sets it; the converge answers "make what is
-	// here match" and does not, because it may be running while the host
-	// serves (#843). It is also the only way to move the INTERPRETER — a
-	// reconcile keeps the one the venv was built with.
-	Recreate bool
 }
 
 // InstallRunner is the test seam for the uv / python subprocesses
@@ -188,18 +182,23 @@ func NewVLLMInstaller() *VLLMInstaller {
 	return NewVLLMInstallerAt(defaultVLLMBaseDir())
 }
 
-// Install builds the venv for opts.Version, or reconciles the wheels
-// into one that is already there — opts.Recreate decides which, and
-// stage 2 below records what uv actually does with an existing
-// environment. On failure a venv THIS CALL created is removed (or
-// relocated to .failed-<ts> when KeepFailed is set) so the next attempt
-// starts clean; one that was already here is left alone (#843).
+// Install builds a venv for opts.Version in a directory of its own and
+// makes it the active one. It never builds into a directory that is
+// already there: a version move, a companion-pin move and an explicit
+// reinstall all get a fresh <version> or <version>~N (claimVersionDir),
+// because the directory already there may be the one a running engine was
+// started from, and Python loads its files lazily — a wheel replaced or a
+// tree cleared under it fails the engine's next request, not its start
+// (waired-agent#1431). Nothing here removes the directory it replaces;
+// PruneUnused does that once nothing uses it. On failure the half-built
+// directory is removed (or relocated to .failed-<ts> when KeepFailed is
+// set).
 //
-// The five-stage pipeline maps to plan §3.6:
+// The pipeline maps to plan §3.6:
 //
 //  1. Resolve the pinned uv under <state-dir>/runtimes/uv (downloads it
 //     when that version is not there yet).
-//  2. Create the versioned venv via `uv venv --python <py> <dir>/.venv`.
+//  2. Create the venv via `uv venv --python <py> <dir>/.venv`.
 //  3. Install vllm (+ extras) via `uv pip install`.
 //  4. Verify the install runs `python -c "import vllm, torch; ..."`.
 //  5. Activate by atomically swapping the `current` symlink.
@@ -269,71 +268,30 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 		return InstallResult{}, fmt.Errorf("vllm install: %w", err)
 	}
 
-	versionDir := filepath.Join(i.BaseDir, version)
-	venvDir := filepath.Join(versionDir, ".venv")
-	// Whether this call is the one that brings the version directory into
-	// existence decides what a failure is allowed to delete (#843).
-	_, statErr := os.Stat(versionDir)
-	ours := os.IsNotExist(statErr)
-	if err := os.MkdirAll(versionDir, 0o755); err != nil {
-		return InstallResult{}, fmt.Errorf("vllm install: mkdir version dir: %w", err)
+	dirName, err := i.claimVersionDir(version)
+	if err != nil {
+		return InstallResult{}, fmt.Errorf("vllm install: %w", err)
 	}
+	versionDir := filepath.Join(i.BaseDir, dirName)
+	venvDir := filepath.Join(versionDir, ".venv")
 
-	// Stage 2: create venv.
-	//
-	// uv REFUSES to create over an existing environment — "A virtual
-	// environment already exists at ...", exit 2, with a hint to pass
-	// --clear. The comment that stood here said the opposite ("uv exits
-	// successfully without rebuilding, which gives us idempotency for
-	// free"); against the uv this product resolves it does not, so every
-	// re-entry into an existing version directory failed at this line and
-	// then had the directory removed under it. Found on a real host
-	// (#843); the fake runner in the tests had made `uv venv` succeed on
-	// an existing directory, so nothing here could see it.
-	//
-	// So the caller's intent has to be stated rather than assumed:
-	//
-	//   - Recreate (the explicit `waired runtimes install vllm`) means
-	//     "put a clean environment here" — pass --clear.
-	//   - Otherwise (the converge) means "make what is here match" — keep
-	//     the environment and let the pip stage below re-resolve the
-	//     wheels into it. That is what makes a companion-pin move cost a
-	//     small wheel instead of 4 GB, and it is why a converge can never
-	//     remove the environment the host may be serving from.
-	//
-	// Reconciling in place cannot change the INTERPRETER, so the converge
-	// must not be handed that job: DecideVLLMConverge reports an
-	// interpreter-pin move as blocked and names the reinstall. Without
-	// that, this would pip-install forever and then record a pin set the
-	// venv does not have.
-	if usable := venvInterpreter(venvDir); usable && !opts.Recreate {
-		onProgress(InstallProgress{Stage: StageCreateVenv, Step: 2, Total: totalStages, Percent: -1,
-			Message: "using the virtual environment already here (Python " + py + ")..."})
-	} else {
-		onProgress(InstallProgress{Stage: StageCreateVenv, Step: 2, Total: totalStages, Percent: -1, Message: "creating venv (Python " + py + ")..."})
-		venvArgs := []string{"venv", "--python", py, venvDir}
-		if _, err := os.Stat(venvDir); err == nil {
-			// Present but not usable, or a deliberate rebuild. Either
-			// way there is nothing here worth keeping.
-			venvArgs = []string{"venv", "--clear", "--python", py, venvDir}
-		}
-		// On a uv-managed interpreter, never a system one. uv otherwise
-		// takes a python3.12 already on PATH, and a distribution's build
-		// ships without Python.h unless its -dev package is installed —
-		// which vLLM's Triton kernels compile against the first time a
-		// model is inspected ("fatal error: Python.h: No such file or
-		// directory", then no engine; Qwen3.5 on 0.28.0 and 0.29.0 under
-		// Ubuntu 24.04). uv's managed builds carry their headers
-		// (waired-ai/waired#588). Only this call carries the switch: pip and
-		// the verify use the venv's own interpreter, and a venv an older
-		// build made on a system interpreter must still converge. An env
-		// var rather than --managed-python so a system uv too old to know
-		// the flag degrades to today's behaviour instead of failing.
-		venvEnv := append(append([]string{}, uvEnv...), "UV_MANAGED_PYTHON=1")
-		if err := i.runCapturing(ctx, uvBin, venvArgs, venvEnv, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
-			i.maybeRollback(versionDir, opts.KeepFailed, ours)
-			return InstallResult{}, fmt.Errorf("vllm install: uv venv: %w", err)
-		}
+	// Stage 2: create venv, in the directory claimVersionDir just made.
+	onProgress(InstallProgress{Stage: StageCreateVenv, Step: 2, Total: totalStages, Percent: -1, Message: "creating venv (Python " + py + ")..."})
+	// On a uv-managed interpreter, never a system one. uv otherwise
+	// takes a python3.12 already on PATH, and a distribution's build
+	// ships without Python.h unless its -dev package is installed —
+	// which vLLM's Triton kernels compile against the first time a
+	// model is inspected ("fatal error: Python.h: No such file or
+	// directory", then no engine; Qwen3.5 on 0.28.0 and 0.29.0 under
+	// Ubuntu 24.04). uv's managed builds carry their headers
+	// (waired-ai/waired#588). Only this call carries the switch: pip and
+	// the verify use the venv's own interpreter. An env
+	// var rather than --managed-python so a system uv too old to know
+	// the flag degrades to today's behaviour instead of failing.
+	venvEnv := append(append([]string{}, uvEnv...), "UV_MANAGED_PYTHON=1")
+	if err := i.runCapturing(ctx, uvBin, []string{"venv", "--python", py, venvDir}, venvEnv, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
+		i.maybeRollback(versionDir, opts.KeepFailed)
+		return InstallResult{}, fmt.Errorf("vllm install: uv venv: %w", err)
 	}
 
 	// Stage 3: pip install. Pass --python so uv doesn't infer from PATH.
@@ -385,7 +343,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	}
 	pipArgs = append(pipArgs, opts.ExtraPipPackages...)
 	if err := i.runCapturing(ctx, uvBin, pipArgs, uvEnv, onProgress, StagePipInstall, 3, totalStages, pipBytes); err != nil {
-		i.maybeRollback(versionDir, opts.KeepFailed, ours)
+		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: uv pip install: %w", err)
 	}
 
@@ -413,12 +371,12 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	onProgress(InstallProgress{Stage: StageVerify, Step: 5, Total: totalStages, Percent: -1, Message: "verifying: vllm and torch import, the GPU is usable, and the venv can download weights..."})
 	pythonBin := filepath.Join(venvDir, "bin", "python")
 	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, uvEnv, onProgress, StageVerify, 5, totalStages, nil); err != nil {
-		i.maybeRollback(versionDir, opts.KeepFailed, ours)
+		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: verify: %w", err)
 	}
 
 	// Stage 5: activate (swap `current` symlink).
-	onProgress(InstallProgress{Stage: StageActivate, Step: 6, Total: totalStages, Percent: 100, Message: "activating: " + filepath.Join(i.BaseDir, "current") + " → " + version})
+	onProgress(InstallProgress{Stage: StageActivate, Step: 6, Total: totalStages, Percent: 100, Message: "activating: " + filepath.Join(i.BaseDir, "current") + " → " + dirName})
 	// Record the set BEFORE the symlink swap: the record is what the
 	// converge reads to decide this venv is up to date, and a venv that
 	// is live without one reads as an install that predates the record
@@ -430,12 +388,13 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	}); err != nil {
 		return InstallResult{}, fmt.Errorf("vllm install: record pins: %w", err)
 	}
-	if err := i.activate(version); err != nil {
+	if err := i.activate(dirName); err != nil {
 		return InstallResult{}, fmt.Errorf("vllm install: activate: %w", err)
 	}
 
 	return InstallResult{
 		Version:     version,
+		Dir:         dirName,
 		VenvPath:    venvDir,
 		BinDir:      filepath.Join(venvDir, "bin"),
 		InstalledAt: i.now(),
@@ -443,19 +402,19 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	}, nil
 }
 
-// Uninstall removes one installed version. If it was the `current`
-// version, the symlink is dropped too (Active() then returns ok=false
-// and the bootstrap falls back to ollama).
-func (i *VLLMInstaller) Uninstall(_ context.Context, version string) error {
-	if version == "" {
-		return errors.New("vllm install: version required")
+// Uninstall removes one installed venv directory (InstallResult.Dir). If it
+// was the `current` one, the symlink is dropped too (Active() then returns
+// ok=false and the bootstrap falls back to ollama).
+func (i *VLLMInstaller) Uninstall(_ context.Context, dir string) error {
+	if dir == "" {
+		return errors.New("vllm install: directory required")
 	}
-	versionDir := filepath.Join(i.BaseDir, version)
+	versionDir := filepath.Join(i.BaseDir, dir)
 	if _, err := os.Stat(versionDir); err != nil {
 		return fmt.Errorf("vllm install: %s not present: %w", versionDir, err)
 	}
 	current, ok := i.Active()
-	if ok && filepath.Base(filepath.Dir(current.VenvPath)) == version {
+	if ok && current.Dir == dir {
 		if err := os.Remove(filepath.Join(i.BaseDir, "current")); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("vllm install: drop current symlink: %w", err)
 		}
@@ -558,7 +517,8 @@ func (i *VLLMInstaller) ActiveErr() (InstallResult, error) {
 			os.Geteuid(), python, err)
 	}
 	return InstallResult{
-		Version:  filepath.Base(target),
+		Version:  VLLMVersionOfDir(filepath.Base(target)),
+		Dir:      filepath.Base(target),
 		VenvPath: venv,
 		BinDir:   filepath.Join(venv, "bin"),
 	}, nil
@@ -612,14 +572,21 @@ func (i *VLLMInstaller) ActivePins() (VLLMPinSet, bool) {
 	return set, true
 }
 
-// PruneOtherVersions removes every installed venv except the active one,
-// and reports what it removed.
+// PruneUnused removes the installed venvs nothing uses — every version
+// directory except the one `current` names and the ones in inUse — and
+// reports what it removed.
 //
-// It exists because the converge installs into a NEW version directory
-// and swaps a symlink — safe for a serving host, and the reason a vLLM
-// converge never has to stop an engine mid-answer, but it means each pin
-// move otherwise leaves another ~6 GB on disk for ever. Ollama has no
-// equivalent: it replaces one binary in place (#843).
+// Every build goes into a new directory (Install), so each pin move leaves
+// the previous ~6 GB venv behind, and something has to reclaim it. What it
+// must not reclaim is a venv a process was started from: removing it under
+// a running vLLM fails the engine's next request with FileNotFoundError on
+// a file it had not opened yet (flashinfer's JIT templates, modules
+// imported on first use), and removing it under an adapter that will
+// respawn from it fails that spawn (waired-agent#1431). `current` alone
+// cannot answer which venvs are in use — a converge swaps it while the old
+// engine keeps running — so the caller names them: the daemon, which is
+// the one process that starts engines, probes and downloads from a venv,
+// passes what it holds (cmd/waired-agent's vllmVenvKeeper).
 //
 // A directory qualifies only when it holds a `.venv`, which is what
 // keeps the walk away from `python` — the uv-managed interpreter tree
@@ -634,15 +601,15 @@ func (i *VLLMInstaller) ActivePins() (VLLMPinSet, bool) {
 //
 // Errors are returned but the walk continues: a directory the current
 // user cannot remove (a venv built under sudo, before the state dir was
-// handed to the service user) must not stop the rest.
-func (i *VLLMInstaller) PruneOtherVersions() ([]string, error) {
+// handed to the service user) must not stop the rest. Callers hold Lock,
+// so an install cannot be between claiming a directory and activating it.
+func (i *VLLMInstaller) PruneUnused(inUse map[string]bool) ([]string, error) {
 	active, err := i.ActiveErr()
 	if err != nil {
 		// Nothing is active: pruning "everything else" would be
 		// pruning everything. Refuse rather than guess.
 		return nil, fmt.Errorf("vllm prune: %w", err)
 	}
-	keep := filepath.Base(filepath.Dir(active.VenvPath))
 	entries, err := os.ReadDir(i.BaseDir)
 	if err != nil {
 		return nil, fmt.Errorf("vllm prune: read %s: %w", i.BaseDir, err)
@@ -650,10 +617,11 @@ func (i *VLLMInstaller) PruneOtherVersions() ([]string, error) {
 	var removed []string
 	var errs []error
 	for _, e := range entries {
-		if !e.IsDir() || e.Name() == keep || strings.Contains(e.Name(), ".failed-") {
+		name := e.Name()
+		if !e.IsDir() || name == active.Dir || inUse[name] || strings.Contains(name, ".failed-") {
 			continue
 		}
-		dir := filepath.Join(i.BaseDir, e.Name())
+		dir := filepath.Join(i.BaseDir, name)
 		if _, err := os.Stat(filepath.Join(dir, ".venv")); err != nil {
 			continue
 		}
@@ -661,9 +629,80 @@ func (i *VLLMInstaller) PruneOtherVersions() ([]string, error) {
 			errs = append(errs, fmt.Errorf("remove %s: %w", dir, err))
 			continue
 		}
-		removed = append(removed, e.Name())
+		removed = append(removed, name)
 	}
 	return removed, errors.Join(errs...)
+}
+
+// vllmLockPoll is how often Lock asks again while another process holds it.
+const vllmLockPoll = 500 * time.Millisecond
+
+// Lock serialises everything that creates, activates or removes a venv
+// under BaseDir, across processes: the daemon's converge and reclaim, and
+// the CLI's install, upgrade and uninstall (waired-agent#1431). On the apt
+// path the postinst restarts the daemon, whose converge starts a build,
+// and then install.sh runs the CLI's; without the lock the second saw the
+// first's half-built directory and cleared it. It is an exclusive flock on
+// BaseDir itself, so no lock file is left behind, and root and the service
+// user share it. The caller that takes it does the whole
+// decide-install-activate (or prune) under it, and re-reads what it decided
+// from once it holds it. onWait, when set, is called once if the lock is
+// busy, before the wait — a person running the CLI sees why nothing moves.
+func (i *VLLMInstaller) Lock(ctx context.Context, onWait func()) (func(), error) {
+	if err := os.MkdirAll(i.BaseDir, 0o755); err != nil {
+		return nil, fmt.Errorf("vllm lock: %w", err)
+	}
+	f, err := os.Open(i.BaseDir)
+	if err != nil {
+		return nil, fmt.Errorf("vllm lock: %w", err)
+	}
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() {
+				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+				_ = f.Close()
+			}, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			_ = f.Close()
+			return nil, fmt.Errorf("vllm lock %s: %w", i.BaseDir, err)
+		}
+		if onWait != nil {
+			onWait()
+			onWait = nil
+		}
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, fmt.Errorf("vllm lock %s: another vLLM install is still running: %w", i.BaseDir, ctx.Err())
+		case <-time.After(vllmLockPoll):
+		}
+	}
+}
+
+// claimVersionDir creates the directory a new build goes into and returns
+// its name: <version> when that is free, otherwise the first free
+// <version>~N. os.Mkdir rather than MkdirAll, so the name is claimed
+// atomically and no two builds ever share a directory.
+func (i *VLLMInstaller) claimVersionDir(version string) (string, error) {
+	if err := os.MkdirAll(i.BaseDir, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", i.BaseDir, err)
+	}
+	for n := 1; n < 100; n++ {
+		name := version
+		if n > 1 {
+			name = fmt.Sprintf("%s~%d", version, n)
+		}
+		err := os.Mkdir(filepath.Join(i.BaseDir, name), 0o755)
+		if err == nil {
+			return name, nil
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("mkdir version dir: %w", err)
+		}
+	}
+	return "", fmt.Errorf("no free directory name for vLLM %s under %s", version, i.BaseDir)
 }
 
 // runCapturing runs binary with args, forwarding parsed progress
@@ -696,15 +735,16 @@ func (i *VLLMInstaller) runCapturing(ctx context.Context, binary string, args, e
 	})
 }
 
-// activate atomically swaps `current` → `<version>`. Uses
+// activate atomically swaps `current` → `<dir>` (a directory name under
+// BaseDir). Uses
 // rename-over-symlink semantics: write a temp symlink, then
 // os.Rename on top of the existing one (POSIX atomic for symlinks
 // when both live in the same directory).
-func (i *VLLMInstaller) activate(version string) error {
+func (i *VLLMInstaller) activate(dir string) error {
 	link := filepath.Join(i.BaseDir, "current")
 	tmpLink := link + ".tmp"
 	_ = os.Remove(tmpLink)
-	if err := os.Symlink(version, tmpLink); err != nil {
+	if err := os.Symlink(dir, tmpLink); err != nil {
 		return fmt.Errorf("create temp symlink: %w", err)
 	}
 	if err := os.Rename(tmpLink, link); err != nil {
@@ -714,34 +754,11 @@ func (i *VLLMInstaller) activate(version string) error {
 	return nil
 }
 
-// maybeRollback removes the half-built versionDir. When KeepFailed
-// is true the directory is renamed to ".failed-<ts>" instead so the
-// operator can inspect it.
-// venvInterpreter reports whether venvDir holds an interpreter this
-// installer can reuse. The same file ActiveErr stats, for the same
-// reason: a directory is not an environment.
-func venvInterpreter(venvDir string) bool {
-	_, err := os.Stat(filepath.Join(venvDir, "bin", "python"))
-	return err == nil
-}
-
-// maybeRollback cleans up after a failed install — but only when this
-// call is what created the version directory (`ours`).
-//
-// It used to remove it unconditionally, which meant a failed re-entry
-// into an EXISTING install deleted a working environment: on a real host
-// a converge that stopped at `uv venv` took the venv the machine was
-// serving from with it, leaving a dangling `current` (#843). "The
-// half-built venv is removed so the next attempt starts clean" is only
-// true of a venv this call half-built.
-//
-// When it is not ours, the directory is left exactly as found. A
-// Recreate that failed after --clear leaves an empty environment behind,
-// which the next attempt clears again.
-func (i *VLLMInstaller) maybeRollback(versionDir string, keep, ours bool) {
-	if !ours {
-		return
-	}
+// maybeRollback cleans up after a failed install. The directory is
+// always this call's own (claimVersionDir made it), so removing it cannot
+// take an environment anyone was using; with keep it is renamed to
+// ".failed-<ts>" instead, so the operator can inspect it.
+func (i *VLLMInstaller) maybeRollback(versionDir string, keep bool) {
 	if !keep {
 		_ = os.RemoveAll(versionDir)
 		return

@@ -73,7 +73,6 @@ func TestConvergeVLLMVenv_SaysWhatItDid(t *testing.T) {
 					installed = true
 					return c.installErr
 				},
-				Prune: func() ([]string, error) { return nil, nil },
 			})
 			out := buf.String()
 			if !strings.Contains(out, c.wantLog) {
@@ -86,29 +85,6 @@ func TestConvergeVLLMVenv_SaysWhatItDid(t *testing.T) {
 				t.Errorf("installed = %v, want %v", installed, c.wantInstall)
 			}
 		})
-	}
-}
-
-// Reclaiming ~6 GB is worth an INFO line — it is a large, silent change
-// to the host's disk — and failing to reclaim it is worth a WARN, but
-// neither turns the converge into a failure.
-func TestConvergeVLLMVenv_ReportsThePruneSeparately(t *testing.T) {
-	var buf bytes.Buffer
-	convergeVLLMVenv(context.Background(), convergeLogger(&buf), infruntime.VLLMConvergeDeps{
-		Active:    func() (string, bool) { return "0.20.0", true },
-		Pins:      func() (infruntime.VLLMPinSet, bool) { return infruntime.VLLMPinSet{VLLM: "0.20.0"}, true },
-		FreeBytes: func() int64 { return 500 << 30 },
-		Install:   func(context.Context) error { return nil },
-		Prune:     func() ([]string, error) { return []string{"0.20.0"}, errors.New("permission denied") },
-	})
-	out := buf.String()
-	for _, want := range []string{"converged to the pin", "removed the superseded", "permission denied"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("log = %q, want it to contain %q", out, want)
-		}
-	}
-	if strings.Contains(out, "converge failed") {
-		t.Errorf("a prune failure was reported as a failed converge: %q", out)
 	}
 }
 

@@ -104,18 +104,18 @@ func TestDecideVLLMConverge(t *testing.T) {
 			wantWhy:     "transformers constraint",
 		},
 		{
-			// The one member a converge cannot reconcile. It installs the
-			// wheels INTO the environment that is there — which is what
-			// keeps it from removing the one the host may be serving from
-			// — and an interpreter is not a wheel. Acting anyway would
-			// change nothing and then record a set the venv does not have.
+			// Inverted by waired-agent#1431. This used to be blocked: the
+			// converge reconciled wheels INTO the live environment, and an
+			// interpreter is not a wheel. Every build now makes a new
+			// environment, so an interpreter move is a rebuild like any
+			// other.
 			name: "interpreter moved on its own",
 			facts: VLLMConvergeFacts{
 				Installed: true, Version: "0.24.0", HasRecord: true, Want: atPin,
 				Recorded: func() VLLMPinSet { p := atPin; p.Python = "3.11"; return p }(),
 			},
-			wantBlocked: true,
-			wantWhy:     "runtimes install vllm",
+			wantInstall: true,
+			wantWhy:     "venv interpreter is Python 3.11",
 		},
 		{
 			name: "a venv that cannot name its version is rebuilt",
@@ -207,7 +207,7 @@ func TestConvergeVLLM_InstallsOnlyWhenDecided(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			installed, pruned, pinsRead := false, false, false
+			installed, locked, pinsRead := false, false, false
 			got, err := ConvergeVLLM(context.Background(), VLLMConvergeDeps{
 				Active: func() (string, bool) { return c.version, c.installed },
 				Pins: func() (VLLMPinSet, bool) {
@@ -216,7 +216,10 @@ func TestConvergeVLLM_InstallsOnlyWhenDecided(t *testing.T) {
 				},
 				FreeBytes: func() int64 { return 500 << 30 },
 				Install:   func(context.Context) error { installed = true; return nil },
-				Prune:     func() ([]string, error) { pruned = true; return nil, nil },
+				Lock: func(context.Context) (func(), error) {
+					locked = true
+					return func() {}, nil
+				},
 			})
 			if err != nil {
 				t.Fatalf("ConvergeVLLM: %v", err)
@@ -227,8 +230,11 @@ func TestConvergeVLLM_InstallsOnlyWhenDecided(t *testing.T) {
 			if got.Install != c.wantInstall {
 				t.Errorf("decision.Install = %v, want %v", got.Install, c.wantInstall)
 			}
-			if pruned != c.wantInstall {
-				t.Errorf("pruned = %v, want %v: superseded venvs are reclaimed only after an install", pruned, c.wantInstall)
+			// The lock is taken only for an install: a host with nothing
+			// to do, or no venv at all, never creates the directory the
+			// lock lives on.
+			if locked != c.wantInstall {
+				t.Errorf("locked = %v, want %v", locked, c.wantInstall)
 			}
 			// A host with no venv must cost nothing to check — no
 			// record read, no statfs. This is every macOS and Windows
@@ -241,17 +247,13 @@ func TestConvergeVLLM_InstallsOnlyWhenDecided(t *testing.T) {
 }
 
 // A failed install surfaces as an error AND keeps the decision, so a
-// caller can say what it was trying to do when it failed — and it must
-// not prune, because the venv the host is still serving from is the one
-// that would go.
-func TestConvergeVLLM_InstallFailureIsReportedAndPrunesNothing(t *testing.T) {
+// caller can say what it was trying to do when it failed.
+func TestConvergeVLLM_InstallFailureIsReported(t *testing.T) {
 	boom := errors.New("network down")
-	pruned := false
 	got, err := ConvergeVLLM(context.Background(), VLLMConvergeDeps{
 		Active:  func() (string, bool) { return "0.20.0", true },
 		Pins:    func() (VLLMPinSet, bool) { return VLLMPinSet{VLLM: "0.20.0"}, true },
 		Install: func(context.Context) error { return boom },
-		Prune:   func() ([]string, error) { pruned = true; return nil, nil },
 	})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap %v", err, boom)
@@ -259,30 +261,34 @@ func TestConvergeVLLM_InstallFailureIsReportedAndPrunesNothing(t *testing.T) {
 	if !got.Install {
 		t.Error("the decision to install is lost on failure; the caller cannot explain itself")
 	}
-	if pruned {
-		t.Error("pruned after a failed install: that removes the venv the host is still serving from")
-	}
 }
 
-// Failing to reclaim ~6 GB is not a failed converge. The engine is at
-// the pin either way, so the prune outcome rides alongside rather than
-// turning into the error.
-func TestConvergeVLLM_PruneFailureDoesNotFailTheConverge(t *testing.T) {
-	boom := errors.New("permission denied")
+// Two convergers on one host — the daemon's and the CLI's, on the apt path
+// (waired-agent#1431). The second waits for the lock, reads the facts again
+// once it holds it, and finds the first already built the pin set: one
+// build, not two, and never a second installer running over the first's
+// half-built directory.
+func TestConvergeVLLM_ReReadsTheFactsUnderTheLock(t *testing.T) {
+	version := "0.20.0"
+	installs := 0
 	got, err := ConvergeVLLM(context.Background(), VLLMConvergeDeps{
-		Active:  func() (string, bool) { return "0.20.0", true },
-		Pins:    func() (VLLMPinSet, bool) { return VLLMPinSet{VLLM: "0.20.0"}, true },
-		Install: func(context.Context) error { return nil },
-		Prune:   func() ([]string, error) { return []string{"0.20.0"}, boom },
+		Active: func() (string, bool) { return version, true },
+		Pins: func() (VLLMPinSet, bool) {
+			p := WantedVLLMPins()
+			p.VLLM = version
+			return p, true
+		},
+		Install: func(context.Context) error { installs++; return nil },
+		Lock: func(context.Context) (func(), error) {
+			version = VLLMPinnedVersion // the other converger finished while this one waited
+			return func() {}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("ConvergeVLLM: %v", err)
 	}
-	if !errors.Is(got.PruneErr, boom) {
-		t.Errorf("PruneErr = %v, want it to wrap %v", got.PruneErr, boom)
-	}
-	if len(got.Pruned) != 1 || got.Pruned[0] != "0.20.0" {
-		t.Errorf("Pruned = %v, want the versions it did remove to still be reported", got.Pruned)
+	if installs != 0 || got.Install {
+		t.Errorf("installs = %d, decision %+v; want none: the host was at the pin set by the time the lock was held", installs, got)
 	}
 }
 

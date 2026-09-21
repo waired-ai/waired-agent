@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -125,11 +124,16 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 		// cache and the managed Python it leaves behind are still
 		// root-owned otherwise (waired-ai/waired#1435).
 		Install: func(ctx context.Context) error {
-			_, err := vllmInstallCore(ctx, stateDir, false, nil)
+			_, err := vllmInstallCore(ctx, stateDir, nil)
 			handStateToServiceUser(stateDir)
 			return err
 		},
-		Prune: inst.PruneOtherVersions,
+		// The daemon's converge may be building the same venv right now
+		// (the apt path restarts it before this runs): wait for it, and
+		// ConvergeVLLM re-reads and finds nothing left to do.
+		Lock: func(ctx context.Context) (func(), error) {
+			return vllmLock(ctx, baseDir, announceVLLMInstallWait)
+		},
 	})
 	if err != nil {
 		return err
@@ -137,14 +141,8 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 	if decision.Install || decision.Blocked || !quiet {
 		fmt.Fprintf(stdout, "vLLM: %s\n", decision.Reason)
 	}
-	// Reclaiming the superseded venv is reported separately from
-	// converging, because failing to free ~6 GB is not a failed update.
-	if len(decision.Pruned) > 0 {
-		fmt.Fprintf(stdout, "vLLM: removed the superseded venv(s): %s\n", strings.Join(decision.Pruned, ", "))
-	}
-	if decision.PruneErr != nil {
-		fmt.Fprintf(stdout, "%s vLLM: couldn't remove a superseded venv (it still works, it just uses disk): %v\n",
-			emo("⚠", "!"), decision.PruneErr)
-	}
+	// Nothing is removed here: the venv this replaced may be the one the
+	// engine is running from, and the daemon removes it once nothing uses
+	// it (waired-agent#1431).
 	return nil
 }

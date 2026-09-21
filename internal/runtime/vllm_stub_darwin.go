@@ -66,6 +66,7 @@ type InstallProgress struct {
 
 type InstallResult struct {
 	Version     string
+	Dir         string
 	VenvPath    string
 	BinDir      string
 	InstalledAt time.Time
@@ -80,9 +81,6 @@ type InstallOpts struct {
 	PythonVersion    string
 	KeepFailed       bool
 	ExtraPipPackages []string
-	// Recreate mirrors the Linux field so cmd/waired compiles here; the
-	// stub installer never builds anything either way.
-	Recreate bool
 }
 
 // VLLMInstaller is a no-op stub on macOS.
@@ -121,8 +119,11 @@ func (*VLLMInstaller) RemoveUVIfNoVenvs() (bool, error) { return false, nil }
 // on macOS without a build tag at the call site (#843).
 func (*VLLMInstaller) ActivePins() (VLLMPinSet, bool) { return VLLMPinSet{}, false }
 
-// PruneOtherVersions refuses with ErrVLLMUnsupportedOnDarwin: there is
-// never an install to prune around.
-func (*VLLMInstaller) PruneOtherVersions() ([]string, error) {
+// PruneUnused refuses with ErrVLLMUnsupportedOnDarwin: there is never an install to
+// prune around.
+func (*VLLMInstaller) PruneUnused(map[string]bool) ([]string, error) {
 	return nil, ErrVLLMUnsupportedOnDarwin
 }
+
+// Lock holds nothing: no install happens here to serialise.
+func (*VLLMInstaller) Lock(context.Context, func()) (func(), error) { return func() {}, nil }

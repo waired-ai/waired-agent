@@ -20,29 +20,30 @@ package runtime
 //     and it is why the rule here is also exact match rather than "at
 //     least the pin".
 //
-//  2. The converge never removes what is there. A version move builds a
-//     NEW <baseDir>/<version>/.venv and swaps the `current` symlink at
-//     the end, so the environment in use is untouched and a failure
-//     leaves it exactly as found; a companion-pin move re-resolves the
-//     wheels into the environment already there. Neither path clears an
-//     environment — that is `waired runtimes install vllm`'s job, and
-//     the difference is InstallOpts.Recreate.
+//  2. The converge never touches what is there. Every build goes into a
+//     NEW directory (<version>, or <version>~N when that name is taken)
+//     and swaps the `current` symlink at the end, so the environment a
+//     running engine was started from is neither edited nor removed, and
+//     a failure leaves it exactly as found. This used to be true of a
+//     version move only: a companion-pin move re-resolved the wheels
+//     INTO the live environment, and the old venv was pruned right after
+//     the swap — under the engine still running from it, which failed
+//     its next request (waired-agent#1431). The new venv takes effect at
+//     the next engine start.
 //
 //  3. It costs disk twice. Because the new venv is a new directory, a
-//     host needs room for both, and nothing removed the old one — only
-//     `waired runtimes uninstall` did. Hence the free-space fact below
-//     and PruneOtherVersions afterwards.
+//     host needs room for both, and the old one stays until nothing uses
+//     it. Hence the free-space fact below. Reclaiming it is not this
+//     converge's job: the daemon does it once its engine runs from the
+//     new venv (VLLMInstaller.PruneUnused).
 //
 // The pin SET, not the vLLM version alone, is what a venv is compared
 // against. The version directory is named after the vLLM release, so a
 // host whose transformers / interpreter pin moved on its
 // own looks up to date by name; the recorded set is what makes that
-// visible. Reconciling one of those is also cheap — the environment is
-// already there, so the venv stage is skipped and pip resolves the small
-// wheel against uv's cache instead of fetching torch again. The one
-// member it cannot reconcile that way is the interpreter, which is why
-// DecideVLLMConverge reports that difference as blocked rather than
-// acting on it.
+// visible. Rebuilding for one of those is cheap: uv hardlinks the wheels
+// it already has from its cache on the same filesystem, so only the
+// moved one is fetched.
 
 import (
 	"context"
@@ -52,7 +53,7 @@ import (
 // VLLMConvergeFreeBytes is the free space a converge wants before it
 // starts. The venv the CLI quotes as "~6 GB" plus room for uv's cache
 // and the interpreter tree, because the OLD venv is still on disk while
-// the new one builds — pruning only happens after the swap.
+// the new one builds — and until the engine stops using it.
 //
 // A pre-flight rather than a mid-install ENOSPC: the failure it prevents
 // is an unattended background install filling the root filesystem of a
@@ -107,13 +108,6 @@ type VLLMConvergeDecision struct {
 	// Reason is why, in a sentence a person reads in `waired update`
 	// output or the agent log.
 	Reason string
-
-	// Pruned and PruneErr are filled by ConvergeVLLM after a successful
-	// install, never by DecideVLLMConverge. Reclaiming the superseded
-	// venv is a separate outcome from converging: failing to remove
-	// ~6 GB must not make a converged host report failure.
-	Pruned   []string
-	PruneErr error
 }
 
 // DecideVLLMConverge is the whole policy.
@@ -126,22 +120,14 @@ func DecideVLLMConverge(f VLLMConvergeFacts) VLLMConvergeDecision {
 			Reason: "no vLLM venv on this host; `waired init` is what installs one",
 		}
 	}
-	need, interpreter := f.drift()
+	need := f.drift()
 	if need == "" {
 		return VLLMConvergeDecision{Reason: f.settled()}
 	}
-	if interpreter {
-		// The one difference a converge cannot close. It reconciles the
-		// wheels INTO the environment that is there, which is what keeps
-		// it from removing the one the host may be serving from — and an
-		// interpreter is not a wheel. Running the install anyway would
-		// change nothing and then record a pin set the venv does not
-		// have, so the honest answer is to say so and name the verb that
-		// can (#843).
-		return VLLMConvergeDecision{Blocked: true, Reason: need +
-			"; that needs a new virtual environment, which an update will not build over the one in use — " +
-			"run `waired runtimes install vllm` when this computer is free"}
-	}
+	// An interpreter move is a rebuild like any other now. It used to be
+	// reported as blocked, because the converge reconciled wheels INTO the
+	// environment that was there and an interpreter is not a wheel; every
+	// build now makes a new environment (waired-agent#1431).
 	if f.FreeBytes > 0 && f.FreeBytes < VLLMConvergeFreeBytes {
 		return VLLMConvergeDecision{Blocked: true, Reason: fmt.Sprintf(
 			"%s, but only %.1f GB is free and the rebuild needs about %.0f GB "+
@@ -164,35 +150,33 @@ func DecideVLLMConverge(f VLLMConvergeFacts) VLLMConvergeDecision {
 // releases (0.24.0.post1) differ from their base in exactly the way a
 // dotted-core comparison discards, and a pin moved to one is usually a
 // pin moved to fix something.
-// The second return says the difference is the INTERPRETER, which is the
-// one thing an in-place reconcile cannot change.
-func (f VLLMConvergeFacts) drift() (string, bool) {
+func (f VLLMConvergeFacts) drift() string {
 	switch {
 	case f.Version == "":
 		// Defensive: the version comes from a directory name, so an
 		// empty one means the venv cannot describe itself. Same answer
 		// as Ollama's unreadable engine — rebuild, because nothing else
 		// can be concluded.
-		return fmt.Sprintf("the vLLM venv does not name a version; rebuilding at the pin %s", f.Want.VLLM), false
+		return fmt.Sprintf("the vLLM venv does not name a version; rebuilding at the pin %s", f.Want.VLLM)
 	case f.Version != f.Want.VLLM:
 		// Deliberately not "older than". A pin can move backwards when a
 		// release is withdrawn, and this build's parser table and serve
 		// flags were read out of the pinned release, so a newer venv is
 		// as untested as an older one.
-		return fmt.Sprintf("vLLM venv is %s, pin is %s", f.Version, f.Want.VLLM), false
+		return fmt.Sprintf("vLLM venv is %s, pin is %s", f.Version, f.Want.VLLM)
 	case !f.HasRecord:
 		// An install that predates the record (#843), or one whose
 		// record cannot be read. Its vLLM version matches and the
 		// companion pins cannot be established, so there is no evidence
 		// of drift — and rebuilding ~6 GB on the absence of a file would
 		// charge every host that installed before this shipped.
-		return "", false
+		return ""
 	case f.Recorded.Transformers != f.Want.Transformers:
-		return fmt.Sprintf("transformers constraint is %q, pin is %q", f.Recorded.Transformers, f.Want.Transformers), false
+		return fmt.Sprintf("transformers constraint is %q, pin is %q", f.Recorded.Transformers, f.Want.Transformers)
 	case f.Recorded.Python != f.Want.Python:
-		return fmt.Sprintf("venv interpreter is Python %s, pin is %s", f.Recorded.Python, f.Want.Python), true
+		return fmt.Sprintf("venv interpreter is Python %s, pin is %s", f.Recorded.Python, f.Want.Python)
 	default:
-		return "", false
+		return ""
 	}
 }
 
@@ -227,8 +211,11 @@ type VLLMConvergeDeps struct {
 	FreeBytes func() int64
 	// Install builds the venv at the pinned set and activates it.
 	Install func(ctx context.Context) error
-	// Prune removes the superseded venvs, after a successful install.
-	Prune func() ([]string, error)
+	// Lock, when set, is held across reading the facts, deciding and
+	// installing (VLLMInstaller.Lock), so a second converger — the CLI's
+	// and the daemon's run together on the apt path — waits, re-reads,
+	// and finds the host already at the pin set.
+	Lock func(ctx context.Context) (func(), error)
 }
 
 // NewVLLMConvergeDeps wires the plain case: the installer under baseDir,
@@ -247,33 +234,49 @@ func NewVLLMConvergeDeps(baseDir string, freeBytes func() int64) VLLMConvergeDep
 			_, err := inst.Install(ctx, InstallOpts{}, nil)
 			return err
 		},
-		Prune: inst.PruneOtherVersions,
+		Lock: func(ctx context.Context) (func(), error) { return inst.Lock(ctx, nil) },
 	}
 }
 
 // ConvergeVLLM brings an already-installed venv onto this build's pin
 // set and reports what it decided, so the caller can say so whether or
 // not it acted.
+//
+// It never removes a venv: the one it replaces may be the one an engine is
+// running from (waired-agent#1431).
 func ConvergeVLLM(ctx context.Context, d VLLMConvergeDeps) (VLLMConvergeDecision, error) {
-	facts := VLLMConvergeFacts{Want: WantedVLLMPins()}
-	facts.Version, facts.Installed = d.Active()
-	if facts.Installed {
-		facts.Recorded, facts.HasRecord = d.Pins()
-		if d.FreeBytes != nil {
-			facts.FreeBytes = d.FreeBytes()
+	read := func() VLLMConvergeFacts {
+		facts := VLLMConvergeFacts{Want: WantedVLLMPins()}
+		facts.Version, facts.Installed = d.Active()
+		if facts.Installed {
+			facts.Recorded, facts.HasRecord = d.Pins()
+			if d.FreeBytes != nil {
+				facts.FreeBytes = d.FreeBytes()
+			}
 		}
+		return facts
 	}
+	facts := read()
 	decision := DecideVLLMConverge(facts)
 	if !decision.Install {
+		// Decided unlocked, so a host with no venv never creates the
+		// directory the lock lives on.
 		return decision, nil
+	}
+	if d.Lock != nil {
+		unlock, err := d.Lock(ctx)
+		if err != nil {
+			return decision, fmt.Errorf("converge vLLM to %s: %w", facts.Want.VLLM, err)
+		}
+		defer unlock()
+		// Whoever held the lock may have converged this host already.
+		facts = read()
+		if decision = DecideVLLMConverge(facts); !decision.Install {
+			return decision, nil
+		}
 	}
 	if err := d.Install(ctx); err != nil {
 		return decision, fmt.Errorf("converge vLLM to %s: %w", facts.Want.VLLM, err)
-	}
-	// Only after the swap. Pruning before it would remove the venv the
-	// host is still serving from if the install then failed.
-	if d.Prune != nil {
-		decision.Pruned, decision.PruneErr = d.Prune()
 	}
 	return decision, nil
 }
