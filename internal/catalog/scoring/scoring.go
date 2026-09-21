@@ -61,6 +61,12 @@ func KVBytesPerTokenFP16(fullAttnLayers, nKVHeads, headDim int) int {
 // number rather than the measured one is what made the annotation survive
 // both sides of an upstream bug.
 //
+// And it has to survive the first side again: the pin went back to ollama
+// 0.34.0 (b10760) on 2026-09-22 so that hf.co/ tags can be pulled
+// (waired-ai/waired-agent#1505), so the engine once more holds 33792
+// B/token for this model. The row stays derived; the next bump to a
+// b10889-or-later engine closes the gap without touching it.
+//
 // The indexer runs on the same layers as full attention, so the caller's
 // fullAttnLayers is the right multiplier (llama.cpp builds its layer filter
 // from the same predicate: "QSA runs on the dense-attention layers only").
