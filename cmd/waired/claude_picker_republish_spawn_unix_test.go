@@ -26,8 +26,11 @@ func TestSpawnPickerRepublishReturnsWithoutWaiting(t *testing.T) {
 	argvFile := filepath.Join(dir, "argv")
 	sentinel := filepath.Join(dir, "the-child-kept-running")
 	script := filepath.Join(dir, "stand-in-for-waired")
+	// The argv lands whole or not at all: `>` creates the file before
+	// printf writes into it, and a read in between saw an empty argv
+	// (CI, under the race detector).
 	body := "#!/bin/sh\n" +
-		"printf '%s' \"$*\" > " + argvFile + "\n" +
+		"printf '%s' \"$*\" > " + argvFile + ".tmp && mv " + argvFile + ".tmp " + argvFile + "\n" +
 		"sleep 1\n" +
 		"printf ok > " + sentinel + "\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
