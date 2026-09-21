@@ -98,6 +98,39 @@ func TestHFPuller_RetriesOnceOnTransportFailure(t *testing.T) {
 	}
 }
 
+// A cancel kills the first attempt (exec.CommandContext's SIGKILL, which
+// reads as "signal: killed", not as context.Canceled). Before
+// waired-agent#1519 the puller then announced "download failed, retrying
+// once" and started a second download on the dead context, which was killed
+// in turn and left a second partial file behind.
+func TestHFPuller_DoesNotRetryAfterACancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &fakeHFRunner{
+		respond: func(hfCall) ([]string, error) {
+			cancel()
+			return []string{"Downloading shards: 40%|███ | 4/9"}, errors.New("signal: killed")
+		},
+	}
+	var messages []string
+	p := NewHFPuller("/venv/bin/hf", runner)
+	err := p.Pull(ctx, "Qwen/X", HFPullOpts{LocalDir: t.TempDir()}, func(pr Progress) {
+		if pr.Message != "" {
+			messages = append(messages, pr.Message)
+		}
+	})
+	if err == nil {
+		t.Fatal("a cancelled pull reported success")
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("calls = %d, want 1: a cancelled pull must not start another download", len(runner.calls))
+	}
+	for _, m := range messages {
+		if strings.Contains(m, "retrying") {
+			t.Errorf("a cancelled pull announced a retry: %q", m)
+		}
+	}
+}
+
 func TestHFPuller_AuthErrorShortCircuits(t *testing.T) {
 	runner := &fakeHFRunner{
 		respond: func(hfCall) ([]string, error) {

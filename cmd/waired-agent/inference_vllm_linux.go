@@ -293,17 +293,37 @@ func (p *agentInferenceProvider) hfLister() download.HFFileLister {
 
 // hfLocalDir is the on-disk directory the safetensors for repoID land in.
 // The repo id's "/" is flattened to "__" so the whole repo maps to a single
-// directory under <stateDir>/models/hf without nesting or traversal risk.
+// directory under hfModelsRoot without nesting or traversal risk.
 func (p *agentInferenceProvider) hfLocalDir(repoID string) string {
-	return filepath.Join(p.stateDir, "models", "hf", strings.ReplaceAll(repoID, "/", "__"))
+	return filepath.Join(hfModelsRoot(p.stateDir), strings.ReplaceAll(repoID, "/", "__"))
 }
 
 // downloadHFWeights fetches the safetensors for variant into hfLocalDir and
 // drives the model's state through downloading → verifying → ready, then
 // records a local vLLM endpoint. Returns the local dir on success. Synchronous
 // (callers run it either in the bootstrap goroutine or a pull-job goroutine).
-func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, refresh bool) (string, error) {
+//
+// stopRequested, when non-nil, tells a stop somebody asked for (`waired
+// models cancel`, `models rm`) from a download that failed: the first records
+// nothing, because settleCancelledPull is about to drop the row, and "failed"
+// would be a wrong answer — the same rule runPullJob follows for ollama.
+func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, refresh bool, stopRequested func() bool) (string, error) {
 	localDir := p.hfLocalDir(variant.Source.RepoID)
+	// The directory is this download's until it returns, so every partial
+	// file in it now is one a killed download left: huggingface_hub never
+	// resumes them (download.SweepHFIncomplete), and they would otherwise
+	// both hold the disk and count as progress in WatchHFLocalDir
+	// (waired-agent#1519).
+	release, err := p.hfDirs.acquire(ctx, localDir, func() {
+		p.logger.Info("another download is writing to this model's directory; waiting for it",
+			"model", modelID, "dir", localDir)
+	})
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	sweepHFPartials(p.logger, localDir, "before download")
+
 	// A refresh pull of an already-ready model keeps it servable
 	// (state=ready) throughout so a transient error can't take healthy
 	// serving down (#614); skip the downloading/verifying downgrades.
@@ -362,7 +382,7 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 		close(watchDone)
 	}
 
-	err := puller.Pull(ctx, variant.Source.RepoID, download.HFPullOpts{
+	err = puller.Pull(ctx, variant.Source.RepoID, download.HFPullOpts{
 		LocalDir: localDir,
 		Revision: variant.Source.Revision,
 		Files:    download.HFFileNames(files),
@@ -383,6 +403,14 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	stopWatch()
 	<-watchDone
 	if err != nil {
+		// A killed `hf download` cannot delete its own partial file, and
+		// nothing will ever resume it; free the disk now rather than at
+		// the next attempt.
+		sweepHFPartials(p.logger, localDir, "after the download stopped")
+		if stopRequested != nil && stopRequested() {
+			p.logger.Info("hf pull stopped on request", "model", modelID, "repo", variant.Source.RepoID)
+			return "", err
+		}
 		p.logger.Warn("hf pull failed", "model", modelID, "repo", variant.Source.RepoID, "err", err, "refresh", refresh)
 		_ = p.store.Update(func(s *catalog.State) {
 			m := s.Models[modelID]
@@ -455,7 +483,7 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJo
 	// cancelled job leaves behind (waired-agent#641).
 	p.spawnPull(job, func() {
 		defer release()
-		p.runHFPullJob(ctx, manifest.ModelID, variant, puller, job.jobID, refresh)
+		p.runHFPullJob(ctx, job, variant, puller, refresh)
 	})
 	return nil
 }
@@ -465,12 +493,12 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJo
 // long-lived context: PullModel dispatches on backgroundCtx(), never on a
 // request ctx, which net/http cancels the moment the handler returns
 // (#305a). It is deliberately not re-wrapped in a self-cancelling ctx.
-func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, jobID string, refresh bool) {
-	if _, err := p.downloadHFWeights(ctx, modelID, variant, puller, refresh); err != nil {
+func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, job *pullJob, variant catalog.Variant, puller *download.HFPuller, refresh bool) {
+	if _, err := p.downloadHFWeights(ctx, job.modelID, variant, puller, refresh, job.requestedStop); err != nil {
 		return
 	}
-	p.logger.Info("hf pull job completed", "model", modelID, "job", jobID)
-	p.hfWeightsLanded(ctx, modelID, variant.VariantID)
+	p.logger.Info("hf pull job completed", "model", job.modelID, "job", job.jobID)
+	p.hfWeightsLanded(ctx, job.modelID, variant.VariantID)
 }
 
 // bootstrapVLLM is the vLLM counterpart of the ollama startup path: resolve
