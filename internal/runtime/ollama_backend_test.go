@@ -5,234 +5,143 @@ import (
 	"testing"
 )
 
+// The plan is the engine's default everywhere but one host. Rewritten for
+// waired-agent#1492: the plan used to be a list of steps (ROCm, then
+// Vulkan) with OLLAMA_VULKAN, the gfx1151 HSA override and a hand-kept
+// Windows SKU table deciding between them. Ollama 0.34.2 does all of
+// that itself, so every row here now expects no environment except the
+// Windows Strix Halo, and the label says what the engine is expected to
+// choose.
 func TestResolveOllamaBackend(t *testing.T) {
 	cases := []struct {
-		name      string
-		in        BackendInputs
-		wantSteps []BackendStep
+		name    string
+		in      BackendInputs
+		want    OllamaBackend
+		wantEnv []string
 	}{
 		{
-			name: "strix halo linux: rocm then vulkan",
-			in:   BackendInputs{GOOS: "linux", StrixHaloAPU: true},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm, Env: []string{"HSA_OVERRIDE_GFX_VERSION=11.5.1", "OLLAMA_IGPU_ENABLE=1"}},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
-			},
+			// The one override, measured (#1233): Vulkan with the iGPU
+			// un-gated. No OLLAMA_VULKAN — Vulkan is on by default.
+			name:    "strix halo windows: vulkan + igpu-enable",
+			in:      BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", StrixHaloAPU: true, AMDGPU: true},
+			want:    BackendVulkan,
+			wantEnv: []string{"OLLAMA_IGPU_ENABLE=1"},
 		},
 		{
-			name: "strix halo linux: identified by CPU even when iGPU undetected",
-			// No GPU vendor (rocm-smi absent) but CPU says Strix Halo —
-			// the whole point of keying off the CPU model (#290).
-			in: BackendInputs{GOOS: "linux", PrimaryGPUVendor: "", StrixHaloAPU: true},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm, Env: []string{"HSA_OVERRIDE_GFX_VERSION=11.5.1", "OLLAMA_IGPU_ENABLE=1"}},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
-			},
+			// INVERTED by #1492 (owner ruling: follow the engine, no
+			// special rule on Linux). Was ROCm with the HSA override and
+			// OLLAMA_IGPU_ENABLE, then Vulkan. The engine admits gfx1151
+			// through ROCm by default and its ROCm build carries the
+			// kernels natively.
+			name: "strix halo linux: the engine's choice",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", StrixHaloAPU: true, AMDGPU: true},
+			want: BackendAuto,
 		},
 		{
-			name: "strix halo linux: APU wins even if amd GPU also detected",
-			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", StrixHaloAPU: true},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm, Env: []string{"HSA_OVERRIDE_GFX_VERSION=11.5.1", "OLLAMA_IGPU_ENABLE=1"}},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
-			},
+			name: "amd discrete linux: the engine's choice",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", AMDGPU: true},
+			want: BackendAuto,
 		},
 		{
-			// The parenthetical used to read "no ROCm on Win APU". ROCm is
-			// present and does engage gfx1151 there; Vulkan wins on
-			// correctness and on the numbers (#1233). See the arm itself.
-			name: "strix halo windows: vulkan, not the ROCm that is also there",
-			in:   BackendInputs{GOOS: "windows", StrixHaloAPU: true},
-			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
-			},
+			// INVERTED by #1492. An RX 6600 on Windows used to be forced
+			// onto Vulkan because it was outside a hand-kept copy of
+			// upstream's SKU table. The engine drops what the overlay's
+			// rocBLAS cannot serve and keeps it on Vulkan by itself.
+			name: "amd discrete windows: the engine's choice",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", AMDGPU: true},
+			want: BackendAuto,
 		},
 		{
-			name:      "apple silicon: metal, no override",
-			in:        BackendInputs{GOOS: "darwin", PrimaryGPUVendor: "apple"},
-			wantSteps: []BackendStep{{Backend: BackendMetal}},
+			name: "nvidia: cuda",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "nvidia"},
+			want: BackendCUDA,
 		},
 		{
-			// macOS has only Metal (Apple Silicon) or CPU in ollama's build —
-			// no ROCm/CUDA/Vulkan. A non-apple vendor on darwin (an Intel
-			// Mac's iGPU, or a future detectIntel wiring) must fall to CPU,
-			// never the Linux/Windows Vulkan env. Guards the parity trap.
-			name:      "macos non-apple gpu: cpu, never vulkan",
-			in:        BackendInputs{GOOS: "darwin", PrimaryGPUVendor: "intel"},
-			wantSteps: []BackendStep{{Backend: BackendCPU}},
+			name: "intel discrete: vulkan, no env",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "intel"},
+			want: BackendVulkan,
 		},
 		{
-			name:      "macos no gpu: cpu",
-			in:        BackendInputs{GOOS: "darwin", PrimaryGPUVendor: ""},
-			wantSteps: []BackendStep{{Backend: BackendCPU}},
+			name: "apple silicon: metal",
+			in:   BackendInputs{GOOS: "darwin", PrimaryGPUVendor: "apple"},
+			want: BackendMetal,
 		},
 		{
-			name:      "nvidia: cuda, no override",
-			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: "nvidia"},
-			wantSteps: []BackendStep{{Backend: BackendCUDA}},
+			name: "macos non-apple gpu: cpu, never a linux/windows backend",
+			in:   BackendInputs{GOOS: "darwin", PrimaryGPUVendor: "intel"},
+			want: BackendCPU,
 		},
 		{
-			// INVERTED by waired-agent#1484. This row used to expect
-			// Vulkan + OLLAMA_IGPU_ENABLE, chosen from the NAME. A 780M
-			// the profiler knows is integrated never reaches the plan (it
-			// is in Profile.UnusedGPUs); one whose integration nothing
-			// read is left to the engine, which drops it by default. The
-			// name decides nothing, and nothing here switches an iGPU on.
-			name: "amd 780M by name, windows: no igpu-enable",
-			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon 780M Graphics"},
-			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
+			name: "no gpu in use: cpu",
+			in:   BackendInputs{GOOS: "linux"},
+			want: BackendCPU,
 		},
 		{
-			name: "amd 780M by name, linux: no igpu-enable",
-			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon 780M Graphics"},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
+			// A Windows Strix Halo whose adapter the registry walk missed
+			// is still recognised by its CPU (hardware.StrixHaloHost), and
+			// still gets the measured arm.
+			name:    "strix halo by cpu name, adapter unseen, windows",
+			in:      BackendInputs{GOOS: "windows", StrixHaloAPU: true},
+			want:    BackendVulkan,
+			wantEnv: []string{"OLLAMA_IGPU_ENABLE=1"},
 		},
 		{
-			name: "amd rocm-supported RX 7900 windows: rocm then vulkan",
-			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX"},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
-		},
-		{
-			name: "amd discrete RX 7900 linux: rocm then vulkan",
-			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX"},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
-		},
-		{
-			// Discrete AMD outside Ollama's Windows ROCm overlay set: no
-			// ROCm runtime is installed, so it must use Vulkan (#40).
-			name: "amd unsupported discrete RX 6600 windows: vulkan (no overlay)",
-			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 6600"},
-			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
-		},
-		{
-			// Same card on Linux: ROCm is bundled and covers a broader set,
-			// so try ROCm with the Vulkan probe fallback.
-			name: "amd discrete RX 6600 linux: rocm then vulkan (rocm bundled)",
-			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 6600"},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
-		},
-		{
-			// Unknown model (amd detected, no name): safe default — Windows
-			// can't confirm the overlay, Linux has bundled ROCm to try.
-			name: "amd vendor, empty model, windows: vulkan",
-			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd"},
-			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
-		},
-		{
-			name: "amd vendor, empty model, linux: rocm then vulkan",
-			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd"},
-			wantSteps: []BackendStep{
-				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
-			},
-		},
-		{
-			// Only a discrete Intel card reaches the plan (an integrated
-			// one is set aside by the profiler), so no igpu-enable.
-			name:      "intel discrete: vulkan",
-			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: "intel"},
-			wantSteps: []BackendStep{{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}}},
-		},
-		{
-			name:      "no gpu: cpu, no override",
-			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: ""},
-			wantSteps: []BackendStep{{Backend: BackendCPU}},
-		},
-		{
-			name:      "unrecognised vendor: auto",
-			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: "moore-threads"},
-			wantSteps: []BackendStep{{Backend: BackendAuto}},
+			name: "unrecognised vendor: auto",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "moore-threads"},
+			want: BackendAuto,
 		},
 	}
-
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			plan := ResolveOllamaBackend(c.in)
-			if !reflect.DeepEqual(plan.Steps, c.wantSteps) {
-				t.Fatalf("Steps = %+v, want %+v", plan.Steps, c.wantSteps)
+			if plan.Backend != c.want || !reflect.DeepEqual(plan.Env, c.wantEnv) {
+				t.Fatalf("plan = %+v, want backend %s env %v", plan, c.want, c.wantEnv)
 			}
 			if plan.Reason == "" {
 				t.Errorf("Reason is empty; every plan should explain itself")
-			}
-			// Probes() is true iff there is a fallback step.
-			if got, want := plan.Probes(), len(c.wantSteps) > 1; got != want {
-				t.Errorf("Probes() = %v, want %v", got, want)
-			}
-			// Preferred() must equal Steps[0].
-			if !reflect.DeepEqual(plan.Preferred(), c.wantSteps[0]) {
-				t.Errorf("Preferred() = %+v, want %+v", plan.Preferred(), c.wantSteps[0])
 			}
 		})
 	}
 }
 
-func TestAMDROCmSupported(t *testing.T) {
-	cases := []struct {
-		model string
-		want  bool
-	}{
-		{"AMD Radeon RX 7900 XTX", true},
-		{"AMD Radeon RX 7600", true},
-		{"AMD Radeon RX 6800 XT", true},
-		{"AMD Radeon RX 6950 XT", true},
-		{"AMD Radeon PRO W7900", true},
-		{"AMD Radeon (TM) PRO W6800", true},
-		{"AMD Radeon PRO V620", true},
-		// Below Ollama's Windows overlay cut / not discrete.
-		{"AMD Radeon RX 6700 XT", false},
-		{"AMD Radeon RX 6600", false},
-		{"AMD Radeon RX 5700 XT", false},
-		{"AMD Radeon 780M Graphics", false},
-		{"AMD Radeon Graphics", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		if got := amdROCmSupported(c.model); got != c.want {
-			t.Errorf("amdROCmSupported(%q) = %v, want %v", c.model, got, c.want)
+// TestOnlyStrixHaloWindowsSetsEnv pins the rule #1484 and #1492 set: the
+// engine's own default decides, and the one place waired overrides it is
+// the measured Windows Strix Halo arm. Any other plan with environment
+// would override the engine without a measurement behind it — and an
+// OLLAMA_IGPU_ENABLE would switch on an iGPU the engine leaves off.
+func TestOnlyStrixHaloWindowsSetsEnv(t *testing.T) {
+	for _, goos := range []string{"linux", "windows", "darwin"} {
+		for _, vendor := range []string{"", "amd", "intel", "nvidia", "apple", "moore-threads"} {
+			for _, strix := range []bool{false, true} {
+				in := BackendInputs{GOOS: goos, PrimaryGPUVendor: vendor, StrixHaloAPU: strix, AMDGPU: vendor == "amd"}
+				plan := ResolveOllamaBackend(in)
+				if len(plan.Env) > 0 && (goos != "windows" || !strix) {
+					t.Errorf("%+v: plan sets %v", in, plan.Env)
+				}
+			}
 		}
 	}
 }
 
-// TestOnlyStrixHaloSetsIGPUEnable pins the rule waired-agent#1484 set:
-// the engine's own default decides which integrated GPUs run, and the
-// one place waired overrides it is the chip the engine itself admits
-// (gfx1151) where waired routes it through Vulkan. Any other plan that
-// set OLLAMA_IGPU_ENABLE would switch on an iGPU the engine leaves off —
-// for a desktop Ryzen with a discrete card, the 2-CU iGPU beside it.
-func TestOnlyStrixHaloSetsIGPUEnable(t *testing.T) {
-	models := []string{"", "AMD Radeon 780M Graphics", "AMD Radeon(TM) Graphics", "AMD Radeon RX 7900 XTX", "AMD Radeon RX 6600", "NVIDIA GeForce RTX 4090", "Intel(R) Arc(TM) B580 Graphics"}
-	for _, goos := range []string{"linux", "windows", "darwin"} {
-		for _, vendor := range []string{"", "amd", "intel", "nvidia", "apple", "moore-threads"} {
-			for _, model := range models {
-				for _, strix := range []bool{false, true} {
-					in := BackendInputs{GOOS: goos, PrimaryGPUVendor: vendor, PrimaryGPUModel: model, StrixHaloAPU: strix}
-					for _, step := range ResolveOllamaBackend(in).Steps {
-						for _, kv := range step.Env {
-							if kv == envOllamaIGPUEnable && !strix {
-								t.Errorf("%+v: step %s sets %s", in, step.Backend, kv)
-							}
-						}
-					}
-				}
-			}
+func TestWantsROCmOverlay(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   BackendInputs
+		want bool
+	}{
+		{"amd discrete linux", BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", AMDGPU: true}, true},
+		{"amd discrete windows, any card", BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", AMDGPU: true}, true},
+		// Owner ruling: no special rule on Linux, so the engine gets ROCm.
+		{"strix halo linux", BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", StrixHaloAPU: true, AMDGPU: true}, true},
+		// The measured Windows arm names Vulkan; the overlay would make
+		// the engine prefer ROCm.
+		{"strix halo windows", BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", StrixHaloAPU: true, AMDGPU: true}, false},
+		{"amd card second, nvidia first", BackendInputs{GOOS: "linux", PrimaryGPUVendor: "nvidia", AMDGPU: true}, true},
+		{"no amd gpu in use", BackendInputs{GOOS: "linux", PrimaryGPUVendor: "nvidia"}, false},
+		{"macos", BackendInputs{GOOS: "darwin", AMDGPU: true}, false},
+	} {
+		if got := WantsROCmOverlay(c.in); got != c.want {
+			t.Errorf("%s: WantsROCmOverlay = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

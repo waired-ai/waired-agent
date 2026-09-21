@@ -67,6 +67,15 @@ hostfit の側では、検出した iGPU が `Profile.GPUs` に居るとホス�
   （#1483）と AMD の sysfs 読み（#1485）は、この上に安全に足せる。
 - 許可規則の写しは、エンジンの版を上げるたびに読み直す
   （`internal/runtime/ollama_version.go` に記載）。
+- 同じ原則で、エンジンが自分でやっていることを waired が重ねていた部分を
+  外した（#1492）: `OLLAMA_VULKAN=1`（0.30 から既定で有効）、
+  `HSA_OVERRIDE_GFX_VERSION=11.5.1`（ROCm ビルドが gfx1151 を直に積む）、
+  上流の Windows SKU 表の手写し `amdROCmSupportedRes`（ROCm で動かせるかは
+  オーバーレイ自身の rocBLAS の一覧でエンジンが決める）、ROCm から Vulkan への
+  多段プランと、その起動し直し（エンジン自身が落ちた方を Vulkan で拾う）。
+  残る waired の判断は、ROCm オーバーレイを取得するかどうか 1 つだけで
+  （エンジンはディスクに無いバックエンドを選べない）、答えは「使う AMD GPU が
+  あれば取る、ただし Windows の Strix Halo を除く」。
 
 ## Refs
 

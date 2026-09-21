@@ -429,22 +429,15 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	// dispatched a few lines earlier had not finished either, so what they
 	// observe is unchanged — only the order is.
 	//
-	// #290: for hosts with a fallback backend (Strix Halo Linux: ROCm
-	// then Vulkan), verify the GPU actually engaged and switch to the
-	// next backend if it didn't, so the host never runs on CPU silently
-	// while a working GPU path exists. Conservative: an inconclusive
-	// probe keeps the preferred backend.
-	//
-	// No longer gated on Probes() (#70). A host with only one GPU backend
-	// cannot be moved to a better one, but it can still be MISLABELLED —
-	// a detected GPU that fails to engage kept reporting cuda / vulkan /
-	// metal while inference ran on the CPU. resolveBackendWithProbe now
-	// decides for itself what a plan's verdict may change: a restart
-	// where there is a fallback, the label alone where there is not.
-	// "" means the probe declined to decide (a provider with no boot
+	// #290 / #70: a detected GPU that fails to engage must not keep
+	// reporting cuda / vulkan / metal while inference runs on the CPU, so
+	// the label is checked against /api/ps and corrected to "cpu" on
+	// positive evidence. Read-only: the engine picks and falls back
+	// between backends itself (#1492), so there is nothing to restart.
+	// "" means the check declined to decide (a provider with no boot
 	// plan); the seed from startInferenceSubsystem stands rather than
 	// being cleared.
-	if resolved := resolveBackendWithProbe(ctx, p.ollama, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger); resolved != "" {
+	if resolved := verifyBackendEngaged(ctx, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger); resolved != "" {
 		p.ollama.SetResolvedBackend(resolved)
 	}
 	// #621: verify the exported serve tuning against the running engine

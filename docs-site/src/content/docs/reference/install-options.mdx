@@ -174,7 +174,7 @@ writing the script to disk.
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | Pin an exact release. |
 | | | `WAIRED_STATE_DIR` | Where Waired keeps identity and settings. macOS and Windows only. |
 | | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | How long the inference engine's one-time download may take before Waired gives up. Defaults to `60m`. Raise it, for example to `3h`, only on a very slow connection. |
-| | `-OllamaGpuMode <mode>` | | Windows only: `auto`, `rocm`, `vulkan`, `cuda-only`, or `cpu-only`. Decides whether the AMD ROCm overlay is downloaded. |
+| | `-OllamaGpuMode <mode>` | | Windows only: `auto`, `rocm`, `vulkan`, `cuda-only`, or `cpu-only`. Decides whether the AMD ROCm overlay is downloaded. `auto` downloads it for any AMD GPU the engine uses, except AMD Strix Halo, which runs on Vulkan. |
 
 <Aside type="note" title="Windows flags need the script on disk">
 	The `iwr … | iex` one-line command cannot pass parameters. Use the

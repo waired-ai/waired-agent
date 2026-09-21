@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 // installOllamaBundled is a seam so tests exercise installOllama's
@@ -56,7 +56,8 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 
 func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	inst := infruntime.NewOllamaInstaller(baseDir)
-	inst.WantROCmOverlay = detectOllamaGPUVendor(ctx) == "amd"
+	inst.WantROCmOverlay = infruntime.WantsROCmOverlay(
+		setup.OllamaBackendInputs("linux", hardware.NewProfiler("").Profile(ctx)))
 	// Renderer shared with the darwin flow: runtimes_install_render.go.
 	// The terminal bar and the daemon sink are peers — teeOllamaProgress
 	// keeps the former even when the latter is absent.
@@ -64,16 +65,4 @@ func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(inf
 		newOllamaInstallRenderer(stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
 		sink,
 	))
-}
-
-// detectOllamaGPUVendor returns "amd" when an AMD GPU is present so the
-// installer overlays the ROCm runtime; "" otherwise (CUDA+CPU base).
-func detectOllamaGPUVendor(ctx context.Context) string {
-	prof := hardware.NewProfiler("").Profile(ctx)
-	for _, g := range prof.GPUs {
-		if strings.EqualFold(g.Vendor, "amd") {
-			return "amd"
-		}
-	}
-	return ""
 }

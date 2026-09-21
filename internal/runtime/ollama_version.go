@@ -30,10 +30,13 @@ package runtime
 // (internal/catalog/max_parallel_integration_test.go); it is not a
 // required check, so look at it.
 //
-// The AMD/ROCm supported-SKU list is the other thing to revisit, and it
-// now lives in exactly one place — amdROCmSupported in ollama_backend.go.
-// It used to be mirrored in scripts/install/ollama-windows.ps1, which
-// #493 retired along with the second copy.
+// There is no AMD/ROCm supported-SKU list to revisit any more: waired
+// fetches the ROCm overlay for any AMD GPU in use and lets the engine
+// decide which devices it serves (WantsROCmOverlay, waired-agent#1492).
+// What remains to re-read at a bump is the Windows Strix Halo arm's
+// upstream threads, listed beside that arm in ollama_backend.go. (The
+// dated notes below still name amdROCmSupportedRes; they record what was
+// checked at the time.)
 //
 // 0.30.x changed the Linux release asset format from .tgz to .tar.zst
 // (ollama_install.go decompresses in-process) and reworked the

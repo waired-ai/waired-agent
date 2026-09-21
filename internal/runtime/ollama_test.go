@@ -855,53 +855,6 @@ func TestOllamaAdapter_BackendEnv_AppliedAndOverridesInherited(t *testing.T) {
 	}
 }
 
-// TestOllamaAdapter_SetBackendEnv_NextSpawn verifies the ROCm->Vulkan
-// probe mechanism (#290): switching the backend env then re-spawning
-// (after Stop) launches `ollama serve` with the new env.
-func TestOllamaAdapter_SetBackendEnv_NextSpawn(t *testing.T) {
-	srv := okHealthServer(t)
-	defer srv.Close()
-
-	host, port := splitHostPort(t, srv.URL)
-	spawner := &fakeSpawner{}
-	a := NewOllamaAdapter(OllamaConfig{
-		Binary:         "/fake/ollama",
-		Host:           host,
-		Port:           port,
-		Spawner:        spawner,
-		HTTPClient:     srv.Client(),
-		HealthInterval: 10 * time.Millisecond,
-		HealthSuccess:  1,
-		HealthMaxFails: 5,
-		StopTimeout:    100 * time.Millisecond,
-		BackendEnv:     []string{"HSA_OVERRIDE_GFX_VERSION=11.5.1"}, // ROCm attempt
-	})
-	if err := a.EnsureRunning(context.Background()); err != nil {
-		t.Fatalf("EnsureRunning #1: %v", err)
-	}
-	if !contains(spawner.lastEnv, "HSA_OVERRIDE_GFX_VERSION=11.5.1") {
-		t.Fatalf("first spawn missing ROCm env: %v", spawner.lastEnv)
-	}
-
-	// Simulate "GPU didn't engage": stop and switch to the Vulkan step.
-	if err := a.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	a.SetBackendEnv([]string{"OLLAMA_VULKAN=1"})
-	if err := a.EnsureRunning(context.Background()); err != nil {
-		t.Fatalf("EnsureRunning #2: %v", err)
-	}
-	if spawner.calls != 2 {
-		t.Errorf("spawner called %d times, want 2 (re-spawn after backend switch)", spawner.calls)
-	}
-	if !contains(spawner.lastEnv, "OLLAMA_VULKAN=1") {
-		t.Errorf("second spawn missing Vulkan env: %v", spawner.lastEnv)
-	}
-	if contains(spawner.lastEnv, "HSA_OVERRIDE_GFX_VERSION=") {
-		t.Errorf("ROCm env leaked into Vulkan re-spawn: %v", spawner.lastEnv)
-	}
-}
-
 func sentSIGTERM(sigs []os.Signal) bool {
 	for _, s := range sigs {
 		if s != nil && s.String() == "terminated" {
