@@ -168,7 +168,7 @@ func TestClient_SetPreferredModel_ReportsHowItApplied(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 
-			got, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "qwen3-8b")
+			got, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "qwen3-8b", 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,7 +206,7 @@ func TestClient_SetPreferredModel_StatusSentinels(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 
-			_, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "qwen3-8b")
+			_, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "qwen3-8b", 0)
 			if !errors.Is(err, c.want) {
 				t.Fatalf("err=%v, want %v", err, c.want)
 			}

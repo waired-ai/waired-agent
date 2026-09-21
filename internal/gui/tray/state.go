@@ -6,6 +6,7 @@ package tray
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -206,6 +207,10 @@ type WorkerModeRow struct {
 // disagree, since a preset past the pre-allocation would be silently
 // unclickable (the workerModeSlots arrangement).
 const residencyPresetSlots = 4
+
+// windowPresetSlots is the serving-window preset count: the coding window
+// and 1M, the only two windows an engine serves (waired-ai/waired#1031).
+const windowPresetSlots = 2
 
 // ResidencyRow is one row of the model-residency preset group inside the
 // "Inference" submenu (waired-agent#861). Selected drives the leading
@@ -416,6 +421,50 @@ type CatalogEntryView struct {
 	// click's question can be worded from the verdict instead of by
 	// matching the rendered string (waired-agent#850).
 	UnfitKind UnfitKind
+	// WindowWall is why this model cannot be had at the serving window in
+	// force, or WindowReachable. It is the ONE thing that greys a model row,
+	// and it is deliberately not the Disabled field the note above says was
+	// removed: its type admits only the two window reasons, so nothing can
+	// use it to refuse a model for want of memory. The owner's 2026-09-20
+	// ruling on waired-ai/waired#1359 greys a model that cannot reach the
+	// chosen window, and docs/decisions/20260920/2345-… places that outside
+	// the 2026-08-08 soft-capacity rule — it is "does not run at the window
+	// you picked", the same shape as another engine's greyed tab.
+	WindowWall WindowWall
+}
+
+// WindowWall is why a model cannot be had at a serving window
+// (waired-ai/waired#1359). Its values are the only reasons a model row may
+// be greyed, and none of them is about this computer's memory.
+type WindowWall int
+
+const (
+	// WindowReachable: the model can be had at the window.
+	WindowReachable WindowWall = iota
+	// WindowWallModel: the model does not reach the window at all — it
+	// documents no way past its own trained length. No engine and no
+	// hardware changes that.
+	WindowWallModel
+	// WindowWallEngine: the model reaches the window, but this engine does
+	// not serve it (the long rung is ollama-only today).
+	WindowWallEngine
+)
+
+// WindowRow is one serving-window preset under the Inference menu, the
+// residency presets' shape.
+type WindowRow struct {
+	// Tokens is the serving window this preset names. Not called Window:
+	// scripts/ci/protoconsumer matches producers by FIELD NAME, and a
+	// struct literal writing a field called Window here reads to it as a
+	// producer of hostfit.ModelProjection.Window and
+	// modelrank.PickInput.Window — which nothing in this repo writes.
+	Tokens   int
+	Label    string
+	Selected bool
+	// Wall greys the preset, with Tooltip naming why: the 1M preset when
+	// the model in use cannot be had at 1M.
+	Wall    WindowWall
+	Tooltip string
 }
 
 // UnfitKind classifies an unfit verdict by what the wall actually is.
@@ -604,6 +653,18 @@ type MenuModel struct {
 	// text, so it offers a fixed set and leaves arbitrary durations to
 	// `waired inference residency`.
 	ResidencyRows []ResidencyRow
+	// The serving window (waired-ai/waired#1359): the window in force, the
+	// header that names it, the two presets, and the model a preset click
+	// re-serves at the window it names.
+	WindowInForce       int
+	WindowHeader        string
+	WindowRows          []WindowRow
+	WindowActiveModelID string
+	// windowKnown / windowEngine are what applyInference learned for
+	// applyCatalog, which runs after it: whether the serving engine reported
+	// a window at all, and which engine it is.
+	windowKnown  bool
+	windowEngine string
 	// InstallEngineAction is "Install Ollama…" when SubsystemState is
 	// "no_engine" (no usable local engine installed), else "". Clicking
 	// it runs the auto-installer (#188).
@@ -1701,9 +1762,28 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	retained := retainedFamilies(c.Families)
 	entries := make([]CatalogEntryView, 0, len(retained))
 	for _, f := range retained {
-		entries = append(entries, formatCatalogEntry(f, c.Engine, c.Host))
+		e := formatCatalogEntry(f, c.Engine, c.Host)
+		// Applied over the formatted row rather than inside
+		// formatCatalogEntry, which stays a function of the family alone:
+		// the wall depends on the window in force, not on the model.
+		if wall := familyWindowWall(f, m.WindowInForce, m.windowEngine); wall != WindowReachable {
+			e.WindowWall = wall
+			// The reason goes in the LABEL, the way an unfit row's does
+			// ("name — needs 24 GB"), because a menu item's tooltip is not
+			// shown on every platform and a grey row with no visible reason
+			// is not "greyed out with the reason". The whole sentence stays
+			// in the tooltip where one is shown. It replaces the row's other
+			// decoration: a row that cannot be chosen at this window has one
+			// thing to say.
+			e.Label = e.Name + " — " + windowWallLabel(wall, m.windowEngine)
+			e.Tooltip = windowWallText(wall, f.ContextLength, m.windowEngine)
+		}
+		entries = append(entries, e)
 	}
 	m.CatalogEntries = entries
+	if m.windowKnown {
+		applyWindow(m, c)
+	}
 
 	// The benchmark-driven switch suggestions used to render a row here,
 	// inside this submenu. They are notices now (waired-agent#1205): the
@@ -2151,6 +2231,115 @@ func formatCatalogEntry(f management.CatalogFamily, engine string, host manageme
 	}
 	e.Tooltip = catalogSpecTooltip(engine, f, host)
 	return e
+}
+
+// familyWindowWall is why f cannot be had at window here, or
+// WindowReachable. Only the long window has walls: every model the catalog
+// ships reaches the coding window.
+func familyWindowWall(f management.CatalogFamily, window int, engine string) WindowWall {
+	if window != hostfit.ServingWindow1M {
+		return WindowReachable
+	}
+	if !hostfit.EngineServesWindow(engine, window) {
+		return WindowWallEngine
+	}
+	if !slices.Contains(f.ServingWindows, window) {
+		return WindowWallModel
+	}
+	return WindowReachable
+}
+
+// windowWallText names a wall in the words the console uses for it
+// (owner-approved 2026-09-21 on waired-ai/waired#1472), in this menu's
+// register: straight apostrophes, as the rest of the tray writes them.
+//
+// Two sentences for two walls, because a person acts on them differently:
+// the model stops short of 1M on any engine, while this engine not serving
+// it is a fact the other engine may not share.
+func windowWallText(wall WindowWall, contextLength int, engine string) string {
+	switch wall {
+	case WindowWallModel:
+		return "Doesn't reach 1M. This model goes up to " + groupThousands(contextLength) + " tokens."
+	case WindowWallEngine:
+		return engineProductName(engine) + " doesn't serve 1M yet."
+	}
+	return ""
+}
+
+// windowWallLabel is the short form of windowWallText for a row's label:
+// the first clause of the same approved sentence, lowercased after the dash
+// the way an unfit row's reason is.
+func windowWallLabel(wall WindowWall, engine string) string {
+	switch wall {
+	case WindowWallModel:
+		return "doesn't reach 1M"
+	case WindowWallEngine:
+		return engineProductName(engine) + " doesn't serve 1M yet"
+	}
+	return ""
+}
+
+// applyWindow builds the serving-window presets: a header naming the window
+// in force, and 200K / 1M rows. A preset re-serves the model in use at the
+// window it names, so there is nothing to offer when no model is in use.
+func applyWindow(m *MenuModel, c *management.ModelCatalogResponse) {
+	if c.Active == nil || c.Active.ModelID == "" {
+		return
+	}
+	var active management.CatalogFamily
+	for _, f := range c.Families {
+		if f.ModelID == c.Active.ModelID {
+			active = f
+			break
+		}
+	}
+	long := familyWindowWall(active, hostfit.ServingWindow1M, m.windowEngine)
+	m.WindowActiveModelID = c.Active.ModelID
+	m.WindowHeader = "Context window: " + windowPresetLabel(m.WindowInForce)
+	m.WindowRows = []WindowRow{
+		{Tokens: 0, Label: windowPresetLabel(0), Selected: m.WindowInForce != hostfit.ServingWindow1M},
+		{
+			Tokens:   hostfit.ServingWindow1M,
+			Label:    windowPresetLabel(hostfit.ServingWindow1M),
+			Selected: m.WindowInForce == hostfit.ServingWindow1M,
+			Wall:     long,
+			Tooltip:  windowWallText(long, active.ContextLength, m.windowEngine),
+		},
+	}
+}
+
+// windowPresetLabel is the product's own name for a serving window, as the
+// console's contextWindowLabel writes it.
+func windowPresetLabel(window int) string {
+	if window == hostfit.ServingWindow1M {
+		return "1M"
+	}
+	return "200K"
+}
+
+// engineProductName names an engine the way user copy names it
+// (docs-site/TRANSLATION.md: engine-specific facts name Ollama / vLLM).
+func engineProductName(engine string) string {
+	switch engine {
+	case "ollama":
+		return "Ollama"
+	case "vllm":
+		return "vLLM"
+	}
+	return engine
+}
+
+// groupThousands renders n with comma thousands separators, the way the
+// tray writes every token count a person reads (262,144, not 262144).
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	if n < 0 {
+		return "-" + groupThousands(-n)
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // catalogSpillMB is how much of a full coding session this computer
@@ -2886,6 +3075,16 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	// nothing to unload, and offering either would bait a click that cannot
 	// work (waired-agent#943). A nil Supported is an older daemon making no
 	// claim, so it draws exactly what it drew before.
+	// The serving window in force (waired-ai/waired#1359), read off the
+	// serving runtime — what the engine was actually tuned to — rather than
+	// off the preference, so the preset shows the window a request gets.
+	if r, ok := servingRuntime(inf); ok && r.ContextLength > 0 && inf.Active != nil {
+		m.windowKnown = true
+		m.windowEngine = inf.Active.Runtime
+		if r.ContextLength == hostfit.ServingWindow1M {
+			m.WindowInForce = hostfit.ServingWindow1M
+		}
+	}
 	if inf.Residency != nil && (inf.Residency.Supported == nil || *inf.Residency.Supported) {
 		idle, err := management.ParseResidency(inf.Residency.IdleTimeout)
 		if err != nil || inf.Residency.HoldsIndefinitely {

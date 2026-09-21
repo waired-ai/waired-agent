@@ -201,6 +201,12 @@ type tray struct {
 	miResidencyHeader *systray.MenuItem
 	miResidency       []*systray.MenuItem // residencyPresetSlots entries
 	lastResidencyRows []ResidencyRow      // duration lookup for click dispatch
+	// The serving-window presets (waired-ai/waired#1359), the residency
+	// presets' shape: a header row and windowPresetSlots flat rows.
+	miWindowHeader  *systray.MenuItem
+	miWindow        []*systray.MenuItem
+	lastWindowRows  []WindowRow // window + wall lookup for click dispatch
+	lastWindowModel string      // the model a preset click re-serves
 	// miDeviceLabel is the "This device ▸" submenu parent (waired#809);
 	// name / IP / network / peers are its children.
 	miDeviceLabel *systray.MenuItem
@@ -661,6 +667,17 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miResidency[i] = t.miInference.AddSubMenuItem("", "Set how long the model stays loaded after the last request")
 			t.miResidency[i].Hide()
 		}
+		// The serving window (waired-ai/waired#1359). Flat level-2 rows
+		// under a header, like the residency presets above, because
+		// fyne.io/systray's Windows backend renders no third level.
+		t.miWindowHeader = t.miInference.AddSubMenuItem("", "The context window the model in use is served with")
+		t.miWindowHeader.Disable() // grey: section header for the window presets under it
+		t.miWindowHeader.Hide()
+		t.miWindow = make([]*systray.MenuItem, windowPresetSlots)
+		for i := 0; i < windowPresetSlots; i++ {
+			t.miWindow[i] = t.miInference.AddSubMenuItem("", "Serve the model in use with this context window")
+			t.miWindow[i].Hide()
+		}
 		// --- Inference routing submenu (#327): a NEW top-level parent
 		// holding the answer to "where do my requests run" — the current
 		// worker, whether any peer engine is reachable, the automatic
@@ -864,6 +881,10 @@ func (t *tray) onReady(ctx context.Context) func() {
 			idx := i
 			go t.dispatchResidencyClicks(ctx, idx)
 		}
+		for i := 0; i < windowPresetSlots; i++ {
+			idx := i
+			go t.dispatchWindowClicks(ctx, idx)
+		}
 		go t.dispatchWorkerClearPinClicks(ctx)
 		for i := range t.miNotices {
 			idx := i
@@ -1014,17 +1035,28 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	t.mu.Lock()
 	var modelID, name, unfit string
 	var kind UnfitKind
+	var wall WindowWall
 	if idx < len(t.lastCatalogEntries) {
 		modelID = t.lastCatalogEntries[idx].ModelID
 		name = t.lastCatalogEntries[idx].Name
 		unfit = t.lastCatalogEntries[idx].UnfitReason
 		kind = t.lastCatalogEntries[idx].UnfitKind
+		wall = t.lastCatalogEntries[idx].WindowWall
 	}
 	engineMissing := t.last.CatalogEngineMissing
+	window := t.last.WindowInForce
 	t.mu.Unlock()
 	if modelID == "" {
 		// A slot past the end of the projection: the row is hidden, so
 		// there is no click to answer and nothing to tell anyone about.
+		return
+	}
+	// A row greyed for the window in force cannot be the choice. The OS
+	// already delivers no click for a disabled row on all three platforms,
+	// so this is the second of two locks, not the only one — kept because
+	// the console found the first could be bypassed, and the owner's ruling
+	// is that such a row cannot be chosen (waired-ai/waired#1359).
+	if wall != WindowReachable {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
@@ -1038,7 +1070,9 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	if unfit != "" && !t.confirmUnfitSwitch(switchModelName(name, modelID), modelID, kind, unfit) {
 		return
 	}
-	resp, err := t.cli.SetPreferredModel(ctx, modelID)
+	// The window in force travels with the model: a person at 1M who picks
+	// another model that reaches 1M stays at 1M.
+	resp, err := t.cli.SetPreferredModel(ctx, modelID, window)
 	if err != nil {
 		showError(modelSwitchErrorText(err, switchModelName(name, modelID)))
 		return
@@ -1078,7 +1112,9 @@ func (t *tray) offerEngineInstall(ctx context.Context, displayName, name, modelI
 		showError(fmt.Sprintf("Couldn't install Ollama: %v", err))
 		return
 	}
-	resp, err := t.cli.SetPreferredModel(ctx, modelID)
+	// The coding window: this computer had no engine until a moment ago,
+	// so no window was ever in force here to carry over.
+	resp, err := t.cli.SetPreferredModel(ctx, modelID, 0)
 	if err != nil {
 		showError(modelSwitchErrorText(err, displayName))
 		return
@@ -1378,6 +1414,48 @@ func (t *tray) onSelectResidency(ctx context.Context, idx int) {
 		showError(fmt.Sprintf("Couldn't set the keep-alive: %v", err))
 		return
 	}
+	go t.pollOnce(ctx)
+}
+
+// dispatchWindowClicks handles clicks on the serving-window preset rows,
+// one goroutine per fixed slot.
+func (t *tray) dispatchWindowClicks(ctx context.Context, idx int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.miWindow[idx].ClickedCh:
+			go t.onSelectWindow(ctx, idx)
+		}
+	}
+}
+
+// onSelectWindow serves the model in use at the preset's window
+// (waired-ai/waired#1359). Immediate, like the residency presets: a tray
+// row applies what it names. The window travels in the same request as the
+// model, because the daemon records the two together.
+func (t *tray) onSelectWindow(ctx context.Context, idx int) {
+	t.mu.Lock()
+	var row WindowRow
+	var ok bool
+	if idx < len(t.lastWindowRows) {
+		row, ok = t.lastWindowRows[idx], true
+	}
+	model := t.lastWindowModel
+	t.mu.Unlock()
+	// A walled preset is greyed and delivers no click; this is the second
+	// lock, as on the model rows. An already-selected preset changes
+	// nothing, so it posts nothing.
+	if !ok || model == "" || row.Wall != WindowReachable || row.Selected {
+		return
+	}
+	slog.Debug("tray: menu action", "action", "window", "window", row.Tokens, "model", model)
+	resp, err := t.cli.SetPreferredModel(ctx, model, row.Tokens)
+	if err != nil {
+		showError(modelSwitchErrorText(err, switchModelName("", model)))
+		return
+	}
+	t.onModelSwitchAccepted(resp, "")
 	go t.pollOnce(ctx)
 }
 
@@ -2484,6 +2562,29 @@ const (
 // the switch applies in process, so the old "the agent will restart"
 // was overstating it. The upgrade arm that also sat here, and cost a
 // download, is retired (waired-ai/waired-agent#1342).
+// windowToKeep is the window a switch to modelID should carry: the one in
+// force, when modelID can be had at it, and the coding window otherwise.
+//
+// Used by the faster-model suggestion, which is ranked on coding-window
+// speed and so may name a model that does not reach 1M. Carrying 1M to such
+// a model would be refused by the daemon (window_not_reachable); falling
+// back to the coding window is the switch that can actually happen. Without
+// this helper the suggestion always sent the coding window, so accepting it
+// at 1M quietly dropped a person to 200K even when the model it named could
+// have stayed at 1M.
+func windowToKeep(entries []CatalogEntryView, modelID string, inForce int) int {
+	for _, e := range entries {
+		if e.ModelID == modelID {
+			if e.WindowWall == WindowReachable {
+				return inForce
+			}
+			return 0
+		}
+	}
+	// Not in the list we drew: nothing says it reaches the window in force.
+	return 0
+}
+
 func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	t.mu.Lock()
 	rec := t.lastRecommendation
@@ -2518,7 +2619,10 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 		go t.pollOnce(ctx)
 		return
 	}
-	resp, err := t.cli.SetPreferredModel(ctx, rec.ToModelID)
+	t.mu.Lock()
+	window := windowToKeep(t.lastCatalogEntries, rec.ToModelID, t.last.WindowInForce)
+	t.mu.Unlock()
+	resp, err := t.cli.SetPreferredModel(ctx, rec.ToModelID, window)
 	if err != nil {
 		showError(modelSwitchErrorText(err, switchModelName("", rec.ToModelID)))
 		return
@@ -3066,6 +3170,9 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miResidencyHeader, prev.ResidencyHeader != "", m.ResidencyHeader != "")
 	t.setTitle(t.miResidencyHeader, prev.ResidencyHeader, m.ResidencyHeader)
 	t.applyResidencyRows(prev.ResidencyRows, m.ResidencyRows)
+	t.setVisible(t.miWindowHeader, prev.WindowHeader != "", m.WindowHeader != "")
+	t.setTitle(t.miWindowHeader, prev.WindowHeader, m.WindowHeader)
+	t.applyWindowRows(prev.WindowRows, m.WindowRows)
 
 	// Top-level status block. Each row is independent: a daemon that
 	// exposes the inference API but not the mesh one renders the Engine row
@@ -3126,6 +3233,8 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miWorkerClearPin, prev.WorkerShowClearPin, m.WorkerShowClearPin)
 	t.mu.Lock()
 	t.lastResidencyRows = m.ResidencyRows
+	t.lastWindowRows = m.WindowRows
+	t.lastWindowModel = m.WindowActiveModelID
 	t.lastWorkerModes = m.WorkerModes
 	t.lastWorkerPrefers = m.WorkerPrefers
 	t.lastWorkerMinSizes = m.WorkerMinSizes
@@ -3459,6 +3568,33 @@ func (t *tray) applyResidencyRows(prev, next []ResidencyRow) {
 	}
 }
 
+// applyWindowRows paints the serving-window presets. A walled preset — 1M
+// for a model that cannot be had at 1M — is greyed with its reason, which is
+// the one thing grey means in this menu: the action is unavailable.
+func (t *tray) applyWindowRows(prev, next []WindowRow) {
+	for i, mi := range t.miWindow {
+		var prevHas, nextHas bool
+		var prevLabel, nextLabel, prevTip, nextTip string
+		prevOn, nextOn := true, true
+		if i < len(prev) {
+			prevHas = true
+			prevLabel = selectedRowLabel(prev[i].Selected, prev[i].Label)
+			prevTip = prev[i].Tooltip
+			prevOn = prev[i].Wall == WindowReachable
+		}
+		if i < len(next) {
+			nextHas = true
+			nextLabel = selectedRowLabel(next[i].Selected, next[i].Label)
+			nextTip = next[i].Tooltip
+			nextOn = next[i].Wall == WindowReachable
+		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+		t.setTooltip(mi, prevTip, nextTip)
+		t.setEnabled(mi, prevOn, nextOn)
+	}
+}
+
 func residencyRowLabel(r ResidencyRow) string {
 	prefix := "○ "
 	if r.Selected {
@@ -3543,26 +3679,33 @@ func workerPinRowLabel(r WorkerPinEntryView) string {
 // DBus traffic stays low even though the catalog refreshes on every
 // poll tick.
 //
-// No slot is ever disabled. A model this computer cannot hold is still
-// a choice the operator may make (waired-agent#831); the row carries
-// the shortfall and the click asks.
+// A slot is disabled for ONE reason: the model cannot be had at the serving
+// window in force (CatalogEntryView.WindowWall, waired-ai/waired#1359). Never
+// for memory — a model this computer cannot hold is still a choice the
+// operator may make (waired-agent#831); that row carries the shortfall and
+// the click asks. The wall's type cannot express memory, so this line cannot
+// grow into the capacity block it replaced.
 func (t *tray) applyCatalogEntries(prev, next []CatalogEntryView) {
 	for i, mi := range t.miCatalogEntries {
 		var prevHas, nextHas bool
 		var prevLabel, nextLabel string
 		var prevTooltip, nextTooltip string
+		prevOn, nextOn := true, true
 		if i < len(prev) {
 			prevHas = true
 			prevLabel = prev[i].Label
 			prevTooltip = prev[i].Tooltip
+			prevOn = prev[i].WindowWall == WindowReachable
 		}
 		if i < len(next) {
 			nextHas = true
 			nextLabel = next[i].Label
 			nextTooltip = next[i].Tooltip
+			nextOn = next[i].WindowWall == WindowReachable
 		}
 		t.setVisible(mi, prevHas, nextHas)
 		t.setTitle(mi, prevLabel, nextLabel)
 		t.setTooltip(mi, prevTooltip, nextTooltip)
+		t.setEnabled(mi, prevOn, nextOn)
 	}
 }

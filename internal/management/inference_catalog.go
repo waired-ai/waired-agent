@@ -236,6 +236,22 @@ type CatalogHost struct {
 // CatalogFamily is one row in the tray's catalog submenu. Tray-side
 // rendering walks the slice in order and applies annotations
 // (active / preferred / downloading / deficit) without re-evaluating
+
+// servingWindowsFor is the serving windows m can be offered at on engine,
+// coding window first. The same rule as the control plane's
+// servingWindowsFor, built from the same proto predicates so the two cannot
+// disagree: the model has to reach the window (hostfit.ReachesWindow — its
+// trained length or its publisher's rope scaling) and the engine has to
+// serve it (hostfit.EngineServesWindow — the long rung is ollama-only).
+func servingWindowsFor(m catalog.Manifest, engine string) []int {
+	out := []int{hostfit.ServingWindow200k}
+	if hostfit.ReachesWindow(m, hostfit.ServingWindow1M) &&
+		hostfit.EngineServesWindow(engine, hostfit.ServingWindow1M) {
+		out = append(out, hostfit.ServingWindow1M)
+	}
+	return out
+}
+
 // fit logic.
 type CatalogFamily struct {
 	ModelID          string `json:"model_id"`
@@ -335,6 +351,20 @@ type CatalogFamily struct {
 	// the model would be served as without a choice — a user chose it
 	// (waired-agent#1348). The row's specs then describe the served build.
 	ServedQuantization string `json:"served_quantization,omitempty"`
+
+	// ContextLength is the model's own trained window, and ServingWindows
+	// the serving windows it can be offered at on this computer's engine,
+	// coding window first (waired-ai/waired#1359). The same name and the same
+	// meaning as the control plane's device catalog, so the two catalogs
+	// describe a model the same way.
+	//
+	// They exist for the tray's window choice: at 1M a family without 1M
+	// here is greyed, and its reason names ContextLength — "this model goes
+	// up to N tokens" — because the wall is the model, not this computer.
+	// A family this computer cannot HOLD at 1M still lists 1M: capacity is
+	// the only rule allowed to refuse, and it does not refuse a window.
+	ContextLength  int   `json:"context_length,omitempty"`
+	ServingWindows []int `json:"serving_windows,omitempty"`
 
 	// ServingWarning is what the RUNNING engine recorded about this model
 	// on this computer, verbatim (RuntimeStatus.TuningWarning). Present
@@ -523,6 +553,8 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 			Fit:                &presentation,
 			RecommendedPick:    recommendedID != "" && m.ModelID == recommendedID,
 			ServedQuantization: servedQuantization,
+			ContextLength:      m.ContextLength,
+			ServingWindows:     servingWindowsFor(m, engine),
 		}
 		// Read from the ledger rather than off a Pick: the ranking
 		// REPLACES its candidate set at each rung, so a model excluded
