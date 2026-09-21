@@ -26,6 +26,8 @@ const (
 //   - leader-exits: start a sleeper, write its pid, exit at once (a server
 //     that died and left its runner behind).
 //   - leader-stays: the same, then sleep (a server that is still up).
+//   - spin: keep one core busy for up to two minutes (a kernel compile
+//     that writes nothing, waired-agent#1508).
 //
 // The sleeper is started without a process group or job of its own, as
 // ollama starts its runners.
@@ -35,6 +37,10 @@ func runTreeHelper(role string) int {
 		return 0
 	case "sleeper":
 		time.Sleep(2 * time.Minute)
+		return 0
+	case "spin":
+		for end := time.Now().Add(2 * time.Minute); time.Now().Before(end); {
+		}
 		return 0
 	case "leader-exits", "leader-stays":
 		cmd := exec.Command(os.Args[0])

@@ -24,7 +24,7 @@ func newParkableVLLM(t *testing.T, parked *atomic.Bool, onUnhealthy func(string)
 		Python: "/venv/bin/python", Host: host, Port: port,
 		Model: "/models/qwen3-32b/awq", ServedModelName: "qwen3-32b-instruct",
 		Spawner: spawner, HTTPClient: vllmHTTPClient(),
-		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 50,
+		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, StartStallTimeout: 250 * time.Millisecond,
 		StopTimeout: 50 * time.Millisecond,
 		Parked:      func() bool { return parked.Load() },
 		OnUnhealthy: onUnhealthy,
@@ -181,7 +181,7 @@ func TestVLLMAdapter_ParkDuringStartupTearsDownTheChild(t *testing.T) {
 		Python: "/venv/bin/python", Host: host, Port: port,
 		ServedModelName: "qwen3-32b-instruct",
 		Spawner:         spawner, HTTPClient: vllmHTTPClient(),
-		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 400,
+		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, StartStallTimeout: 2 * time.Second,
 		StopTimeout: 50 * time.Millisecond,
 		Parked:      func() bool { return parked.Load() },
 	})

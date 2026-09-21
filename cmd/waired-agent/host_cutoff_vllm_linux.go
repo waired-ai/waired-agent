@@ -49,8 +49,10 @@ const vllmProbeServedName = "waired-host-speed-probe"
 // vllmProbeStartTimeout bounds bringing the probe engine up. The first
 // start on a host also pays flashinfer's CUDA kernel compilation, which is
 // the cost this step exists to expose early — measured at 13.7 s to first
-// token cold against 1.5 s warm on an RTX PRO 4000 Blackwell — so the
-// budget is the engine's ordinary start budget rather than a tight one.
+// token cold against 1.5 s warm on an RTX PRO 4000 Blackwell — so it is
+// not a tight bound. Inside it the adapter waits for as long as the engine
+// is working (DefaultVLLMStartStallTimeout, waired-agent#1508); this caps
+// the probe's start as a whole.
 const vllmProbeStartTimeout = 15 * time.Minute
 
 // measureHostCutoffVLLM downloads the probe model's vLLM variant, runs an

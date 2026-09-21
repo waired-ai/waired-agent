@@ -373,17 +373,19 @@ func argPairPresent(args []string, flag, value string) bool {
 	return false
 }
 
-// TP > 1 widens the default readiness budget (NCCL init + per-worker
-// JIT on top of the weight load); explicit values still win.
-func TestVLLMHealthMaxFailsDefault(t *testing.T) {
-	if got := NewVLLMAdapter(VLLMConfig{}).cfg.HealthMaxFails; got != 60 {
-		t.Errorf("single-GPU default HealthMaxFails = %d, want 60", got)
+// The start wait's defaults, and an explicit value winning over them
+// (waired-agent#1508). Tensor parallelism no longer widens anything: the
+// wait follows the engine's work, and NCCL init and per-worker compiles are
+// work.
+func TestVLLMStartWaitDefaults(t *testing.T) {
+	cfg := NewVLLMAdapter(VLLMConfig{TensorParallelSize: 2}).cfg
+	if cfg.StartStallTimeout != DefaultVLLMStartStallTimeout || cfg.StartTimeout != DefaultVLLMStartTimeout {
+		t.Errorf("defaults = stall %s, ceiling %s; want %s, %s",
+			cfg.StartStallTimeout, cfg.StartTimeout, DefaultVLLMStartStallTimeout, DefaultVLLMStartTimeout)
 	}
-	if got := NewVLLMAdapter(VLLMConfig{TensorParallelSize: 2}).cfg.HealthMaxFails; got != 90 {
-		t.Errorf("TP=2 default HealthMaxFails = %d, want 90", got)
-	}
-	if got := NewVLLMAdapter(VLLMConfig{TensorParallelSize: 2, HealthMaxFails: 5}).cfg.HealthMaxFails; got != 5 {
-		t.Errorf("explicit HealthMaxFails = %d, want 5 (explicit wins)", got)
+	cfg = NewVLLMAdapter(VLLMConfig{StartStallTimeout: time.Second, StartTimeout: time.Minute}).cfg
+	if cfg.StartStallTimeout != time.Second || cfg.StartTimeout != time.Minute {
+		t.Errorf("explicit = stall %s, ceiling %s; want 1s, 1m (explicit wins)", cfg.StartStallTimeout, cfg.StartTimeout)
 	}
 }
 
@@ -419,12 +421,12 @@ func TestVLLMAdapter_EnsureRunning_HealthTimeout(t *testing.T) {
 	a := NewVLLMAdapter(VLLMConfig{
 		Python: "/venv/bin/python", Host: host, Port: port,
 		Model: "/m", ServedModelName: "qwen3-32b-instruct",
-		Spawner:        &fakeSpawner{},
-		HTTPClient:     vllmHTTPClient(),
-		HealthInterval: 10 * time.Millisecond,
-		HealthSuccess:  2,
-		HealthMaxFails: 3,
-		StopTimeout:    50 * time.Millisecond,
+		Spawner:           &fakeSpawner{},
+		HTTPClient:        vllmHTTPClient(),
+		HealthInterval:    10 * time.Millisecond,
+		HealthSuccess:     2,
+		StartStallTimeout: 30 * time.Millisecond,
+		StopTimeout:       50 * time.Millisecond,
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -579,7 +581,7 @@ func TestVLLMAdapter_EnsureRunning_ConcurrentCallersJoin(t *testing.T) {
 		Model: "/m", ServedModelName: "x",
 		Spawner: spawner, HTTPClient: vllmHTTPClient(),
 		// A slow readiness wait widens the window callers race into.
-		HealthInterval: 20 * time.Millisecond, HealthSuccess: 3, HealthMaxFails: 5,
+		HealthInterval: 20 * time.Millisecond, HealthSuccess: 3, StartStallTimeout: 100 * time.Millisecond,
 		StopTimeout: 50 * time.Millisecond,
 	})
 	defer func() { _ = a.Stop(context.Background()) }()
@@ -626,7 +628,7 @@ func TestVLLMAdapter_EnsureRunning_RetriesAfterFailed(t *testing.T) {
 		Python: "/venv/bin/python", Host: host, Port: port,
 		Model: "/m", ServedModelName: "x",
 		Spawner: spawner, HTTPClient: vllmHTTPClient(),
-		HealthInterval: 10 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 3,
+		HealthInterval: 10 * time.Millisecond, HealthSuccess: 1, StartStallTimeout: 30 * time.Millisecond,
 		StopTimeout: 50 * time.Millisecond,
 	})
 	defer func() { _ = a.Stop(context.Background()) }()

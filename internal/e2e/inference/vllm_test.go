@@ -203,10 +203,10 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 	// diagnosable; the path is logged below and dumped on failure.
 	port := freePort(t)
 	logDir := t.TempDir()
-	// 150 probes at 2 s, unless the lane asked for more.
-	healthMaxFails, startTimeout := 150, 6*time.Minute
+	// A 5-minute ceiling on the start, unless the lane asked for more.
+	startBudget, startTimeout := 5*time.Minute, 6*time.Minute
 	if opts.startBudget > 0 {
-		healthMaxFails, startTimeout = int(opts.startBudget/(2*time.Second)), opts.startBudget+time.Minute
+		startBudget, startTimeout = opts.startBudget, opts.startBudget+time.Minute
 	}
 	a := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:               filepath.Join(venvPath, "bin", "python"),
@@ -232,9 +232,10 @@ func runVLLMSmokeOpts(t *testing.T, venvPath, repo, modelName string, opts vllmS
 		// 5 min budget: the FIRST engine start on a host also runs the
 		// flashinfer JIT compile (nvcc via ninja/g++), which alone can
 		// exceed the old 3-min budget on an L4 (observed ~4 min cold,
-		// <1 min warm).
-		HealthMaxFails: healthMaxFails,
-		StopTimeout:    10 * time.Second,
+		// <1 min warm). The product's own ceiling is longer
+		// (DefaultVLLMStartTimeout); the lane keeps its own to fail fast.
+		StartTimeout: startBudget,
+		StopTimeout:  10 * time.Second,
 	})
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

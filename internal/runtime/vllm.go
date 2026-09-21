@@ -199,13 +199,16 @@ type VLLMConfig struct {
 	HealthInterval time.Duration
 	// HealthSuccess defaults to 3 (consecutive 200s on /health).
 	HealthSuccess int
-	// HealthMaxFails defaults to 60 — vLLM startup is dominated by
-	// VRAM weight load (10–60s for typical Step 2 sizes), so the
-	// total budget is roughly HealthInterval × HealthMaxFails = 120s.
-	// With TensorParallelSize > 1 the default rises to 90 (~180s):
-	// NCCL init plus per-worker flashinfer JIT stack on top of the
-	// weight load.
-	HealthMaxFails int
+	// StartStallTimeout is how long a start that is not ready yet may go
+	// with no output and no CPU work before it is given up; StartTimeout
+	// is the ceiling on the whole wait. Defaults
+	// DefaultVLLMStartStallTimeout / DefaultVLLMStartTimeout. They replace
+	// a fixed count of failed health probes, which cut a cold first start
+	// short while it was still compiling (waired-agent#1508).
+	StartStallTimeout time.Duration
+	StartTimeout      time.Duration
+	// Now is the clock the start wait reads; nil is time.Now (tests).
+	Now func() time.Time
 	// StopTimeout defaults to 10s (process-group SIGTERM gives vLLM
 	// a chance to release CUDA contexts before SIGKILL).
 	StopTimeout time.Duration
@@ -304,12 +307,14 @@ func NewVLLMAdapter(cfg VLLMConfig) *VLLMAdapter {
 	if cfg.HealthSuccess <= 0 {
 		cfg.HealthSuccess = 3
 	}
-	if cfg.HealthMaxFails <= 0 {
-		if cfg.TensorParallelSize > 1 {
-			cfg.HealthMaxFails = 90
-		} else {
-			cfg.HealthMaxFails = 60
-		}
+	if cfg.StartStallTimeout <= 0 {
+		cfg.StartStallTimeout = DefaultVLLMStartStallTimeout
+	}
+	if cfg.StartTimeout <= 0 {
+		cfg.StartTimeout = DefaultVLLMStartTimeout
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	if cfg.StopTimeout <= 0 {
 		cfg.StopTimeout = DefaultVLLMStopTimeout
@@ -447,6 +452,15 @@ func (a *VLLMAdapter) ensureRunningLeader(ctx context.Context) error {
 	args := a.commandArgs()
 	env := a.processEnv()
 	logW := a.openEngineLog()
+	// What the child writes is one of the two signs a start not ready yet
+	// is still working (waired-agent#1508). Counted in front of the log's
+	// cap so output past it still counts; with no log there is nothing to
+	// count, and the spawn keeps its nil writer (discard).
+	var out *countingWriter
+	if logW != nil {
+		out = &countingWriter{w: logW}
+		logW = out
+	}
 	// The SPAWN gets an uncancellable context, the readiness wait below gets
 	// the cancellable one. A child's lifetime is never a context's (#947):
 	// the start context is cancelled the moment this start finishes, and
@@ -467,7 +481,7 @@ func (a *VLLMAdapter) ensureRunningLeader(ctx context.Context) error {
 	gen := a.procGen
 	a.mu.Unlock()
 
-	if err := a.waitReady(ctx, proc); err != nil {
+	if err := a.waitReady(ctx, proc, out); err != nil {
 		_ = a.stopProcess(context.Background())
 		if p := a.engineLogPath(); p != "" {
 			err = fmt.Errorf("%w (see %s)", err, p)
@@ -775,16 +789,21 @@ const vllmWSL2PinMemoryEnv = "VLLM_WSL2_ENABLE_PIN_MEMORY"
 // than read from a.proc so the leader-only access is structural — only
 // the EnsureRunning leader ever waits, and it waits on the process it
 // just spawned.
-func (a *VLLMAdapter) waitReady(ctx context.Context, proc RunningProcess) error {
+//
+// Until then it waits for as long as the engine is working: writing
+// output (out, nil when there is no log) or using CPU. It gives up when
+// the child exits, when neither moves for StartStallTimeout, or at
+// StartTimeout (waired-agent#1508).
+func (a *VLLMAdapter) waitReady(ctx context.Context, proc RunningProcess, out *countingWriter) error {
 	healthURL := a.baseURL + "/health"
-	consecOK, consecFail := 0, 0
+	consecOK := 0
+	progress := newStartProgress(a.cfg.Now(), a.cfg.StartStallTimeout, a.cfg.StartTimeout)
 	tick := time.NewTicker(a.cfg.HealthInterval)
 	defer tick.Stop()
 	for {
-		ok := a.probeOnce(ctx, healthURL)
-		if ok {
+		if a.probeOnce(ctx, healthURL) {
 			consecOK++
-			consecFail = 0
+			progress.answered(a.cfg.Now())
 			if consecOK >= a.cfg.HealthSuccess {
 				if err := a.verifyServedModelName(ctx); err != nil {
 					return fmt.Errorf("vllm: served model name mismatch: %w", err)
@@ -792,10 +811,25 @@ func (a *VLLMAdapter) waitReady(ctx context.Context, proc RunningProcess) error 
 				return nil
 			}
 		} else {
-			consecFail++
 			consecOK = 0
-			if consecFail >= a.cfg.HealthMaxFails {
-				return fmt.Errorf("vllm: not ready after %d failed probes", consecFail)
+			var written int64
+			if out != nil {
+				written = out.n.Load()
+			}
+			cpu, cpuOK := treeCPU(proc)
+			now := a.cfg.Now()
+			switch progress.observe(now, written, cpu, cpuOK) {
+			case startStalled:
+				return fmt.Errorf("vllm: not ready after %s, with no output and no CPU use for the last %s",
+					now.Sub(progress.start).Round(time.Second), a.cfg.StartStallTimeout)
+			case startTimedOut:
+				return fmt.Errorf("vllm: not ready after %s although still working", a.cfg.StartTimeout)
+			}
+			if progress.dueNote(now) {
+				slog.Info("vllm engine still starting",
+					"elapsed", now.Sub(progress.start).Round(time.Second).String(),
+					"output_bytes", written, "cpu_seconds", int(cpu.Seconds()), "cpu_known", cpuOK,
+					"quiet_for", now.Sub(progress.lastProgress).Round(time.Second).String())
 			}
 		}
 		select {
