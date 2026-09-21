@@ -5,6 +5,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // What a model switch does before the chosen model answers
@@ -83,15 +84,16 @@ func (p *agentInferenceProvider) switchFactsFor(ctx context.Context, modelID str
 		st, _ = p.store.Load()
 	}
 	if f.Engine == catalog.RuntimeVLLM {
-		if s := p.vllmServing.Load(); s != nil {
+		startable := p.vllmStartableNow(ctx, st)
+		if s := p.vllmServing.Load(); s != nil && p.vllmMayAnswer(ctx, s, startable) {
 			f.ServingModel, f.ServingVariant = s.ModelID, s.VariantID
 		}
 		if variantID, need, have, ok := p.vllmSwitchTarget(ctx, modelID); ok {
 			f.TargetVariant, f.NeedVRAMMB, f.HaveVRAMMB = variantID, need, have
 		}
 		if !f.EngineUp {
-			if prev, _, _, ok := vllmPreviousCandidate(st.Active, p.manifests, st, modelID,
-				p.engineVersionFor(ctx, catalog.RuntimeVLLM), dirExists); ok {
+			if prev, _, _, ok := vllmPreviousCandidate(st.Active, p.catalogManifests(), st, modelID,
+				p.engineVersionFor(ctx, catalog.RuntimeVLLM), dirExists, startable); ok {
 				f.PreviousWillAnswer, f.PreviousModel = true, prev.ModelID
 			}
 		}
@@ -104,6 +106,26 @@ func (p *agentInferenceProvider) switchFactsFor(ctx context.Context, modelID str
 		}
 	}
 	return f
+}
+
+// vllmMayAnswer is whether the model the vLLM engine was started with
+// answers, or will once its start finishes. A start still under way is
+// counted on only for a build startable allows: on a real host a 35B the
+// card could not hold was still being retried when the next model was
+// chosen, and the switch said it kept answering (waired-agent#1515).
+func (p *agentInferenceProvider) vllmMayAnswer(ctx context.Context, s *vllmServingModel,
+	startable func(catalog.Manifest, catalog.Variant) bool) bool {
+	if a := p.vllmAdapter(); a != nil && a.Health(ctx).State == infruntime.StateReady {
+		return true
+	}
+	for _, m := range p.catalogManifests() {
+		if m.ModelID != s.ModelID {
+			continue
+		}
+		v, ok := variantByID(m, s.VariantID)
+		return ok && startable(m, v)
+	}
+	return false
 }
 
 // modelSwitchOutcome is what `/preferred-model` reports for a switch the

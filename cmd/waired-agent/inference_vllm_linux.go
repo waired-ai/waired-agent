@@ -235,7 +235,7 @@ type vllmStartResolution struct {
 // resolveVLLMStart gathers the facts and makes the plan. engineUp and the
 // serving model are what the bootstrap found registered. On an error the
 // venv is already released.
-func (p *agentInferenceProvider) resolveVLLMStart(engineUp bool) (vllmStartResolution, error) {
+func (p *agentInferenceProvider) resolveVLLMStart(ctx context.Context, engineUp bool) (vllmStartResolution, error) {
 	puller, venv, release, manifest, variant, err := p.vllmStartPlan()
 	if err != nil {
 		return vllmStartResolution{release: release}, err
@@ -249,7 +249,7 @@ func (p *agentInferenceProvider) resolveVLLMStart(engineUp bool) (vllmStartResol
 	r.targetDownloading = p.pullInFlight(manifest.ModelID)
 	var hasPrev bool
 	r.prev, r.prevVariant, r.prevPath, hasPrev = vllmPreviousCandidate(st.Active, p.catalogManifests(), st,
-		manifest.ModelID, venv.Version, dirExists)
+		manifest.ModelID, venv.Version, dirExists, p.vllmStartableNow(ctx, st))
 	facts := vllmTargetFacts{
 		EngineUp:          engineUp,
 		TargetModel:       manifest.ModelID,
@@ -284,7 +284,7 @@ func (p *agentInferenceProvider) vllmStartRefusal() error {
 		st := a.Health(context.Background()).State
 		up = st == infruntime.StateReady || st == infruntime.StateStarting
 	}
-	r, err := p.resolveVLLMStart(up)
+	r, err := p.resolveVLLMStart(context.Background(), up)
 	r.release()
 	if err != nil {
 		return err
@@ -548,6 +548,14 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	engineUp := false
 	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched, p.vllmProbeEngineUp.Load()) {
 	case vllmBootstrapParked:
+		// Two causes share the latch, and the log named only the
+		// operator's: a stop for a model that did not fit read as one
+		// someone asked for (waired-agent#1515).
+		if p.parkedBecause() == parkCauseOutOfMemory {
+			p.logger.Info("vllm bootstrap: the engine is stopped because the chosen model did not fit this computer; not starting it",
+				"state", existingState, "fix", "choose a different model")
+			return
+		}
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
 			"state", existingState, "fix", "waired inference engine start")
 		return
@@ -583,7 +591,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// success so a refusal later in this function is the one that stands.
 	p.clearEngineBootstrapRefusal()
 
-	r, err := p.resolveVLLMStart(engineUp)
+	r, err := p.resolveVLLMStart(ctx, engineUp)
 	// Held until an adapter is registered on it, which then holds it for as
 	// long as it is the registered one; every return before that releases
 	// it (waired-agent#1431).
@@ -816,34 +824,25 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 	// (waired-agent#1093).
 	p.clearEngineStartExhausted()
 
-	const maxAttempts = 3
-	var ensureErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if ensureErr = adapter.EnsureRunning(ctx); ensureErr == nil {
-			break
+	movedOn := func() bool { return chosen && p.vllmChoiceMovedOn(manifest.ModelID) }
+	end, ensureErr := runVLLMStartAttempts(ctx, p.logger, adapter.EnsureRunning, movedOn, vllmRetryWait)
+	switch end {
+	case vllmAttemptsLatched:
+		p.logger.Info("vllm bootstrap: start refused by a latch; leaving it set", "err", ensureErr)
+		return
+	case vllmAttemptsCancelled:
+		return
+	case vllmAttemptsMovedOn:
+		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
+		if mem, reason := vllmStartFailedForMemory(infruntime.LastEngineLogSpawn(string(raw)), tuning.WeightsOverBudget); mem {
+			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, reason, "")
 		}
-		// A park that raced this bootstrap, or a give-up latch: neither
-		// clears on its own and neither should be retried from here. The
-		// ollama arm treats both the same way (engine_bootstrap.go), and
-		// without this a park landing mid-bootstrap burned 30s of backoff
-		// and then logged "did not become ready", which is a false
-		// diagnosis of a stop that worked.
-		if errors.Is(ensureErr, infruntime.ErrEngineParked) ||
-			errors.Is(ensureErr, infruntime.ErrEngineUnrecoverable) {
-			p.logger.Info("vllm bootstrap: start refused by a latch; leaving it set", "err", ensureErr)
-			return
-		}
-		p.logger.Warn("vllm EnsureRunning failed", "attempt", attempt, "max", maxAttempts, "err", ensureErr)
-		if attempt == maxAttempts {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(time.Duration(attempt) * 10 * time.Second):
-		}
+		p.logger.Info("vllm bootstrap: a different model was chosen while this one was starting; starting that one instead",
+			"model", manifest.ModelID, "err", ensureErr)
+		p.requestEngineStart("a different model was chosen")
+		return
 	}
-	if ensureErr != nil {
+	if end == vllmAttemptsFailed {
 		// The engine's own log is the only place the cause is written.
 		// Every attempt above is in it now, each behind its own banner
 		// (#878); the hint names the cause of the attempt the loop ended

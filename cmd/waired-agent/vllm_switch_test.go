@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,37 +95,89 @@ func TestVLLMPreviousCandidate(t *testing.T) {
 	}}
 	var asked []string
 	exists := func(p string) bool { asked = append(asked, p); return true }
+	var askedBuild []string
+	startable := func(ok bool) func(catalog.Manifest, catalog.Variant) bool {
+		return func(m catalog.Manifest, v catalog.Variant) bool {
+			askedBuild = append(askedBuild, m.ModelID+"/"+v.VariantID)
+			return ok
+		}
+	}
 
 	for _, tc := range []struct {
-		name   string
-		active *catalog.ActiveSelection
-		st     catalog.State
-		target string
-		exists func(string) bool
-		want   bool
+		name      string
+		active    *catalog.ActiveSelection
+		st        catalog.State
+		target    string
+		exists    func(string) bool
+		startable func(catalog.Manifest, catalog.Variant) bool
+		want      bool
 	}{
-		{"the model the engine ran", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, true},
+		{"the model the engine ran", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, startable(true), true},
 		// The fleet host of #1515: gpt-oss-20b is retired, so it is not in
 		// this build's catalog, and nothing may start it.
-		{"a retired model", active("gpt-oss-20b", "mxfp4-safetensors", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, false},
-		{"it is the chosen model", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.5-4b", exists, false},
-		{"it ran on ollama", active("qwen3.5-4b", "bf16", catalog.RuntimeOllama), ready, "qwen3.6-35b-a3b", exists, false},
-		{"another build is what is on disk", active("qwen3.5-4b", "fp8", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, false},
+		{"a retired model", active("gpt-oss-20b", "mxfp4-safetensors", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, startable(true), false},
+		{"it is the chosen model", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.5-4b", exists, startable(true), false},
+		{"it ran on ollama", active("qwen3.5-4b", "bf16", catalog.RuntimeOllama), ready, "qwen3.6-35b-a3b", exists, startable(true), false},
+		{"another build is what is on disk", active("qwen3.5-4b", "fp8", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, startable(true), false},
 		{"its weights are not ready", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM),
 			catalog.State{Models: map[string]catalog.ModelState{"qwen3.5-4b": {State: catalog.ModelStateDownloading, VariantID: "bf16", LocalPath: "/x"}}},
-			"qwen3.6-35b-a3b", exists, false},
+			"qwen3.6-35b-a3b", exists, startable(true), false},
 		{"its directory is gone", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b",
-			func(string) bool { return false }, false},
-		{"nothing recorded", nil, ready, "qwen3.6-35b-a3b", exists, false},
+			func(string) bool { return false }, startable(true), false},
+		// The fleet host again: the model that was running was a 35B its
+		// card could not hold, and starting it to fill in was minutes of
+		// nothing answering.
+		{"this computer cannot start it", active("qwen3.5-4b", "bf16", catalog.RuntimeVLLM), ready, "qwen3.6-35b-a3b", exists, startable(false), false},
+		{"nothing recorded", nil, ready, "qwen3.6-35b-a3b", exists, startable(true), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			asked = nil
-			_, _, path, ok := vllmPreviousCandidate(tc.active, manifests, tc.st, tc.target, "0.29.0", tc.exists)
+			asked, askedBuild = nil, nil
+			_, _, path, ok := vllmPreviousCandidate(tc.active, manifests, tc.st, tc.target, "0.29.0", tc.exists, tc.startable)
 			if ok != tc.want {
 				t.Fatalf("eligible = %v, want %v", ok, tc.want)
 			}
 			if ok && (path != "/models/hf/Qwen__Qwen3.5-4B" || len(asked) != 1 || asked[0] != path) {
 				t.Errorf("path = %q, asked about %v; want the weights directory, checked", path, asked)
+			}
+			if ok && (len(askedBuild) != 1 || askedBuild[0] != "qwen3.5-4b/bf16") {
+				t.Errorf("startable asked about %v, want the previous build", askedBuild)
+			}
+		})
+	}
+}
+
+// Which builds this computer may start when nobody chose them just now
+// (waired-agent#1515). Record of today's behaviour.
+func TestVLLMStartable(t *testing.T) {
+	here := catalog.LoadContext{EngineKind: catalog.RuntimeVLLM, EngineVersion: "0.29.0", GPUModel: "gpu", VRAMTotalMB: 24576}
+	elsewhere := here
+	elsewhere.VRAMTotalMB = 49152
+	m := catalog.Manifest{ModelID: "m"}
+	sha := func(m catalog.Manifest, v catalog.Variant) string { return m.ModelID + "/" + v.VariantID }
+	failed := func(ctx catalog.LoadContext) catalog.State {
+		return catalog.State{FailedLoads: map[string]catalog.VariantLoadFailure{
+			"m/big": {ModelID: "m", VariantID: "big", Context: ctx, Shape: catalog.LoadShape{ContextLength: 200704}},
+		}}
+	}
+	for _, tc := range []struct {
+		name   string
+		st     catalog.State
+		budget int
+		v      catalog.Variant
+		want   bool
+	}{
+		{"fits", catalog.State{}, 20889, catalog.Variant{VariantID: "small", MinVRAMMB: 12288}, true},
+		{"the catalog minimum is more than vLLM may use", catalog.State{}, 20889, catalog.Variant{VariantID: "big", MinVRAMMB: 36864}, false},
+		{"no minimum in the catalog", catalog.State{}, 20889, catalog.Variant{VariantID: "big"}, true},
+		{"no budget known", catalog.State{}, 0, catalog.Variant{VariantID: "big", MinVRAMMB: 36864}, true},
+		// In any shape: the record's shape is the chosen start's, and a
+		// start to fill in would use its own.
+		{"it failed to start on this computer", failed(here), 20889, catalog.Variant{VariantID: "big"}, false},
+		{"it failed on another computer", failed(elsewhere), 20889, catalog.Variant{VariantID: "big"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := vllmStartable(tc.st, here, tc.budget, sha)(m, tc.v); got != tc.want {
+				t.Errorf("startable = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -197,5 +251,76 @@ func TestHFWeightsLanded_ActiveMovesOnlyWithNothingUp(t *testing.T) {
 				t.Errorf("Active = %+v, want %s", st.Active, tc.want)
 			}
 		})
+	}
+}
+
+// How a run of vLLM start attempts ends (waired-agent#1515). The moved-on
+// rows are the fleet host's case: a 35B its card could not hold was being
+// retried, a minute an attempt, when the next model was chosen, and the
+// last failure held the engine off with the new model on disk. Record of
+// today's behaviour.
+func TestRunVLLMStartAttempts(t *testing.T) {
+	failed := errors.New("vllm: process exited during startup")
+	for _, tc := range []struct {
+		name string
+		// results is what each start returns, in order.
+		results []error
+		// movedOnAfter is the attempt after whose failure the choice has
+		// moved on; 0 never.
+		movedOnAfter int
+		// cancelAt is the wait that finds the context ended; 0 never.
+		cancelAt  int
+		wantEnd   vllmAttemptsEnd
+		wantCalls int
+		wantWaits []int
+	}{
+		{"up at once", []error{nil}, 0, 0, vllmAttemptsStarted, 1, nil},
+		{"up at the second", []error{failed, nil}, 0, 0, vllmAttemptsStarted, 2, []int{1}},
+		{"every attempt fails", []error{failed, failed, failed}, 0, 0, vllmAttemptsFailed, 3, []int{1, 2}},
+		{"a park raced the start", []error{infruntime.ErrEngineParked}, 0, 0, vllmAttemptsLatched, 1, nil},
+		{"recovery gave up", []error{failed, infruntime.ErrEngineUnrecoverable}, 0, 0, vllmAttemptsLatched, 2, []int{1}},
+		{"moved on after the first", []error{failed, failed, failed}, 1, 0, vllmAttemptsMovedOn, 1, nil},
+		{"moved on during the last", []error{failed, failed, failed}, 3, 0, vllmAttemptsMovedOn, 3, []int{1, 2}},
+		{"the daemon stops between", []error{failed, failed, failed}, 0, 1, vllmAttemptsCancelled, 1, []int{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			ensure := func(context.Context) error {
+				err := tc.results[calls]
+				calls++
+				return err
+			}
+			movedOn := func() bool { return tc.movedOnAfter != 0 && calls >= tc.movedOnAfter }
+			var waits []int
+			wait := func(_ context.Context, attempt int) bool {
+				waits = append(waits, attempt)
+				return attempt != tc.cancelAt
+			}
+			end, err := runVLLMStartAttempts(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)),
+				ensure, movedOn, wait)
+			if end != tc.wantEnd || calls != tc.wantCalls || !slices.Equal(waits, tc.wantWaits) {
+				t.Errorf("end %d after %d starts, waits %v; want %d, %d, %v", end, calls, waits, tc.wantEnd, tc.wantCalls, tc.wantWaits)
+			}
+			if (end == vllmAttemptsStarted) != (err == nil) {
+				t.Errorf("err = %v with end %d", err, end)
+			}
+		})
+	}
+}
+
+// Whether the model a start was asked for is still the one chosen.
+func TestVLLMChoiceMovedOn(t *testing.T) {
+	p := activeReaderProvider(t)
+	p.manifests = []catalog.Manifest{{ModelID: "a"}, {ModelID: "b"}}
+	if p.vllmChoiceMovedOn("a") {
+		t.Error("nothing chosen reads as a change")
+	}
+	chosen := "a"
+	p.preferredOverride.Store(&chosen)
+	if p.vllmChoiceMovedOn("a") {
+		t.Error("the model still chosen reads as a change")
+	}
+	if !p.vllmChoiceMovedOn("b") {
+		t.Error("a start of b, with a chosen, did not read as a change")
 	}
 }

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // The outcome decides which approved sentence `waired models use`, the
@@ -119,4 +122,76 @@ func TestSwitchFacts_AnsweringModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// What a vLLM switch says about the meantime is what this computer can start
+// (waired-agent#1515). On the fleet host the model it had been running was a
+// 35B its 24 GB card could not hold; the engine was failing on it when the
+// next model was chosen, and `waired models use` said the current model kept
+// answering. Record of today's behaviour.
+func TestSwitchFactsFor_OnlyAModelThatCanStartAnswers(t *testing.T) {
+	vllmBuild := func(id string, minMB int) catalog.Manifest {
+		return catalog.Manifest{ModelID: id, Variants: []catalog.Variant{{
+			VariantID: "st", RuntimeSupport: []string{catalog.RuntimeVLLM}, MinVRAMMB: minMB,
+			Source: catalog.VariantSource{Type: catalog.SourceHuggingFace, RepoID: "acme/" + id},
+		}}}
+	}
+	provider := func(t *testing.T, previous string) *agentInferenceProvider {
+		t.Helper()
+		p := activeReaderProvider(t)
+		p.manifests = []catalog.Manifest{vllmBuild("big", 36864), vllmBuild("fits", 8192), vllmBuild("chosen", 8192)}
+		p.setServingEngine(catalog.RuntimeVLLM)
+		p.profiler = hardware.NewProfiler(t.TempDir(),
+			hardware.WithRAM(func(context.Context) (int, int, error) { return 128, 120, nil }),
+			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+				return []hardware.GPU{{Vendor: "nvidia", Model: "card", VRAMTotalMB: 24576}}, hardware.Accelerators{}, nil
+			}),
+			hardware.WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
+		)
+		if err := p.store.Update(func(s *catalog.State) {
+			s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: previous, VariantID: "st"}
+			s.Models = map[string]catalog.ModelState{
+				previous: {State: catalog.ModelStateReady, VariantID: "st", LocalPath: t.TempDir()},
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	ctx := context.Background()
+
+	t.Run("nothing is up", func(t *testing.T) {
+		for previous, wantAnswers := range map[string]bool{"big": false, "fits": true} {
+			f := provider(t, previous).switchFactsFor(ctx, "chosen", true)
+			if f.PreviousWillAnswer != wantAnswers {
+				t.Errorf("previous %s: PreviousWillAnswer = %v, want %v", previous, f.PreviousWillAnswer, wantAnswers)
+			}
+			if got := switchOutcome(f).NothingAnswers; got == wantAnswers {
+				t.Errorf("previous %s: NothingAnswers = %v", previous, got)
+			}
+		}
+	})
+
+	t.Run("a start is under way", func(t *testing.T) {
+		for _, c := range []struct {
+			serving, health string
+			wantAnswers     bool
+		}{
+			{"big", infruntime.StateStarting, false},
+			{"fits", infruntime.StateStarting, true},
+			// Up is up: the estimate is not asked of an engine answering.
+			{"big", infruntime.StateReady, true},
+		} {
+			p := provider(t, c.serving)
+			p.setVLLM(&recordingAdapter{name: "vllm", health: c.health})
+			p.vllmServing.Store(&vllmServingModel{ModelID: c.serving, VariantID: "st"})
+			f := p.switchFactsFor(ctx, "chosen", true)
+			if got := f.answeringModel() != ""; got != c.wantAnswers {
+				t.Errorf("%s %s: answering %q, want answering %v", c.serving, c.health, f.answeringModel(), c.wantAnswers)
+			}
+			if got := switchOutcome(f).NothingAnswers; got == c.wantAnswers {
+				t.Errorf("%s %s: NothingAnswers = %v", c.serving, c.health, got)
+			}
+		}
+	})
 }
