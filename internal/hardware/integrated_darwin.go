@@ -2,7 +2,10 @@
 
 package hardware
 
-import "runtime"
+import (
+	"runtime"
+	"strings"
+)
 
 // macOS's answer to the question in integrated.go.
 //
@@ -37,8 +40,17 @@ import "runtime"
 // be an Intel integrated part or an AMD discrete one, and nothing
 // reachable from here tells them apart. Unknown leaves the behaviour
 // this platform has today.
-func integratedFromOS(_ *Profile, _ int) integration {
+//
+// The answer is about the APPLE device, and only that one. It used to be
+// given for every index, which cost nothing while the answer was only a
+// report; once it decides which devices the engine uses
+// (engine_gpus.go), a test that fakes a discrete card on a darwin runner
+// would see that card set aside as an unused iGPU there and nowhere else.
+func integratedFromOS(prof *Profile, i int) integration {
 	if runtime.GOARCH != "arm64" {
+		return integrationUnknown()
+	}
+	if prof == nil || i < 0 || i >= len(prof.GPUs) || !strings.EqualFold(prof.GPUs[i].Vendor, "apple") {
 		return integrationUnknown()
 	}
 	return integratedKnown(true)

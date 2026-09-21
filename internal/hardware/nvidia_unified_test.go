@@ -176,9 +176,10 @@ func sparkProfiler(goos string) *Profiler {
 		// The per-OS reading is silenced so the vendor axis is the ONLY
 		// source of the classification. Without this the test would pass
 		// on a darwin runner whatever the vendor axis did, because
-		// integratedFromOS answers "integrated" there off GOARCH alone,
-		// for any device — a pass that would survive deleting the
-		// subject.
+		// integratedFromOS used to answer "integrated" there off GOARCH
+		// alone, for any device — a pass that would survive deleting the
+		// subject. It now answers only for an Apple device; the silence
+		// stays so the test does not depend on that.
 		WithIntegratedDetector(func(*Profile, int) integration { return integrationUnknown() }),
 	)
 }

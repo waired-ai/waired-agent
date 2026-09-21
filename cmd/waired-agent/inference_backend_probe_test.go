@@ -113,7 +113,7 @@ func strixHaloPlan() infruntime.BackendPlan {
 	return infruntime.ResolveOllamaBackend(infruntime.BackendInputs{GOOS: "linux", StrixHaloAPU: true})
 }
 
-// amdDiscretePlan is the 2-step [rocm, vulkan+igpu] plan a ROCm-capable
+// amdDiscretePlan is the 2-step [rocm, vulkan] plan a ROCm-capable
 // discrete AMD card resolves to (#40/#68) — same probe shape as Strix
 // Halo Linux, so discrete AMD also self-heals to Vulkan if ROCm is
 // CPU-bound.
@@ -364,8 +364,10 @@ func TestResolveBackendWithProbe_AMDDiscreteROCmCPUBound_FallsBackToVulkan(t *te
 	if sw.stops != 1 || sw.starts != 1 {
 		t.Errorf("expected exactly one fallback restart: stops=%d starts=%d", sw.stops, sw.starts)
 	}
-	if len(sw.setEnvs) != 1 || len(sw.setEnvs[0]) != 2 ||
-		sw.setEnvs[0][0] != "OLLAMA_VULKAN=1" || sw.setEnvs[0][1] != "OLLAMA_IGPU_ENABLE=1" {
-		t.Errorf("expected SetBackendEnv([OLLAMA_VULKAN=1 OLLAMA_IGPU_ENABLE=1]); got %v", sw.setEnvs)
+	// No OLLAMA_IGPU_ENABLE on a discrete card's fallback: it would also
+	// switch on an iGPU beside the card, which the engine leaves off by
+	// default (waired-agent#1484).
+	if len(sw.setEnvs) != 1 || len(sw.setEnvs[0]) != 1 || sw.setEnvs[0][0] != "OLLAMA_VULKAN=1" {
+		t.Errorf("expected SetBackendEnv([OLLAMA_VULKAN=1]); got %v", sw.setEnvs)
 	}
 }

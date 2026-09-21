@@ -50,9 +50,17 @@ The first line names your GPU and its memory. If it says `no GPU` on a
 computer that has one, the GPU was never detected, and everything after
 that, including which model you were given, was sized for the processor.
 
-Waired handles the common cases automatically. Integrated AMD and Intel
-graphics are enabled through Vulkan, and discrete AMD GPUs use ROCm where it
-is supported, falling back to Vulkan when it does not engage.
+Which GPU runs a model is Ollama's own choice, and Waired follows it.
+Discrete GPUs are used. A GPU built into the processor is used only on Apple
+Silicon, on AMD Strix Halo (Ryzen AI Max), and on NVIDIA's unified-memory
+computers such as the DGX Spark. On any other computer, for example a laptop
+with a Radeon 780M or Intel Arc graphics, the first line says the engine does
+not use that GPU by default, and models are sized for the processor. That is
+the engine's decision, not a detection failure.
+
+To have the engine use a built-in GPU anyway, set `OLLAMA_IGPU_ENABLE=1` for
+the service the same way as `WAIRED_NVIDIA_SMI` below, then restart it. Waired
+still sizes models for the processor on that computer.
 
 NVIDIA GPUs are found through the driver itself, not by looking for
 `nvidia-smi` on your `PATH`. If your GPU is not showing up, point Waired

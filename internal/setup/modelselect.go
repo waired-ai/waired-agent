@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -403,6 +404,21 @@ func smallestVariantReq(manifests []catalog.Manifest, engine string) (minRAMGB, 
 // describeProfile is a terse hardware summary for the selection note.
 func describeProfile(hw hardware.Profile) string {
 	if len(hw.GPUs) == 0 {
+		if len(hw.UnusedGPUs) > 0 {
+			// The host has a GPU the engine leaves off by default
+			// (waired-agent#1484). Name it, so "CPU host" does not read as
+			// a failure to see the hardware.
+			names := make([]string, 0, len(hw.UnusedGPUs))
+			for _, u := range hw.UnusedGPUs {
+				if u.Model != "" {
+					names = append(names, u.Model)
+				} else {
+					names = append(names, u.Vendor)
+				}
+			}
+			return fmt.Sprintf("CPU host (%d GB RAM; the engine does not use %s by default)",
+				hw.RAMTotalGB, strings.Join(names, ", "))
+		}
 		return fmt.Sprintf("CPU host (%d GB RAM)", hw.RAMTotalGB)
 	}
 	g := hw.GPUs[0]

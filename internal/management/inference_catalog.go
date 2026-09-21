@@ -191,6 +191,13 @@ type CatalogHost struct {
 	VRAMTotalMB int    `json:"vram_total_mb,omitempty"`
 	GPUModel    string `json:"gpu_model,omitempty"`
 
+	// UnusedGPUModels names the GPUs this host has that the engine does
+	// not use by default — today, integrated GPUs other than a CUDA
+	// device or a ROCm gfx1151 (waired-agent#1484). GPUModel above is
+	// then empty, and a surface that said "no GPU" would contradict what
+	// the user can see in their own device manager.
+	UnusedGPUModels []string `json:"unused_gpu_models,omitempty"`
+
 	// UnifiedMemory says the two figures above are backed by the SAME
 	// bytes. A surface that adds them on such a host counts the memory
 	// twice, which is the double-count waired-ai/waired#1056 decision 1
@@ -661,7 +668,19 @@ func hostFromProfile(hw hardware.Profile) CatalogHost {
 	if len(hw.GPUs) > 0 {
 		host.GPUModel = hw.GPUs[0].Model
 	}
+	for _, u := range hw.UnusedGPUs {
+		host.UnusedGPUModels = append(host.UnusedGPUModels, gpuLabel(u.GPU))
+	}
 	return host
+}
+
+// gpuLabel is a device's model name, or its vendor where the detector
+// had no name.
+func gpuLabel(g hardware.GPU) string {
+	if g.Model != "" {
+		return g.Model
+	}
+	return g.Vendor
 }
 
 func displayNameFor(manifests []catalog.Manifest, modelID string) string {

@@ -588,10 +588,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		PrimaryGPUVendor: gpuVendor,
 		PrimaryGPUModel:  gpuModel,
 		StrixHaloAPU:     hardware.IsStrixHaloAPU(hwProfile.CPU.Model),
-		// Undetected-iGPU fallback: on Linux a non-Strix AMD mobile APU is
-		// invisible without rocm-smi, so route it to Vulkan by CPU model (#68).
-		AMDMobileAPU: hardware.IsAMDMobileAPU(hwProfile.CPU.Model),
 	})
+	// The GPUs the engine leaves off by default are out of the list the
+	// plan read (waired-agent#1484); say so once, so a host that runs on
+	// its CPU beside an iGPU is not a mystery in the log.
+	for _, u := range hwProfile.UnusedGPUs {
+		logger.Info("integrated GPU not used by the engine",
+			"model", u.Model, "pci_id", u.PCIID, "reason", u.Reason)
+	}
 	logger.Info("ollama gpu backend selected",
 		"backend", backendPlan.Preferred().Backend,
 		"env", backendPlan.Preferred().Env,

@@ -59,6 +59,23 @@ func TestFormatCatalogDetail_VLLMHost(t *testing.T) {
 	}
 }
 
+// A host whose only GPU is one the engine leaves off by default
+// (waired-agent#1484) is a CPU host, and the line says why rather than
+// "no GPU" — the user can see the GPU in their own device list.
+func TestFormatCatalogDetail_UnusedIGPUIsNamed(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 32
+	c.Host.UnusedGPUModels = []string{"AMD Radeon 780M Graphics"}
+	out := formatCatalogDetail(c)
+	want := "Host: 32 GB RAM (runs on the CPU; the engine does not use AMD Radeon 780M Graphics by default)"
+	if !strings.Contains(out, want) {
+		t.Errorf("host line missing %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "(no GPU)") {
+		t.Errorf("host line says no GPU on a host that has one:\n%s", out)
+	}
+}
+
 func TestFormatCatalogDetail_OllamaHostShowsRAM(t *testing.T) {
 	c := catalogDetailResp{Engine: "ollama"}
 	c.Host.RAMTotalGB = 16

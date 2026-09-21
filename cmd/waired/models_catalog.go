@@ -53,6 +53,11 @@ type catalogDetailHost struct {
 	VRAMTotalMB int    `json:"vram_total_mb"`
 	GPUModel    string `json:"gpu_model"`
 
+	// UnusedGPUModels are GPUs the host has that the engine does not use
+	// by default (waired-agent#1484); they turn "no GPU" into a sentence
+	// that does not contradict the user's own device list.
+	UnusedGPUModels []string `json:"unused_gpu_models"`
+
 	// UnifiedMemory says RAMTotalGB and VRAMTotalMB are the same bytes,
 	// so a sentence must never add them.
 	UnifiedMemory bool `json:"unified_memory"`
@@ -203,6 +208,9 @@ func formatCatalogDetail(c catalogDetailResp) string {
 			fmt.Fprintf(&b, " %d GB VRAM", (c.Host.VRAMTotalMB+512)/1024)
 		}
 		fmt.Fprintf(&b, " / %d GB RAM", c.Host.RAMTotalGB)
+	} else if len(c.Host.UnusedGPUModels) > 0 {
+		fmt.Fprintf(&b, "%d GB RAM (runs on the CPU; the engine does not use %s by default)",
+			c.Host.RAMTotalGB, strings.Join(c.Host.UnusedGPUModels, ", "))
 	} else {
 		fmt.Fprintf(&b, "%d GB RAM (no GPU)", c.Host.RAMTotalGB)
 	}

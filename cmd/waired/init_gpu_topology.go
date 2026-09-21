@@ -37,9 +37,14 @@ import (
 // honest outcome on a host where the node would not open — and is why
 // an unelevated run writes nothing rather than writing an empty record
 // over a good one.
+//
+// Every DETECTED device, including the ones the engine will not use: the
+// reading is a fact about the hardware, and it is exactly the reading
+// that decides a device is unused (waired-agent#1484) — a daemon that
+// could not read it again would put the device back in use.
 func gpuTopologyFrom(prof hardware.Profile, now func() time.Time) (state.GPUTopologyRecord, bool) {
 	var devices []state.GPUTopologyDevice
-	for _, g := range prof.GPUs {
+	for _, g := range prof.DetectedGPUs() {
 		if !g.IntegratedKnown || g.PCIID == "" {
 			continue
 		}

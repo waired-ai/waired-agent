@@ -28,6 +28,13 @@ would need, and stays selectable. Choosing it asks first.
 Apple Silicon is the one kind of computer where the two figures are not added.
 Its VRAM is a slice of the same memory, so the RAM total is the whole of it.
 
+A GPU built into the processor counts only where the inference engine uses
+it. Ollama uses one by default on Apple Silicon, on AMD Strix Halo (Ryzen AI
+Max), and on NVIDIA's unified-memory computers such as the DGX Spark.
+Elsewhere, for example a laptop's Radeon 780M or its Intel Arc graphics, the
+engine runs on the CPU. Waired then judges models against system RAM alone,
+and `waired models ls --detail` names the GPU the engine is not using.
+
 ## Recommended: can it hold a whole coding session?
 
 Of the models that fit, Waired recommends the strongest one your computer can

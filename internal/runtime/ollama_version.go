@@ -346,5 +346,14 @@ package runtime
 // and docs/knowledges/20260906/2100-the-qsa-indexer-adds-a-third-kv-cache.md
 // §4 is struck in this PR.
 //
+// AT EVERY BUMP, re-read which integrated GPUs the engine uses by default:
+// discover/runner.go integratedGPUAllowedByDefault and
+// defaultIntegratedROCmGFXTargets. At 0.34.2 that is CUDA devices and
+// ROCm gfx1151, nothing on Vulkan. internal/hardware/engine_gpus.go copies
+// that rule so the host is described by the GPUs the engine will actually
+// run on (waired-agent#1484); if upstream admits another gfx target, add
+// it to ollamaDefaultIntegratedROCmGFXTargets there, and if it starts
+// admitting Vulkan iGPUs, the copy has to change shape.
+//
 // renovate: datasource=github-releases depName=ollama/ollama
 const OllamaPinnedVersion = "0.34.2"
