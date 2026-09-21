@@ -207,9 +207,11 @@ func firstAMDVRAMMB(p *Profile) int {
 // of flows through whichever row its vendor uses without anyone editing
 // anything:
 //
-//	NVIDIA, any OS   the pool IS system RAM and CUDA addresses all of
-//	                 it, so the budget is RAM less the OS reserve with
-//	                 no ceiling, and the carve-out is 0 — a GB10
+//	NVIDIA, any OS   the pool IS system RAM, so the budget is RAM less
+//	                 the OS reserve, capped by the pool CUDA itself
+//	                 reports where it can be asked (Windows,
+//	                 cuDeviceTotalMem, #1482) and uncapped where it
+//	                 cannot, and the carve-out is 0 — a GB10
 //	                 reports no separate framebuffer at all, and an N1X
 //	                 reports one that is a slice of RAM rather than an
 //	                 addition to it.
@@ -244,7 +246,11 @@ func unifiedBudgetFor(goos string, p *Profile) (usableVRAMMB, carveOutMB int, ok
 		return 0, 0, false
 	}
 	if nvidiaUnifiedHost(p) {
-		return poolMinusOSReserveMB(p.RAMTotalGB, p.RAMAvailableAtInstallGB, 0), 0, true
+		// The pool CUDA reports, where it was asked (Windows), caps the
+		// budget: on the RTX Spark N1X it is 45.4 GiB against 54.2 GiB of
+		// RAM, so RAM less the reserve would promise ~10 % more than the
+		// GPU can allocate (#1482). 0 means not asked, and no cap.
+		return poolMinusOSReserveMB(p.RAMTotalGB, p.RAMAvailableAtInstallGB, p.GPUs[0].CUDATotalMemMB), 0, true
 	}
 	if !IsStrixHaloAPU(p.CPU.Model) {
 		return 0, 0, false

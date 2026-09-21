@@ -301,6 +301,13 @@ type GPU struct {
 	// ollama's own allowlist of integrated devices is written in, which
 	// is why engineUsesByDefault reads it.
 	GFXTarget string `json:"gfx_target,omitempty"`
+
+	// CUDATotalMemMB is what the CUDA driver API says the device can
+	// allocate (cuDeviceTotalMem), 0 where it was not asked — which is
+	// everywhere but Windows (cuda_facts.go, waired-agent#1482). On a
+	// single-pool part it is the pool, which can be smaller than RAM less
+	// the OS reserve, so it caps the budget.
+	CUDATotalMemMB int `json:"cuda_total_mem_mb,omitempty"`
 }
 
 // GPUSummary is the minimal per-device shape suitable for inclusion in
@@ -647,9 +654,17 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 	// fills it there; Linux needs a sysfs pass; Apple Silicon has no PCI
 	// bus). It comes first because the persisted reading below is keyed
 	// by it.
+	cudaDevs, cudaOK := cudaDevicesFromOS()
 	for i := range prof.GPUs {
 		if prof.GPUs[i].PCIID == "" {
 			prof.GPUs[i].PCIID = pciIDFromOS(&prof, i)
+		}
+		// NVIDIA's own figure for what the device can allocate, where
+		// the driver API is reachable (Windows) and the pairing certain.
+		if cudaOK {
+			if d, ok := cudaFactsFor(&prof, i, cudaDevs); ok {
+				prof.GPUs[i].CUDATotalMemMB = d.totalMB
+			}
 		}
 	}
 	// The per-device "is this one pool?" reading runs before the UMA
