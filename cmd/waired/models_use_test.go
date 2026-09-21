@@ -18,42 +18,99 @@ import (
 // about to fetch several gigabytes, or that has not switched at all yet —
 // while the OLD model keeps answering the whole time.
 func TestFormatModelsUse(t *testing.T) {
+	const (
+		downloads  = "qwen3.5-4b will run on this computer once it finishes downloading.\n"
+		restarts   = "qwen3.5-4b is recorded as the model this computer runs. The background service restarts to apply it."
+		notFitLine = "\nqwen3.5-4b needs 36 GB of VRAM (have 23 GB), so it isn't expected to start here."
+	)
 	tests := []struct {
-		name                     string
-		willRestart, downloading bool
-		want                     string
+		name string
+		r    modelsUseResult
+		want string
 	}{
 		{
 			name: "weights already local, applied in process",
 			want: "qwen3.5-4b is now the model this computer runs.",
 		},
 		{
-			name:        "a download has to land first, and the old model covers it",
-			downloading: true,
-			want: "qwen3.5-4b will run on this computer once it finishes downloading.\n" +
-				"The current model keeps answering until then.",
+			// Also what a daemon that predates the #1515 fields says for
+			// every download: the fields are absent, so false.
+			name: "a download has to land first, and the old model covers it",
+			r:    modelsUseResult{Downloading: true},
+			want: downloads + "The current model keeps answering until then.",
 		},
 		{
-			name:        "cross-engine: the switch needs the restart to apply",
-			willRestart: true,
-			want:        "qwen3.5-4b is recorded as the model this computer runs. The background service restarts to apply it.",
+			name: "cross-engine: the switch needs the restart to apply",
+			r:    modelsUseResult{WillRestart: true},
+			want: restarts,
 		},
 		{
 			// A restart that also has to download says the restart part:
 			// it is the one that decides when the machine changes, and
 			// the download rides along with it.
-			name:        "restart wins over the download note",
-			willRestart: true,
-			downloading: true,
-			want:        "qwen3.5-4b is recorded as the model this computer runs. The background service restarts to apply it.",
+			name: "restart wins over the download note",
+			r:    modelsUseResult{WillRestart: true, Downloading: true, EngineRestarts: true, NothingAnswers: true},
+			want: restarts,
+		},
+		// Owner-approved copy (waired-agent#1515, 2026-09-22).
+		{
+			name: "vLLM: the old model answers during the download, then the engine restarts",
+			r:    modelsUseResult{Downloading: true, EngineRestarts: true},
+			want: downloads + "The current model keeps answering until then. The engine then restarts to load qwen3.5-4b," +
+				" and this computer doesn't answer until it's ready.",
+		},
+		{
+			name: "downloading with nothing answering meanwhile (either engine)",
+			r:    modelsUseResult{Downloading: true, NothingAnswers: true, EngineRestarts: true},
+			want: downloads + "Nothing answers on this computer until then.",
+		},
+		{
+			name: "vLLM: weights on disk, the engine restarts to load them",
+			r:    modelsUseResult{EngineRestarts: true},
+			want: "qwen3.5-4b will run on this computer once the engine restarts to load it.\n" +
+				"This computer doesn't answer until it's ready.",
+		},
+		{
+			// 36864 MB rounds to 36 GB up; 23 999 MB to 23 GB down, the way
+			// the catalog row rounds them.
+			name: "a build not expected to fit adds its line",
+			r:    modelsUseResult{Downloading: true, NothingAnswers: true, NeedVRAMMB: 36864, HaveVRAMMB: 23999},
+			want: downloads + "Nothing answers on this computer until then." + notFitLine,
+		},
+		{
+			name: "a build that fits adds nothing",
+			r:    modelsUseResult{EngineRestarts: true, NeedVRAMMB: 8192, HaveVRAMMB: 23999},
+			want: "qwen3.5-4b will run on this computer once the engine restarts to load it.\n" +
+				"This computer doesn't answer until it's ready.",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := formatModelsUse("qwen3.5-4b", tt.willRestart, tt.downloading); got != tt.want {
+			tt.r.ModelID = "qwen3.5-4b"
+			if got := formatModelsUse(tt.r); got != tt.want {
 				t.Errorf("formatModelsUse() =\n  %q\nwant\n  %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// The fit line rounds the way the model catalog's row does: the need up,
+// the have down, so a build that misses by a fraction never reads as fitting.
+func TestFormatNotExpectedToFit(t *testing.T) {
+	for _, c := range []struct {
+		need, have int
+		want       string
+	}{
+		{36865, 24575, "m needs 37 GB of VRAM (have 23 GB), so it isn't expected to start here."},
+		{36864, 24576, "m needs 36 GB of VRAM (have 24 GB), so it isn't expected to start here."},
+		{24576, 24576, ""},
+		{8192, 24576, ""},
+		{36864, 0, ""},
+		{0, 24576, ""},
+	} {
+		if got := formatNotExpectedToFit("m", c.need, c.have); got != c.want {
+			t.Errorf("formatNotExpectedToFit(%d, %d) = %q, want %q", c.need, c.have, got, c.want)
+		}
 	}
 }
 

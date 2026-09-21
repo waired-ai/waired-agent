@@ -105,18 +105,14 @@ func newModelsUseCmd() *cobra.Command {
 				return err
 			}
 
-			var res struct {
-				ModelID     string `json:"model_id"`
-				WillRestart bool   `json:"will_restart"`
-				Downloading bool   `json:"downloading"`
-			}
+			var res modelsUseResult
 			if err := json.Unmarshal(body, &res); err != nil {
 				return fmt.Errorf("decode: %w", err)
 			}
 			if res.ModelID == "" {
 				res.ModelID = model
 			}
-			fmt.Fprintln(stdout, formatModelsUse(res.ModelID, res.WillRestart, res.Downloading))
+			fmt.Fprintln(stdout, formatModelsUse(res))
 
 			if !wait || !res.Downloading {
 				return nil
@@ -128,10 +124,11 @@ func newModelsUseCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the over-spec confirmation prompt")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"with --yes, also confirm switching to a model that doesn't fit in this computer's memory")
-	// Default off, unlike `models pull --wait`. The old model keeps
+	// Default off, unlike `models pull --wait`. The old model usually keeps
 	// answering for the whole download, so there is nothing being blocked
 	// on here — and a provisioning script that ran this would otherwise
-	// sit for tens of minutes it never asked for.
+	// sit for tens of minutes it never asked for. When nothing answers in
+	// the meantime, the confirmation says so (waired-agent#1515).
 	cmd.Flags().BoolVar(&wait, "wait", false, "poll until the new model is ready to serve")
 	cmd.Flags().StringVar(&window, "window", "200k",
 		"context window to serve: 200k, or 1m where the model documents a way past its trained length")
@@ -191,18 +188,69 @@ func warnLongContextWindow(out io.Writer, name string) {
 	writePromptf(out, "  a conversation branches.\n")
 }
 
+// modelsUseResult is the daemon's answer to `/preferred-model`
+// (management.PreferredModelResponse). A daemon that predates the fields
+// after Downloading sends none of them, and the answer is then worded as it
+// always was.
+type modelsUseResult struct {
+	ModelID        string `json:"model_id"`
+	WillRestart    bool   `json:"will_restart"`
+	Downloading    bool   `json:"downloading"`
+	EngineRestarts bool   `json:"engine_restarts"`
+	NothingAnswers bool   `json:"nothing_answers"`
+	NeedVRAMMB     int    `json:"need_vram_mb"`
+	HaveVRAMMB     int    `json:"have_vram_mb"`
+}
+
 // formatModelsUse renders the daemon's answer. Pure, so the wording is
 // testable without a daemon (formatModelsCancel's shape).
-func formatModelsUse(modelID string, willRestart, downloading bool) string {
+//
+// Owner-approved copy (waired-agent#1515, 2026-09-22). Each sentence is the
+// one that is true for what the switch actually does: a vLLM engine
+// restarts to load the new model, and while it downloads something may or
+// may not be answering.
+func formatModelsUse(r modelsUseResult) string {
+	id := r.ModelID
+	var msg string
 	switch {
-	case willRestart:
-		return modelID + " is recorded as the model this computer runs. The background service restarts to apply it."
-	case downloading:
-		return modelID + " will run on this computer once it finishes downloading.\n" +
+	case r.WillRestart:
+		msg = id + " is recorded as the model this computer runs. The background service restarts to apply it."
+	case r.Downloading && r.NothingAnswers:
+		msg = id + " will run on this computer once it finishes downloading.\n" +
+			"Nothing answers on this computer until then."
+	case r.Downloading && r.EngineRestarts:
+		msg = id + " will run on this computer once it finishes downloading.\n" +
+			"The current model keeps answering until then. The engine then restarts to load " + id +
+			", and this computer doesn't answer until it's ready."
+	case r.Downloading:
+		msg = id + " will run on this computer once it finishes downloading.\n" +
 			"The current model keeps answering until then."
+	case r.EngineRestarts:
+		msg = id + " will run on this computer once the engine restarts to load it.\n" +
+			"This computer doesn't answer until it's ready."
 	default:
-		return modelID + " is now the model this computer runs."
+		msg = id + " is now the model this computer runs."
 	}
+	// A choice this computer is not expected to hold is still honoured
+	// (owner ruling, 2026-09-20); the first sentence says what will be
+	// attempted, and this one what to expect of it.
+	if line := formatNotExpectedToFit(id, r.NeedVRAMMB, r.HaveVRAMMB); line != "" {
+		msg += "\n" + line
+	}
+	return msg
+}
+
+// formatNotExpectedToFit is the line for a build this computer is not
+// expected to start: its catalog minimum against this computer's vLLM VRAM
+// budget, rounded the way the model catalog's row rounds them (the need up,
+// the have down). "" when the figures do not say so. Owner-approved copy
+// (waired-agent#1515, 2026-09-22).
+func formatNotExpectedToFit(modelID string, needMB, haveMB int) string {
+	if needMB <= 0 || haveMB <= 0 || needMB <= haveMB {
+		return ""
+	}
+	return fmt.Sprintf("%s needs %d GB of VRAM (have %d GB), so it isn't expected to start here.",
+		modelID, (needMB+1023)/1024, haveMB/1024)
 }
 
 // formatModelsUseError turns the refusals this endpoint has words for

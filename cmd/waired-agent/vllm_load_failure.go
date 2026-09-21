@@ -128,12 +128,30 @@ func (p *agentInferenceProvider) vllmLoadBlocked(ctx context.Context, m catalog.
 // and holds the engine off with the reason.
 func (p *agentInferenceProvider) recordVLLMLoadFailure(ctx context.Context, m catalog.Manifest, v catalog.Variant,
 	shape catalog.LoadShape, reason, detail string) {
-	if p == nil || p.store == nil {
+	key, ok := p.noteVLLMLoadFailure(ctx, m, v, shape, reason, detail)
+	if !ok {
 		return
+	}
+	p.parkVLLMForOutOfMemory(key, reason)
+	if p.logger != nil {
+		p.logger.Warn("this computer could not start this model on vLLM; it will not be started again automatically",
+			"model_id", m.ModelID, "variant_id", v.VariantID, "reason", reason,
+			"context_length", shape.ContextLength, "kv_cache_type", shape.KVCacheType)
+	}
+}
+
+// noteVLLMLoadFailure keeps the fact that this build did not start here and
+// holds nothing off: what a start of a model no longer chosen leaves
+// behind, so it is not started again to answer in the meantime
+// (vllmStartable) while the model chosen now goes ahead (waired-agent#1515).
+func (p *agentInferenceProvider) noteVLLMLoadFailure(ctx context.Context, m catalog.Manifest, v catalog.Variant,
+	shape catalog.LoadShape, reason, detail string) (vllmBlockedLoad, bool) {
+	if p == nil || p.store == nil {
+		return vllmBlockedLoad{}, false
 	}
 	key := p.vllmBlockKey(m, v, shape)
 	if key.SHA == "" {
-		return // a failure it cannot key is not recorded (see onLoadMemoryFailure)
+		return vllmBlockedLoad{}, false // a failure it cannot key is not recorded (see onLoadMemoryFailure)
 	}
 	rec := catalog.VariantLoadFailure{
 		ModelID:   m.ModelID,
@@ -152,12 +170,7 @@ func (p *agentInferenceProvider) recordVLLMLoadFailure(ctx context.Context, m ca
 	}); err != nil && p.logger != nil {
 		p.logger.Warn("could not record a vLLM start that did not fit this computer", "model_id", m.ModelID, "err", err)
 	}
-	p.parkVLLMForOutOfMemory(key, reason)
-	if p.logger != nil {
-		p.logger.Warn("this computer could not start this model on vLLM; it will not be started again automatically",
-			"model_id", m.ModelID, "variant_id", v.VariantID, "reason", reason,
-			"context_length", shape.ContextLength, "kv_cache_type", shape.KVCacheType)
-	}
+	return key, true
 }
 
 // parkVLLMForOutOfMemory holds the vLLM engine off because the build in

@@ -42,7 +42,9 @@ You can choose another variant, and the type of
 [KV cache](/reference/glossary/#kv-cache) the model runs with, from the
 computer's page in the Waired dashboard. The computer downloads the variant
 you chose beside the one it is running, keeps answering with the old one until
-the download finishes, and then switches. The variant it switched from stays
+the download finishes, and then switches. On a computer that runs vLLM, the
+switch restarts the engine, and the computer doesn't answer until the new
+variant is loaded. The variant it switched from stays
 on disk, so switching back needs no download, and the same page offers to
 remove it.
 
@@ -108,10 +110,12 @@ generally give better answers and need more computer.
 
 		</Steps>
 
-		The change applies live. The engine reloads in a few seconds and keeps
-		serving. If the model has not been downloaded yet, the download starts,
-		the icon shows the progress, and the old model keeps answering until the
-		new one is ready.
+		The change applies live. With Ollama, the engine reloads in a few seconds
+		and keeps serving. With vLLM, the engine restarts to load the new model,
+		and this computer doesn't answer until it's ready. If the model has not
+		been downloaded yet, the download starts, the icon shows the progress, and
+		the old model keeps answering until the download finishes. If no model was
+		running, nothing answers until the new one is ready.
 	</TabItem>
 	<TabItem label="In the terminal">
 		```sh

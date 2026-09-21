@@ -43,6 +43,34 @@ type PreferredModelResponse struct {
 	ModelID     string `json:"model_id"`
 	WillRestart bool   `json:"will_restart"`
 	Downloading bool   `json:"downloading,omitempty"`
+
+	// What else happens before the chosen model answers (waired-agent#1515).
+	// Additive and omitempty: a daemon that predates them sends none, and a
+	// client then says what it always said. Local management API only.
+	//
+	// EngineRestarts: the engine (not the service) restarts to load the
+	// model — a vLLM engine serves one model per process.
+	EngineRestarts bool `json:"engine_restarts,omitempty"`
+	// NothingAnswers: no model answers on this computer until the chosen
+	// one is ready — nothing is serving now, and nothing will be started to
+	// answer while it downloads.
+	NothingAnswers bool `json:"nothing_answers,omitempty"`
+	// NeedVRAMMB / HaveVRAMMB: set when the build this computer will start
+	// is not expected to fit — its catalog minimum against this computer's
+	// vLLM VRAM budget, the two figures the model catalog's row compares.
+	// The choice is still honoured (owner ruling, 2026-09-20).
+	NeedVRAMMB int `json:"need_vram_mb,omitempty"`
+	HaveVRAMMB int `json:"have_vram_mb,omitempty"`
+}
+
+// ModelSwitchOutcome is what an in-process switch reports back to the
+// handler: PreferredModelResponse's fields past WillRestart.
+type ModelSwitchOutcome struct {
+	Downloading    bool
+	EngineRestarts bool
+	NothingAnswers bool
+	NeedVRAMMB     int
+	HaveVRAMMB     int
 }
 
 func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Request) {
@@ -135,13 +163,17 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 	// path too. When applying in process the swap layer owns the pull, so the
 	// #774 "don't pull pre-restart" reasoning below does not apply.
 	if s.catalog.ApplyModelSwitch != nil {
-		downloading, err := s.catalog.ApplyModelSwitch(r.Context(), req.ModelID)
+		out, err := s.catalog.ApplyModelSwitch(r.Context(), req.ModelID)
 		switch {
 		case err == nil:
 			writeJSON(w, http.StatusAccepted, PreferredModelResponse{
-				ModelID:     req.ModelID,
-				WillRestart: false,
-				Downloading: downloading,
+				ModelID:        req.ModelID,
+				WillRestart:    false,
+				Downloading:    out.Downloading,
+				EngineRestarts: out.EngineRestarts,
+				NothingAnswers: out.NothingAnswers,
+				NeedVRAMMB:     out.NeedVRAMMB,
+				HaveVRAMMB:     out.HaveVRAMMB,
 			})
 			return
 		case errors.Is(err, ErrModelSwitchUnavailable):

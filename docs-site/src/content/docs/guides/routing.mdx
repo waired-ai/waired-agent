@@ -115,7 +115,9 @@ This computer is in the same list as the others, under the same rules. It is
 neither tried first nor left out. A busy computer of your own does not take a
 turn that an idle one would answer sooner, and a computer in the middle of a
 model switch keeps answering with the model it has loaded until the new one
-is ready. `waired infer --explain` prints a line for this computer beside the
+is ready. A computer that runs vLLM stops answering while its engine restarts
+to load the new model, and your other computers take those requests.
+`waired infer --explain` prints a line for this computer beside the
 others, and during a switch it reads:
 
 ```

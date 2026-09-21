@@ -36,13 +36,23 @@ waired models check-agent         # このモデルはコーディングエー�
 
 **`pull`**は、モデルの準備ができるまで待ちます。ここで動くがWairedが選ぶものではないモデルは確認されます。`--yes`でこの確認を省略できます。このパソコンのメモリに収まらないモデルは、不足分を示してもう一度確認され、既定の答えはNoです。`--yes`だけではこの確認は省略されません。本当に進めるスクリプトは`--yes --force`を渡します。モデルIDは[モデルカタログ](/ja/reference/model-catalog/)にあります。
 
-**`use`**は、このパソコンが動かすモデルを設定します。`pull`は重みを取得するだけです。切り替えに再起動は不要です。動作中のモデルは新しいモデルの準備ができるまで答え続け、重みがまだディスクにない場合は`use`がダウンロードを始めてそのことを表示します。
+**`use`**は、このパソコンが動かすモデルを設定します。`pull`は重みを取得するだけです。切り替えにサービスの再起動は不要で、重みがまだディスクにない場合は`use`がダウンロードを始めてそのことを表示します。Ollamaでは、動作中のモデルが新しいモデルの準備ができるまで答え続けます。
 
 ```
 waired models use qwen3.5-4b
 qwen3.5-4b will run on this computer once it finishes downloading.
 The current model keeps answering until then.
 ```
+
+vLLMの推論エンジンは一度に1つのモデルしか動かさないため、新しいモデルを読み込むときに再起動し、準備ができるまでこのパソコンは答えません。重みのダウンロード中は、動作中のモデルが答え続けます。
+
+```
+waired models use qwen3.5-9b
+qwen3.5-9b will run on this computer once it finishes downloading.
+The current model keeps answering until then. The engine then restarts to load qwen3.5-9b, and this computer doesn't answer until it's ready.
+```
+
+まだ動いているモデルがない場合、2行目は`Nothing answers on this computer until then.`になります。このパソコンに収まらない見込みのモデルも選択は適用され、2つの数字を示す行が1行加わります。たとえば`qwen3.6-35b-a3b needs 36 GB of VRAM (have 23 GB), so it isn't expected to start here.`です。切り替えの途中は、`waired inference status`も推論エンジンの行の下に同じことを表示します。
 
 サービスが選択を受け付けた時点で戻ります。`--wait`を付けると、新しいモデルが応答を始めるまで待ちます。確認は`pull`と同じように動きます。
 

@@ -675,6 +675,10 @@ type MenuModel struct {
 	WindowHeader        string
 	WindowRows          []WindowRow
 	WindowActiveModelID string
+	// servingEngine is the engine the daemon's Active names ("" before a
+	// model is active): the speed suggestion's question says what a switch
+	// does on it (waired-agent#1515).
+	servingEngine string
 	// windowKnown / windowEngine are what applyInference learned for
 	// applyCatalog, which runs after it: whether the serving engine reported
 	// a window at all, and which engine it is.
@@ -3039,6 +3043,9 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	// submenu parent (waired#809); the rows below fill it in.
 	m.ShowInferenceMenu = true
 	m.InferenceStateLabel = "Engine: " + humanInferenceState(inf.SubsystemState)
+	if inf.Active != nil {
+		m.servingEngine = inf.Active.Runtime
+	}
 	// Engine provenance (display-only): suffix non-spawned ownership to
 	// the state label and surface the agent-computed version warning /
 	// failure detail. Old daemons leave these fields empty.

@@ -449,11 +449,11 @@ type sbModelSwapControl struct{ sb *switchboard }
 // ApplyModelSwitch delegates the #812 in-process preferred-model switch to the
 // live session's controller. Returns errNotEnrolled (which the handler treats
 // as "fall back to the supervised restart") when no session is enrolled yet.
-func (a sbModelSwapControl) ApplyModelSwitch(ctx context.Context, modelID string) (bool, error) {
+func (a sbModelSwapControl) ApplyModelSwitch(ctx context.Context, modelID string) (management.ModelSwitchOutcome, error) {
 	if s := a.sb.current(); s != nil && s.swapControl != nil {
 		return s.swapControl.ApplyModelSwitch(ctx, modelID)
 	}
-	return false, errNotEnrolled
+	return management.ModelSwitchOutcome{}, errNotEnrolled
 }
 
 // ApplyNoModelSelected delegates the "don't download a model now" choice

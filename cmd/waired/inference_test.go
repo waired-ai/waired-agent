@@ -90,3 +90,56 @@ func TestHostMemoryLine_RendersADateNotATimestamp(t *testing.T) {
 		t.Errorf("line = %q, want it to carry the measurement date", got)
 	}
 }
+
+// Owner-approved copy (waired-agent#1515, 2026-09-22): the line under
+// "Inference engine:" while this computer is moving to its chosen model.
+func TestModelSwitchLines(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		ms   *management.ModelSwitchStatus
+		want []string
+	}{
+		{"no switch", nil, nil},
+		{
+			"vLLM: the previous model answers while the chosen one downloads",
+			&management.ModelSwitchStatus{ModelID: "qwen3.5-9b", AnsweringModelID: "qwen3.5-4b",
+				Downloading: true, EngineRestarts: true},
+			[]string{"qwen3.5-9b is downloading. qwen3.5-4b answers until it finishes; the engine then restarts to load qwen3.5-9b."},
+		},
+		{
+			"nothing answers while it downloads",
+			&management.ModelSwitchStatus{ModelID: "qwen3.5-9b", Downloading: true, EngineRestarts: true},
+			[]string{"qwen3.5-9b is downloading. Nothing answers on this computer until it finishes."},
+		},
+		{
+			// The ordinary ollama switch: the old model answers and nothing
+			// restarts. There is no approved sentence for it and nothing
+			// is wrong, so the status says what it always said.
+			"ollama: the old model answers, nothing restarts",
+			&management.ModelSwitchStatus{ModelID: "qwen3.5-9b", AnsweringModelID: "qwen3.5-4b", Downloading: true},
+			nil,
+		},
+		{
+			"downloading a build not expected to fit",
+			&management.ModelSwitchStatus{ModelID: "qwen3.6-35b-a3b", Downloading: true, EngineRestarts: true,
+				NeedVRAMMB: 36864, HaveVRAMMB: 24463},
+			[]string{
+				"qwen3.6-35b-a3b is downloading. Nothing answers on this computer until it finishes.",
+				"qwen3.6-35b-a3b needs 36 GB of VRAM (have 23 GB), so it isn't expected to start here.",
+			},
+		},
+		{
+			"on disk, not expected to fit",
+			&management.ModelSwitchStatus{ModelID: "qwen3.6-35b-a3b", AnsweringModelID: "qwen3.5-9b",
+				EngineRestarts: true, NeedVRAMMB: 36864, HaveVRAMMB: 24463},
+			[]string{"qwen3.6-35b-a3b needs 36 GB of VRAM (have 23 GB), so it isn't expected to start here."},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := modelSwitchLines(c.ms)
+			if strings.Join(got, "|") != strings.Join(c.want, "|") {
+				t.Errorf("modelSwitchLines =\n  %q\nwant\n  %q", got, c.want)
+			}
+		})
+	}
+}

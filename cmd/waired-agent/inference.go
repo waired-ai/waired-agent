@@ -3118,6 +3118,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		Inflight:                inflight,
 		SubsystemState:          subState,
 		EngineStoppedReason:     p.engineStoppedReason(),
+		ModelSwitch:             p.modelSwitchStatus(ctx),
 		Runtimes:                rs,
 		Models:                  models,
 		ActiveEndpoints:         endpoints,

@@ -55,15 +55,32 @@ skip that one. A script that means it passes `--yes --force`. Model IDs come
 from the [model catalog](/reference/model-catalog/).
 
 **`use`** sets which model this computer runs. `pull` only fetches weights.
-The switch applies without a restart. The model already running keeps
-answering until the new one is ready, and when the weights are not on disk
-yet, `use` starts that download and says so:
+The switch applies without restarting the service, and when the weights are
+not on disk yet, `use` starts that download and says so. With Ollama, the
+model already running keeps answering until the new one is ready:
 
 ```
 waired models use qwen3.5-4b
 qwen3.5-4b will run on this computer once it finishes downloading.
 The current model keeps answering until then.
 ```
+
+With vLLM, the engine runs one model at a time, so it restarts to load the new
+one, and this computer doesn't answer until it's ready. The model already
+running keeps answering while the weights download:
+
+```
+waired models use qwen3.5-9b
+qwen3.5-9b will run on this computer once it finishes downloading.
+The current model keeps answering until then. The engine then restarts to load qwen3.5-9b, and this computer doesn't answer until it's ready.
+```
+
+When no model is running yet, the second line reads `Nothing answers on this
+computer until then.` instead. A model this computer isn't expected to hold is
+still applied, with one more line that gives the two figures, for example
+`qwen3.6-35b-a3b needs 36 GB of VRAM (have 23 GB), so it isn't expected to
+start here.` While the switch is under way, `waired inference status` says the
+same under its engine line.
 
 It returns as soon as the service has accepted the choice. `--wait` polls
 until the new model is serving. The confirmations work as they do for `pull`.

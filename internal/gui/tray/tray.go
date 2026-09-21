@@ -13,6 +13,7 @@ import (
 	"fyne.io/systray"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/observability"
@@ -1261,15 +1262,44 @@ func (t *tray) onModelSwitchAccepted(resp *management.PreferredModelResponse, na
 // switch, split out as a pure function because apply()/notify() cannot
 // be driven in a test (systray) but this wording is the point of
 // waired#808.
+//
+// The arms past the first three are waired-agent#1515's: a vLLM engine
+// restarts to load the new model, and while it downloads something may or
+// may not be answering. Owner-approved copy, 2026-09-22; a daemon that
+// predates the fields sends none of them and gets the older sentences.
 func modelSwitchAcceptedText(resp *management.PreferredModelResponse, name string) string {
 	switch {
 	case resp != nil && resp.WillRestart:
 		return "Switching model. The background service will restart briefly."
+	case resp != nil && resp.Downloading && resp.NothingAnswers:
+		return fmt.Sprintf("Downloading %s. Nothing answers on this computer until it's ready.", name)
+	case resp != nil && resp.Downloading && resp.EngineRestarts:
+		return fmt.Sprintf("Downloading %s. Your current model keeps answering until it's ready."+
+			" The engine then restarts to load it.", name)
 	case resp != nil && resp.Downloading:
-		return fmt.Sprintf("Downloading %s. Your current model keeps answering until it is ready.", name)
+		return fmt.Sprintf("Downloading %s. Your current model keeps answering until it's ready.", name)
+	case resp != nil && resp.EngineRestarts:
+		return fmt.Sprintf("Switching to %s. The engine restarts to load it,"+
+			" and this computer doesn't answer until it's ready.", name)
 	default:
 		return fmt.Sprintf("Switching to %s. It will be answering in a few seconds.", name)
 	}
+}
+
+// recommendationDialogBody is the speed suggestion's question. On a vLLM
+// engine the switch is an engine restart with nothing answering until the
+// new model is up, so "it applies live" would be untrue there
+// (waired-agent#1515; owner-approved copy, 2026-09-22).
+func recommendationDialogBody(rec *management.BenchmarkRecommendation, servingEngine string) string {
+	after := "It applies live. Waired keeps answering."
+	if servingEngine == catalog.RuntimeVLLM {
+		after = "The engine restarts to load it, and this computer doesn't answer until it's ready."
+	}
+	return fmt.Sprintf(
+		"This computer takes %s per request with %s %s.\n\n"+
+			"Switch to %s, which answers faster? %s",
+		notice.RequestSeconds(rec.TurnSeconds, rec.TurnFloorSeconds), rec.FromModelID,
+		notice.TargetClause(rec.BudgetSeconds), rec.ToModelID, after)
 }
 
 // modelSwitchErrorText turns a failed switch into a sentence. The 409
@@ -2629,17 +2659,14 @@ func windowToKeep(entries []CatalogEntryView, modelID string, inForce int) int {
 func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	t.mu.Lock()
 	rec := t.lastRecommendation
+	engine := t.last.servingEngine
 	t.mu.Unlock()
 	if rec == nil || rec.ToModelID == "" {
 		return
 	}
 
 	title := "Local inference is slow"
-	body := fmt.Sprintf(
-		"This computer takes %s per request with %s %s.\n\n"+
-			"Switch to %s, which answers faster? It applies live. Waired keeps answering.",
-		notice.RequestSeconds(rec.TurnSeconds, rec.TurnFloorSeconds), rec.FromModelID,
-		notice.TargetClause(rec.BudgetSeconds), rec.ToModelID)
+	body := recommendationDialogBody(rec, engine)
 
 	yes, ok := confirmYesNo(title, body)
 	if !ok {

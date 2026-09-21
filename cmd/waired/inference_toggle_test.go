@@ -147,6 +147,12 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			want: []string{"Local inference: on", "Inference engine: ready"},
 		},
 		{
+			// waired-agent#1515: the switch under way, under the engine line.
+			name: "a switch under way is said under the engine line",
+			body: `{"subsystem_state":"loading","desired_state":"enabled","model_switch":{"model_id":"qwen3.5-9b","downloading":true,"engine_restarts":true}}`,
+			want: []string{"Inference engine: loading\n  qwen3.5-9b is downloading. Nothing answers on this computer until it finishes."},
+		},
+		{
 			// An older daemon answers /inference/status without the
 			// field. Saying nothing beats inventing a state.
 			//

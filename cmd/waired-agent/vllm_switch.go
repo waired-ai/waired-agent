@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/router"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // How a vLLM host moves to the model chosen for it (waired-agent#1515).
@@ -105,7 +109,8 @@ func planVLLMTarget(f vllmTargetFacts) vllmTargetPlan {
 // vllmPreviousCandidate is the model this host was running, when it may
 // answer while the chosen model downloads: state.json's Active, on vLLM,
 // not the chosen model, still in this build's catalog under exactly that
-// id, loadable by this engine version, with its weights Ready on disk.
+// id, loadable by this engine version, with its weights Ready on disk, and
+// a build startable says this computer can start (vllmStartable).
 //
 // A retired model never qualifies (owner decision 2026-09-21). Its manifest
 // is gone, so there is nothing to start it with — no context window, KV
@@ -114,7 +119,8 @@ func planVLLMTarget(f vllmTargetFacts) vllmTargetPlan {
 // exact-id lookup is what enforces that; resolving the name would find a
 // retired model's successor, whose weights are not the ones on disk.
 func vllmPreviousCandidate(active *catalog.ActiveSelection, manifests []catalog.Manifest, st catalog.State,
-	target, engineVersion string, dirExists func(string) bool) (catalog.Manifest, catalog.Variant, string, bool) {
+	target, engineVersion string, dirExists func(string) bool,
+	startable func(catalog.Manifest, catalog.Variant) bool) (catalog.Manifest, catalog.Variant, string, bool) {
 	if active == nil || active.Runtime != catalog.RuntimeVLLM || active.ModelID == "" || active.ModelID == target {
 		return catalog.Manifest{}, catalog.Variant{}, "", false
 	}
@@ -123,7 +129,7 @@ func vllmPreviousCandidate(active *catalog.ActiveSelection, manifests []catalog.
 			continue
 		}
 		v, ok := variantByID(m, active.VariantID)
-		if !ok || !router.VariantLoadable(v, catalog.RuntimeVLLM, engineVersion) {
+		if !ok || !router.VariantLoadable(v, catalog.RuntimeVLLM, engineVersion) || !startable(m, v) {
 			return catalog.Manifest{}, catalog.Variant{}, "", false
 		}
 		ms := st.Models[m.ModelID]
@@ -133,6 +139,121 @@ func vllmPreviousCandidate(active *catalog.ActiveSelection, manifests []catalog.
 		return m, v, ms.LocalPath, true
 	}
 	return catalog.Manifest{}, catalog.Variant{}, "", false
+}
+
+// vllmStartable is whether this computer may start a build nobody chose just
+// now — the previous model, to answer while the chosen one downloads: not
+// one it already could not start (a load failure recorded on this machine,
+// in any shape), and not one whose catalog minimum is more GPU memory than
+// vLLM may use here. The chosen model is started on the chance the
+// estimate is wrong; this one is not, because a start that fails is
+// minutes of nothing answering, loading the card to the limit the way
+// #1443 and #1450 did, for a model nobody asked for (waired-agent#1515).
+// A zero figure on either side is not known to exceed and does not rule
+// the build out.
+func vllmStartable(st catalog.State, loadCtx catalog.LoadContext, budgetMB int,
+	sha func(catalog.Manifest, catalog.Variant) string) func(catalog.Manifest, catalog.Variant) bool {
+	return func(m catalog.Manifest, v catalog.Variant) bool {
+		if v.MinVRAMMB > 0 && budgetMB > 0 && v.MinVRAMMB > budgetMB {
+			return false
+		}
+		if rec, failed := st.FailedLoads[sha(m, v)]; failed && rec.Context == loadCtx {
+			return false
+		}
+		return true
+	}
+}
+
+// vllmStartableNow is vllmStartable with this computer's facts.
+func (p *agentInferenceProvider) vllmStartableNow(ctx context.Context, st catalog.State) func(catalog.Manifest, catalog.Variant) bool {
+	budget := 0
+	if p.profiler != nil {
+		budget = router.VLLMVRAMBudgetMB(p.Hardware(ctx))
+	}
+	return vllmStartable(st, p.loadContextNow(ctx), budget, func(m catalog.Manifest, v catalog.Variant) string {
+		return p.vllmBlockKey(m, v, catalog.LoadShape{}).SHA
+	})
+}
+
+// vllmChoiceMovedOn reports whether the model chosen for this computer is
+// now another one than modelID: a start of modelID still under way was
+// asked for by a choice that has since changed. No choice at all is not a
+// change.
+func (p *agentInferenceProvider) vllmChoiceMovedOn(modelID string) bool {
+	m, ok := p.preferredManifest()
+	return ok && m.ModelID != modelID
+}
+
+// vllmAttemptsEnd is how a run of vLLM start attempts ended.
+type vllmAttemptsEnd int
+
+const (
+	// vllmAttemptsStarted: the engine came up.
+	vllmAttemptsStarted vllmAttemptsEnd = iota
+	// vllmAttemptsFailed: every attempt failed.
+	vllmAttemptsFailed
+	// vllmAttemptsLatched: a park that raced the start, or a give-up
+	// latch. Neither clears on its own and neither is retried: without
+	// this a park landing mid-bootstrap burned 30s of backoff and then
+	// logged "did not become ready", a false diagnosis of a stop that
+	// worked. The ollama arm treats both the same way
+	// (engine_bootstrap.go).
+	vllmAttemptsLatched
+	// vllmAttemptsCancelled: the daemon is stopping.
+	vllmAttemptsCancelled
+	// vllmAttemptsMovedOn: another model was chosen during the attempts.
+	// Each is about a minute on a real host; retrying a model nobody
+	// chooses any more only kept the one chosen now waiting, and on the
+	// host that found this the last failure then held the engine off, the
+	// new model on disk and unstarted until another choice lifted the stop
+	// (waired-agent#1515).
+	vllmAttemptsMovedOn
+)
+
+// vllmStartMaxAttempts is how many starts one bootstrap makes of one build.
+const vllmStartMaxAttempts = 3
+
+// runVLLMStartAttempts starts the engine up to vllmStartMaxAttempts times,
+// waiting between attempts with wait (false: the context ended). Untagged,
+// with the start and the wait passed in, so the rule is tested on every leg.
+func runVLLMStartAttempts(ctx context.Context, logger *slog.Logger, ensure func(context.Context) error,
+	movedOn func() bool, wait func(ctx context.Context, attempt int) bool) (vllmAttemptsEnd, error) {
+	var err error
+	for attempt := 1; attempt <= vllmStartMaxAttempts; attempt++ {
+		if err = ensure(ctx); err == nil {
+			return vllmAttemptsStarted, nil
+		}
+		if errors.Is(err, infruntime.ErrEngineParked) || errors.Is(err, infruntime.ErrEngineUnrecoverable) {
+			return vllmAttemptsLatched, err
+		}
+		logger.Warn("vllm EnsureRunning failed", "attempt", attempt, "max", vllmStartMaxAttempts, "err", err)
+		if movedOn() {
+			return vllmAttemptsMovedOn, err
+		}
+		if attempt == vllmStartMaxAttempts {
+			break
+		}
+		if !wait(ctx, attempt) {
+			return vllmAttemptsCancelled, err
+		}
+		// Asked again after the wait: on the host that found this the
+		// choice landed a second after a failure, and the next attempt
+		// spent another minute on the model nobody chose any more.
+		if movedOn() {
+			return vllmAttemptsMovedOn, err
+		}
+	}
+	return vllmAttemptsFailed, err
+}
+
+// vllmRetryWait is the backoff between start attempts: 10s, then 20s.
+func vllmRetryWait(ctx context.Context, attempt int) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(time.Duration(attempt) * 10 * time.Second):
+		return true
+	}
 }
 
 func dirExists(path string) bool {
