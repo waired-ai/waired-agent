@@ -470,26 +470,7 @@ func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID strin
 		return
 	}
 	p.logger.Info("hf pull job completed", "model", modelID, "job", jobID)
-	// Active names what the engine serves. While an engine is up it is
-	// still serving the previous model, so the switch — not the download —
-	// moves Active, once the engine is ready on the new one
-	// (waired-agent#1515). With nothing up there is no such gap, and a
-	// fresh host's first model is recorded as before.
-	if !p.engineIsUp(ctx) {
-		if p.isBundledModel(modelID) {
-			p.activateBundledIfUnset(modelID, variant.VariantID)
-		}
-		p.activatePreferredIfNeeded(modelID, variant.VariantID)
-	}
-	// The edge back to the engine. Before this the vLLM path had none at all:
-	// the weights landed, Active was committed, and a bootstrap that had
-	// refused for want of them stayed refused until someone restarted the
-	// daemon (waired-agent#1170). The rule lives on the provider so it is
-	// compiled and tested on every OS.
-	if p.noteWeightsLanded(modelID) {
-		p.logger.Info("the chosen model's weights are on disk; the engine will be asked to start",
-			"model", modelID)
-	}
+	p.hfWeightsLanded(ctx, modelID, variant.VariantID)
 }
 
 // bootstrapVLLM is the vLLM counterpart of the ollama startup path: resolve

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // The whole rule for how a vLLM host reaches the chosen model
@@ -156,5 +157,45 @@ func TestRunEngineBootstrap_RunsAgainWhenAskedDuringARun(t *testing.T) {
 	}
 	if p.engineStartInFlight.Load() {
 		t.Error("the start claim was left set")
+	}
+}
+
+// A finished download moves Active only when no engine is up. While one is,
+// it still serves the previous model, and the switch writes Active once the
+// engine is ready on the new one. Product contract: owner decision
+// 2026-09-21 on waired-agent#1515.
+func TestHFWeightsLanded_ActiveMovesOnlyWithNothingUp(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		engineUp bool
+		want     string
+	}{
+		{"an engine is up: Active stays on the model it serves", true, "previous"},
+		{"nothing is up: the landed model is recorded", false, "hybrid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := vllmSwapProvider(t)
+			if tc.engineUp {
+				p.setVLLM(&recordingAdapter{name: "vllm", health: infruntime.StateReady})
+			}
+			chosen := "hybrid"
+			p.preferredOverride.Store(&chosen)
+			if err := p.store.Update(func(s *catalog.State) {
+				s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: "previous", VariantID: "bf16"}
+				s.Models = map[string]catalog.ModelState{
+					"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			p.hfWeightsLanded(context.Background(), "hybrid", "safetensors")
+			st, err := p.store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Active == nil || st.Active.ModelID != tc.want {
+				t.Errorf("Active = %+v, want %s", st.Active, tc.want)
+			}
+		})
 	}
 }

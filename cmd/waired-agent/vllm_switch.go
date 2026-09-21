@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"sync"
 
@@ -194,6 +195,32 @@ func (p *agentInferenceProvider) vllmChosenAbsent() bool {
 	}
 	ms := st.Models[m.ModelID]
 	return ms.State != catalog.ModelStateReady || ms.LocalPath == "" || !dirExists(ms.LocalPath)
+}
+
+// hfWeightsLanded is what a finished Hugging Face download does next
+// (runHFPullJob, which is Linux-only). Untagged, so the rule is tested on
+// every leg.
+//
+// Active names what the engine serves. While an engine is up it is still
+// serving the previous model, so the switch — not the download — moves
+// Active, once the engine is ready on the new one (waired-agent#1515). With
+// nothing up there is no such gap, and a fresh host's first model is
+// recorded as before.
+func (p *agentInferenceProvider) hfWeightsLanded(ctx context.Context, modelID, variantID string) {
+	if !p.engineIsUp(ctx) {
+		if p.isBundledModel(modelID) {
+			p.activateBundledIfUnset(modelID, variantID)
+		}
+		p.activatePreferredIfNeeded(modelID, variantID)
+	}
+	// The edge back to the engine. Before this the vLLM path had none at
+	// all: the weights landed, Active was committed, and a bootstrap that
+	// had refused for want of them stayed refused until someone restarted
+	// the daemon (waired-agent#1170).
+	if p.noteWeightsLanded(modelID) && p.logger != nil {
+		p.logger.Info("the chosen model's weights are on disk; the engine will be asked to start",
+			"model", modelID)
+	}
 }
 
 // vllmTargetDownloading reports whether the model chosen for this computer
