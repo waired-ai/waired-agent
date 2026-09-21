@@ -31,4 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(string(out))
+	// The derived provenance key, on stderr so stdout stays the profile
+	// JSON alone (waired-agent#1455, #1485).
+	fmt.Fprintf(os.Stderr, "host_key: %s\n", hardware.HostKey(&prof))
 }

@@ -37,6 +37,8 @@ waired models ls --detail
 
 どのGPUでモデルを動かすかはOllama自身が決め、Wairedはそれに従います。単体GPUは使われます。プロセッサーに内蔵されたGPUが使われるのは、Appleシリコン、AMD Strix Halo（Ryzen AI Max）、DGX SparkのようなNVIDIAのユニファイドメモリのパソコンだけです。それ以外のパソコン、たとえばRadeon 780MやIntel Arcのグラフィックスを持つノートパソコンでは、最初の行に推論エンジンがそのGPUを標準では使わないと表示され、モデルはプロセッサ向けに決められます。これは推論エンジンの判断で、検出の失敗ではありません。
 
+Linuxでは、WairedはAMDのGPUを`amdgpu`ドライバーから直接読みます。AMDのGPUを検出するのに、ROCmをインストールする必要はありません。
+
 それでも内蔵GPUを使わせたい場合は、下の`WAIRED_NVIDIA_SMI`と同じ方法でサービスに`OLLAMA_IGPU_ENABLE=1`を設定し、サービスを再起動します。そのパソコンでも、Wairedはモデルをプロセッサ向けに決めます。
 
 NVIDIAのGPUは、`PATH`上の`nvidia-smi`を探すのではなく、ドライバー自体から検出します。GPUが見つからない場合は、Wairedにツールの場所を直接指定してサービスを再起動します。

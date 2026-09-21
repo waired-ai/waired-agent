@@ -100,7 +100,7 @@ func wantROCmOverlay(ctx context.Context, getenv func(string) string) bool {
 	prof := hardware.NewProfiler("").Profile(ctx)
 	in := infruntime.BackendInputs{
 		GOOS:         "windows",
-		StrixHaloAPU: hardware.IsStrixHaloAPU(prof.CPU.Model),
+		StrixHaloAPU: hardware.StrixHaloHost(&prof),
 	}
 	if len(prof.GPUs) > 0 {
 		in.PrimaryGPUVendor = strings.ToLower(prof.GPUs[0].Vendor)

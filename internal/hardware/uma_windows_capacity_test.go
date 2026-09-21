@@ -26,7 +26,7 @@ func windowsStrixHalo(ramTotalGB, ramAvailableAtInstallGB, carveOutReadingMB int
 		}},
 	}
 	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(
-		"windows", carveOutReadingMB, ramTotalGB, ramAvailableAtInstallGB)
+		"windows", carveOutReadingMB, 0, ramTotalGB, ramAvailableAtInstallGB)
 	return p.HostFit()
 }
 

@@ -14,13 +14,13 @@ import (
 // Hawk Point) have much smaller iGPUs and don't change picker
 // decisions, so they intentionally do not match.
 //
-// Shared across profiler_linux.go and profiler_windows.go — both
-// reach for the same model substring even though they read it via
-// different OS interfaces. Exported because the Ollama backend
-// selector (internal/runtime) keys the Strix Halo GPU-backend decision
-// off the CPU model: on Linux the iGPU is invisible to the profiler
-// unless rocm-smi is installed, so the CPU string is the only reliable
-// Strix Halo signal (#290).
+// Since waired-agent#1485 it is the FALLBACK, not the signal. The
+// signal is the GPU's ISA target (gfx1151), which the kernel reports on
+// Linux and the PCI pair names on Windows — the same key the engine's
+// own allowlist is written in — and StrixHaloHost asks for it first.
+// The CPU string answers only where no GPU reading did, which is where
+// it used to be the only answer: on Linux the iGPU was invisible without
+// rocm-smi (#290).
 func IsStrixHaloAPU(modelName string) bool {
 	return strings.Contains(strings.ToLower(modelName), "ryzen ai max")
 }
@@ -89,21 +89,32 @@ const strixHaloUMACapMB = 96 * 1024
 // platform contract: only the one host was measured, and the mechanism
 // above is documented for WDDM, not for amdgpu.
 //
-// # Linux: unchanged
+// # Linux: the pool the kernel's compute driver offers
 //
 // amdgpu reaches system memory through GTT, which reserves nothing
 // permanently, and AMD's own guidance is a small BIOS carve-out plus a
-// large GTT limit rather than the Windows arrangement. Nothing here
-// reads GTT and no Linux Strix Halo was measured, so the Linux answer
-// is left exactly as it was: a carve-out reading — clamped to the BIOS
-// UMA ceiling — is the budget and is additive, and only its absence
-// falls back to the 75 %-of-RAM heuristic. See waired-ai/waired-agent#868.
-func strixHaloUMA(goos string, amdVRAMMB, ramTotalGB, ramAvailableAtInstallGB int) (usableVRAMMB, carveOutMB int) {
+// large GTT limit rather than the Windows arrangement. On such a host the
+// carve-out reading is ~512 MB and says almost nothing about capacity.
+//
+// What the ROCm stack can allocate is what KFD reports as the device's
+// memory bank (kfdPoolMB, /sys/class/kfd/.../mem_banks/0), and the kernel
+// sizes that itself: since Linux 6.15 an APU whose GTT is larger than its
+// carve-out places compute allocations in GTT (amdgpu_ttm.c,
+// apu_prefer_gtt), and KFD then reports the GTT; otherwise it reports
+// the carve-out. So the budget is that figure, clamped to the BIOS UMA
+// ceiling, and where KFD is absent it is the carve-out as before
+// (waired-agent#1485). Only the carve-out is additive: GTT is a view
+// into RAM, and adding it would count the same bytes twice. Measured on
+// no Linux Strix Halo (#868) — the figure is the kernel's, not ours.
+func strixHaloUMA(goos string, amdVRAMMB, kfdPoolMB, ramTotalGB, ramAvailableAtInstallGB int) (usableVRAMMB, carveOutMB int) {
 	if goos == "windows" {
 		return poolMinusOSReserveMB(ramTotalGB, ramAvailableAtInstallGB, strixHaloUMACapMB), 0
 	}
 	if amdVRAMMB > 0 {
 		c := minNonZero(amdVRAMMB, strixHaloUMACapMB)
+		if kfdPoolMB > 0 {
+			return minNonZero(kfdPoolMB, strixHaloUMACapMB), c
+		}
 		return c, c
 	}
 	// minNonZero treats 0 as "not a candidate", so without this guard a
@@ -173,14 +184,15 @@ func poolMinusOSReserveMB(ramTotalGB, ramAvailableAtInstallGB, capMB int) int {
 	return usable
 }
 
-// firstAMDVRAMMB is the first AMD device's reported VRAM total, or 0.
-func firstAMDVRAMMB(p *Profile) int {
+// firstAMDWithVRAM is the first AMD device with a VRAM reading, or the
+// zero GPU.
+func firstAMDWithVRAM(p *Profile) GPU {
 	for _, g := range p.GPUs {
 		if strings.EqualFold(g.Vendor, "amd") && g.VRAMTotalMB > 0 {
-			return g.VRAMTotalMB
+			return g
 		}
 	}
-	return 0
+	return GPU{}
 }
 
 // unifiedBudgetFor is the whole of the UMA POLICY for the two operating
@@ -218,9 +230,10 @@ func firstAMDVRAMMB(p *Profile) int {
 //	AMD, Windows     RAM less the OS reserve, clamped to the BIOS UMA
 //	                 ceiling; carve-out 0 (waired-agent#863, decision
 //	                 20260820/0005).
-//	AMD, Linux       the carve-out reading is the budget AND is
-//	                 additive; its absence falls back to 75 % of RAM.
-//	                 Unmeasured and deliberately unchanged (#868).
+//	AMD, Linux       the KFD pool (carve-out, or GTT where the kernel
+//	                 puts compute there) is the budget, the carve-out
+//	                 alone is additive; without KFD the carve-out is
+//	                 both. Unmeasured on hardware (#868).
 //
 // # Why NVIDIA is asked first
 //
@@ -252,17 +265,39 @@ func unifiedBudgetFor(goos string, p *Profile) (usableVRAMMB, carveOutMB int, ok
 		// GPU can allocate (#1482). 0 means not asked, and no cap.
 		return poolMinusOSReserveMB(p.RAMTotalGB, p.RAMAvailableAtInstallGB, p.GPUs[0].CUDATotalMemMB), 0, true
 	}
-	if !IsStrixHaloAPU(p.CPU.Model) {
+	if !StrixHaloHost(p) {
 		return 0, 0, false
 	}
-	amdVRAMMB := firstAMDVRAMMB(p)
-	if goos != "windows" && amdVRAMMB == 0 {
+	amd := firstAMDWithVRAM(p)
+	if goos != "windows" && amd.VRAMTotalMB == 0 {
 		// Linux classifies a Strix Halo only on a real reading. Without
-		// rocm-smi the iGPU is invisible there, and the budget branch
-		// below would answer from the 75 % heuristic for a host whose
-		// GPU was never enumerated at all.
+		// one the budget branch below would answer from the 75 %
+		// heuristic for a host whose GPU was never enumerated at all.
 		return 0, 0, false
 	}
-	u, c := strixHaloUMA(goos, amdVRAMMB, p.RAMTotalGB, p.RAMAvailableAtInstallGB)
+	u, c := strixHaloUMA(goos, amd.VRAMTotalMB, amd.KFDMemMB, p.RAMTotalGB, p.RAMAvailableAtInstallGB)
 	return u, c, true
 }
+
+// StrixHaloHost reports whether the host's AMD GPU is a Strix Halo
+// (gfx1151). The ISA target is the answer where a source read one — it
+// is what the engine itself keys on — and the CPU name is the answer
+// where none did, which is also how a Windows host whose adapter the
+// registry walk missed is still recognised.
+//
+// Every DETECTED device is asked, not only the ones in use: an AMD iGPU
+// the engine leaves off has already said, by its target, that this is
+// not a Strix Halo, and falling through to the CPU name would let a
+// family string override that reading and publish a unified budget for
+// a GPU nothing runs on.
+func StrixHaloHost(p *Profile) bool {
+	for _, g := range p.DetectedGPUs() {
+		if strings.EqualFold(g.Vendor, "amd") && g.GFXTarget != "" {
+			return g.GFXTarget == strixHaloGFXTarget
+		}
+	}
+	return IsStrixHaloAPU(p.CPU.Model)
+}
+
+// strixHaloGFXTarget is the ISA target of every Strix Halo part.
+const strixHaloGFXTarget = "gfx1151"

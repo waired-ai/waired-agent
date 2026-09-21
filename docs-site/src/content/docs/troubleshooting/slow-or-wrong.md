@@ -58,6 +58,9 @@ with a Radeon 780M or Intel Arc graphics, the first line says the engine does
 not use that GPU by default, and models are sized for the processor. That is
 the engine's decision, not a detection failure.
 
+On Linux, Waired reads AMD GPUs from the `amdgpu` driver directly, so ROCm
+does not need to be installed for an AMD GPU to be found.
+
 To have the engine use a built-in GPU anyway, set `OLLAMA_IGPU_ENABLE=1` for
 the service the same way as `WAIRED_NVIDIA_SMI` below, then restart it. Waired
 still sizes models for the processor on that computer.

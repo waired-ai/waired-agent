@@ -4,6 +4,7 @@ supersedes:
   - docs/decisions/20260829/1100-measurement-provenance-is-derived-or-declared.md
 superseded_by:
   - docs/decisions/20260921/0300-nvidia-single-pool-parts-are-named.md
+  - docs/decisions/20260921/1600-amd-parts-are-named-by-their-isa-target.md
 ---
 
 # 測定の出自は、チップの粒度で事実から導く (20260920 20:00)
@@ -21,6 +22,12 @@ Accepted。waired-agent#1455、および #459 の Ask 1・2。
 §6 の「`GPU.Model` は使わない」は **NVIDIA のユニファイド部品に限って**
 解かれた（`ComputeCap` の `12.1` が GB10 と RTX Spark N1X の 2 機種を
 指してしまい、部品を特定できないため）。§1・§2・§3・§5・§7 は不変。
+
+**§6 の AMD の行は、さらに
+`docs/decisions/20260921/1600-amd-parts-are-named-by-their-isa-target.md` が
+部分的に改めた** — 「AMD は `CPU.Model` が部品を名指す」は APU に限った文になり、
+ディスクリートカードは ISA ターゲット（`gfx1100` など）で名指す（#1485）。
+`GPU.Model` を使わない点は AMD についても変わらない。
 
 ## Context
 
