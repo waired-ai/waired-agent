@@ -2104,6 +2104,10 @@ type agentInferenceProvider struct {
 	// that model reaches Ready. It distinguishes an operator switch from a
 	// boot-time pull so boot never triggers a spurious engine bounce.
 	pendingSwapModel atomic.Pointer[string]
+	// selfExcludeUnpinned is ExcludeUnpinned from this device's own map
+	// entry (applySelf): whether requests naming neither a model nor a
+	// computer may land on the custom model this device serves.
+	selfExcludeUnpinned atomic.Bool
 	// preferredOverride is the in-process source of truth for the operator's
 	// preferred model after a #812 switch. cfg.PreferredModelID is a frozen
 	// boot snapshot (preferred-model.json is only re-read on a restart), so
@@ -3773,6 +3777,35 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	return declaredTier(win)
 }
 
+// CustomModelWindow is the window a custom model under 200,704 tokens is
+// served with, for InferenceState.CustomModelWindow (waired-ai/waired#1481);
+// 0 for anything else. DeclaredContextWindow declares nothing below 200,704,
+// which leaves such a model reachable by no Waired row; this is how a
+// requester learns what it can send it instead (owner ruling 5 on
+// waired-ai/waired#1473: no minimum window for the coding-agent rows).
+func (p *agentInferenceProvider) CustomModelWindow() int {
+	active, ok := p.ActiveModelID()
+	if !ok || !catalog.IsCustomModelID(active) {
+		return 0
+	}
+	m, ok := catalog.LookupByAlias(active, p.catalogManifests())
+	if !ok {
+		return 0
+	}
+	t, ok := p.appliedTuningFor(m)
+	if !ok || t.ContextLength <= 0 {
+		return 0
+	}
+	win := t.ContextLength
+	if m.ContextLength > 0 && win > m.ContextLength {
+		win = m.ContextLength
+	}
+	if win >= hostfit.ServingWindow200k {
+		return 0
+	}
+	return win
+}
+
 // declaredTier is the tier a served window declares: 1048576 at or above the
 // 1M tier, 200704 at or above the 200k tier, and nothing below (owner decision
 // 2026-09-16, waired-agent#1396; #1434). Both tunings size by tier, so today
@@ -4194,6 +4227,19 @@ var (
 	errUnsupportedSource = errors.New("this device cannot fetch this model's files")
 )
 
+// variantEngines lists the engines m has a build for, in manifest order.
+func variantEngines(m catalog.Manifest) []string {
+	var out []string
+	for _, v := range m.Variants {
+		for _, r := range v.RuntimeSupport {
+			if !slices.Contains(out, r) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
 func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
 	return p.pullModelBuild(ctx, modelOrAlias, "")
 }
@@ -4261,6 +4307,15 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 	engineVersion := p.engineVersionFor(ctx, engine)
 	variant, pullable := router.FirstPullableVariant(manifest, engine, engineVersion)
 	if !pullable {
+		// No build for this engine at all is not a version problem: the
+		// message used to say "requires vllm >= " with nothing after it for
+		// an ollama-only custom model on a vLLM host (found on real
+		// hardware, waired-ai/waired#1481). Say which engine runs it.
+		if engines := variantEngines(manifest); !slices.Contains(engines, engine) {
+			return management.PullJob{}, fmt.Errorf(
+				"model %s has no build for %s, the engine this computer runs; it runs on %s: %w",
+				manifest.ModelID, engine, strings.Join(engines, ", "), errUnsupportedSource)
+		}
 		floor := manifest.Variants[0].MinEngineVersion
 		have := engineVersion
 		if have == "" {
@@ -6258,6 +6313,7 @@ func (p *agentInferenceProvider) selectorInputs(ctx context.Context, pref state.
 	// re-applying the rule here would let a serving node veto work it had
 	// just been asked to do.
 	in.LocalContextWindow = p.DeclaredContextWindow
+	in.LocalCustomModelWindow = p.CustomModelWindow
 	// Phase 7 routing signals — all five are nil-safe inside
 	// the Selector. localOnlySelector deliberately leaves them
 	// unset so an overlay-arriving peer request never affects

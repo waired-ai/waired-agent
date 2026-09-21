@@ -786,6 +786,8 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		KVCacheDType:              kvCacheDType,
 		SpeculativeConfig:         spec.Config,
 		ToolCallParser:            toolParser,
+		ReasoningParser:           resolveVLLMReasoningParser(manifest),
+		LoadFormat:                vllmLoadFormat(manifest),
 		EnablePromptTokensDetails: serveFlags,
 		MaxNumBatchedTokens:       batchedTokens,
 		MaxNumSeqs:                router.VLLMMaxNumSeqs(p.cfg.VLLMMaxNumSeqs),

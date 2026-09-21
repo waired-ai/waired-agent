@@ -1478,6 +1478,7 @@ func run(ctx context.Context, args []string) error {
 			if inferenceSub != nil && inferenceSub.provider != nil {
 				prov := inferenceSub.provider
 				deps.DeclaredContextWindow = prov.DeclaredContextWindow
+				deps.CustomModelWindow = prov.CustomModelWindow
 				// #496: what one coding-agent turn costs here. Wired for
 				// every provider for the same reason as the window — the
 				// getter answers nil on a host that has not measured, and a
@@ -1874,6 +1875,10 @@ func run(ctx context.Context, args []string) error {
 				infSrv.SetPublicCapacity(st.PublicCapacity)
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					inferenceSub.provider.ApplyConcurrency(ctx, st.DesiredParallel)
+					// The account's switch for this device's own custom
+					// model (waired-ai/waired#1473 ruling 5), read by the
+					// local routing candidate.
+					inferenceSub.provider.selfExcludeUnpinned.Store(st.ExcludeUnpinned)
 					// Stored builds the user asked to remove
 					// (waired-agent#1348). A standing list, re-sent on
 					// every frame; the removal is single-flight and a

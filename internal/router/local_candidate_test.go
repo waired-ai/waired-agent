@@ -38,7 +38,7 @@ func TestBuildLocalCandidate(t *testing.T) {
 
 	t.Run("serving a tag the request wants", func(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}})
-		c, ok, _ := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t))
+		c, ok, _ := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t), false)
 		if !ok {
 			t.Fatal("no candidate for a serving host that matches the want set")
 		}
@@ -57,7 +57,7 @@ func TestBuildLocalCandidate(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}})
 		ln := localFor("qwen3:8b-q4_K_M")
 		ln.Serving = false
-		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t)); ok {
+		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t), false); ok {
 			t.Error("a host that is not serving offered a candidate")
 		}
 	})
@@ -68,14 +68,14 @@ func TestBuildLocalCandidate(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}})
 		ln := localFor("qwen3:8b-q4_K_M")
 		ln.DeviceID = ""
-		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t)); ok {
+		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t), false); ok {
 			t.Error("a host with no device id offered a candidate")
 		}
 	})
 
 	t.Run("local serving turned off", func(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}, LocalServingOff: true})
-		if _, ok, _ := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t)); ok {
+		if _, ok, _ := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t), false); ok {
 			t.Error("the operator turned local serving off and it offered a candidate anyway")
 		}
 	})
@@ -84,14 +84,14 @@ func TestBuildLocalCandidate(t *testing.T) {
 		// waired-agent#901: this host is the population that entry exists
 		// to leave.
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}, PublicOnly: true})
-		if _, ok, _ := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t)); ok {
+		if _, ok, _ := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t), false); ok {
 			t.Error("a public-only request was offered this device")
 		}
 	})
 
 	t.Run("serving a tag nothing asked for", func(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}})
-		if _, ok, _ := s.buildLocalCandidate(localFor("something:else"), 0, want(t)); ok {
+		if _, ok, _ := s.buildLocalCandidate(localFor("something:else"), 0, want(t), false); ok {
 			t.Error("a tag outside the want set offered a candidate")
 		}
 	})
@@ -100,7 +100,7 @@ func TestBuildLocalCandidate(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}})
 		ln := localFor("qwen3:8b-q4_K_M")
 		ln.ContextWindow = 200_704
-		_, ok, drop := s.buildLocalCandidate(ln, 1_000_000, want(t))
+		_, ok, drop := s.buildLocalCandidate(ln, 1_000_000, want(t), false)
 		if ok {
 			t.Error("a host declaring a smaller window than the request needs was offered")
 		}
@@ -110,18 +110,18 @@ func TestBuildLocalCandidate(t *testing.T) {
 		// 0 declares nothing, and falls short of every floor — the same rule
 		// a peer's 0 has (waired-agent#1395).
 		ln.ContextWindow = 0
-		if _, ok, drop := s.buildLocalCandidate(ln, 200_704, want(t)); ok || !drop.belowWindow {
+		if _, ok, drop := s.buildLocalCandidate(ln, 200_704, want(t), false); ok || !drop.belowWindow {
 			t.Errorf("a host declaring nothing: ok=%v drop=%+v, want excluded by the window floor", ok, drop)
 		}
 		// No floor, no filter.
-		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t)); !ok {
+		if _, ok, _ := s.buildLocalCandidate(ln, 0, want(t), false); !ok {
 			t.Error("a host declaring nothing was excluded from a request with no floor")
 		}
 	})
 
 	t.Run("below the operator's model-size floor", func(t *testing.T) {
 		s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}, MinModelSize: "large"})
-		_, ok, drop := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t))
+		_, ok, drop := s.buildLocalCandidate(localFor("qwen3:8b-q4_K_M"), 0, want(t), false)
 		if ok {
 			t.Error("the floor did not exclude this device's own engine")
 		}

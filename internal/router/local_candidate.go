@@ -55,6 +55,16 @@ type LocalNode struct {
 	// not an answer to a request with a window floor (waired-agent#1395),
 	// and never "serves nothing" to one without.
 	ContextWindow int
+	// CustomModelWindow is the window a custom model under 200,704 tokens is
+	// served with, where ContextWindow declares nothing
+	// (InferenceState.CustomModelWindow, waired-ai/waired#1481). 0 otherwise.
+	CustomModelWindow int
+	// ExcludeUnpinned is the control plane's answer, on this device's own
+	// map entry, to whether requests that name neither a model nor a
+	// computer may land on the custom model it serves (the account's
+	// route_own; waired-ai/waired#1473 ruling 5). The same filter a peer's
+	// flag gets in buildMeshCandidates.
+	ExcludeUnpinned bool
 	// Capacity is how many conversations this host holds warm, and
 	// CapacityUsed how many are in use right now — the same pair a peer
 	// publishes as capacity_total / capacity_used, read from the same
@@ -95,7 +105,7 @@ type localDrop struct {
 //     they are structurally invisible here. Read as governing the mesh
 //     traffic this device would serve, which is what they gate today.
 //     Recorded as today's behaviour, not as a ruling.
-func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWant) (meshCandidate, bool, localDrop) {
+func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWant, unnamed bool) (meshCandidate, bool, localDrop) {
 	var drop localDrop
 	// The mirror of a peer's "!Reachable || Stale": nothing to offer.
 	if ln.DeviceID == "" || !ln.Serving || s.in.LocalServingOff {
@@ -121,9 +131,19 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 	// both sides (waired#1031). 0 falls short of every floor, exactly as a
 	// peer's 0 does (waired-agent#1395), and like the peer rule it is
 	// tested after the model matched, so the drop is the floor's alone.
-	if minWindow > 0 && ln.ContextWindow < minWindow {
-		drop.belowWindow = true
+	// The account's switch for requests that name neither a model nor a
+	// computer, as for a peer (buildMeshCandidates). A local-only row names
+	// this computer and never reaches here.
+	if unnamed && ln.ExcludeUnpinned && e.manifest.Provenance == catalog.ProvenanceCustom {
 		return meshCandidate{}, false, drop
+	}
+	window, belowWindow := ln.ContextWindow, false
+	if minWindow > 0 && ln.ContextWindow < minWindow {
+		if !customWindowAdmits(minWindow, e.manifest, ln.CustomModelWindow) {
+			drop.belowWindow = true
+			return meshCandidate{}, false, drop
+		}
+		window, belowWindow = ln.CustomModelWindow, true
 	}
 	// The operator's floor, on this device's own engine as much as on a
 	// peer's (owner ruling 2026-08-29, waired-agent#1128). The same
@@ -142,7 +162,8 @@ func (s *Selector) buildLocalCandidate(ln LocalNode, minWindow int, want meshWan
 		runtime:     ln.Runtime,
 		tag:         ln.EngineTag,
 
-		contextWindow: ln.ContextWindow,
+		contextWindow: window,
+		belowWindow:   belowWindow,
 		capacity:      ln.Capacity,
 		capacityUsed:  ln.CapacityUsed,
 		score:         int64(e.variant.ParamCount) * int64(e.variant.QuantizationTier),

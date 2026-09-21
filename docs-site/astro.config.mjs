@@ -128,6 +128,7 @@ export default defineConfig({
 					items: [
 						{ label: 'How Waired chooses a model', translations: { ja: 'Wairedがモデルを選ぶ仕組み' }, slug: 'guides/how-a-model-is-chosen' },
 						{ label: 'Change the model', translations: { ja: 'モデルを変更する' }, slug: 'guides/choose-a-model' },
+						{ label: 'Use a model from Hugging Face', translations: { ja: 'Hugging Faceのモデルを使う' }, slug: 'guides/custom-models' },
 						{ label: 'Choose which computer answers', translations: { ja: 'どのパソコンが答えるかを選ぶ' }, slug: 'guides/routing' },
 						{ label: 'Pause or stop Waired', translations: { ja: 'Wairedを一時停止する' }, slug: 'guides/pause' },
 						{ label: 'Share a computer with your other devices', translations: { ja: '自分の別のパソコンと共有する' }, slug: 'guides/sharing' },

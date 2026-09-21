@@ -105,6 +105,20 @@ type VLLMConfig struct {
 	// daemon that still serves.
 	ToolCallParser string
 
+	// ReasoningParser selects vLLM's --reasoning-parser, which moves the
+	// model's thinking out of `content` into `reasoning_content`. Set only
+	// for a custom model whose import named one (waired-ai/waired#1480);
+	// the name was checked against the pinned vLLM's registry at import.
+	// Empty omits the flag.
+	ReasoningParser string
+
+	// LoadFormat, when non-empty, is passed as --load-format. "safetensors"
+	// for a custom model: vLLM then reads only safetensors weights and never
+	// a pickled checkpoint the repository may also carry, whatever the
+	// repository gains after import (waired-ai/waired#1473, the refusal of
+	// pickle-only weights at import is the other half).
+	LoadFormat string
+
 	// EnablePromptTokensDetails asks the server to report
 	// usage.prompt_tokens_details.cached_tokens — how much of the prompt
 	// the prefix cache served instead of prefilling (waired-agent#885).
@@ -717,6 +731,12 @@ func (a *VLLMAdapter) commandArgs() []string {
 	// start-up failure or a silent no-op, never the thing we want.
 	if a.cfg.ToolCallParser != "" {
 		args = append(args, "--enable-auto-tool-choice", "--tool-call-parser", a.cfg.ToolCallParser)
+	}
+	if a.cfg.ReasoningParser != "" {
+		args = append(args, "--reasoning-parser", a.cfg.ReasoningParser)
+	}
+	if a.cfg.LoadFormat != "" {
+		args = append(args, "--load-format", a.cfg.LoadFormat)
 	}
 	return args
 }

@@ -20,6 +20,7 @@
 package modelrows
 
 import (
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -185,7 +186,7 @@ func FactsFromSnapshot(snap *inferencemesh.Snapshot, limit int, publicShareOn bo
 		if public && !publicShareOn {
 			peers[i].NotServing = true
 		}
-		if declaredWindow(pv) < hostfit.ServingWindow200k {
+		if declaredWindow(pv) < hostfit.ServingWindow200k && customModelWindow(pv) == 0 {
 			peers[i].NotServing = true
 		}
 		if pv.InferenceState != nil && pv.InferenceState.ExcludeMain {
@@ -219,6 +220,11 @@ func peerFacts(peers []inferencemesh.PeerView) (facts []claudecode.PeerFact, fro
 			continue
 		}
 		win := declaredWindow(p)
+		if win == 0 {
+			// A custom model under 200,704 tokens declares no tier; its row
+			// carries the window it is served with (waired-ai/waired#1481).
+			win = customModelWindow(p)
+		}
 		facts = append(facts, claudecode.PeerFact{
 			DisplayID:     name,
 			Key:           peerKey(p),
@@ -267,6 +273,18 @@ func PeerForDirective(peers []inferencemesh.PeerView, id string) (inferencemesh.
 // the model it is serving — not the model's native window and not what the
 // host could theoretically hold — which is exactly the claim a row makes on
 // the operator's behalf.
+// customModelWindow is the window a peer serves a custom model under
+// 200,704 tokens with (InferenceState.CustomModelWindow), 0 otherwise. Such a
+// peer declares no tier, and still takes the coding rows: the owner ruled no
+// minimum window for custom models (ruling 5 on waired-ai/waired#1473), and
+// the router admits it (router.customWindowAdmits).
+func customModelWindow(p inferencemesh.PeerView) int {
+	if p.InferenceState == nil || !catalog.IsCustomModelID(p.InferenceState.ActiveModel) {
+		return 0
+	}
+	return p.InferenceState.CustomModelWindow
+}
+
 func declaredWindow(p inferencemesh.PeerView) int {
 	if p.InferenceState == nil {
 		return 0

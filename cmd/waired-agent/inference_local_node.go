@@ -48,6 +48,8 @@ func (p *agentInferenceProvider) localNodeForRouting() router.LocalNode {
 			f.pendingModelID = *psm
 		}
 		f.contextWindow = p.DeclaredContextWindow()
+		f.customModelWindow = p.CustomModelWindow()
+		f.excludeUnpinned = p.selfExcludeUnpinned.Load()
 		f.capacity = p.WarmConversationSlots()
 		// The same counter /healthz reports as capacity_used: this
 		// machine's own work as well as any peer's. A machine busy with
@@ -68,18 +70,20 @@ func (p *agentInferenceProvider) localNodeForRouting() router.LocalNode {
 // on a test host without a live engine (CLAUDE.md §Test discipline: put the
 // seam below the behaviour under test).
 type localFacts struct {
-	serving        bool
-	modelID        string
-	deviceID       string
-	displayName    string
-	runtime        string
-	engineTag      string
-	variantID      string
-	pendingModelID string
-	contextWindow  int
-	capacity       int
-	capacityUsed   int
-	speed          *router.PeerSpeedReading
+	serving           bool
+	modelID           string
+	deviceID          string
+	displayName       string
+	runtime           string
+	engineTag         string
+	variantID         string
+	pendingModelID    string
+	contextWindow     int
+	customModelWindow int
+	excludeUnpinned   bool
+	capacity          int
+	capacityUsed      int
+	speed             *router.PeerSpeedReading
 }
 
 // localNodeFrom decides whether this device is a routing candidate, and
@@ -101,18 +105,20 @@ func localNodeFrom(f localFacts) router.LocalNode {
 		return router.LocalNode{Serving: false, ModelID: f.modelID}
 	}
 	return router.LocalNode{
-		DeviceID:       f.deviceID,
-		DisplayName:    f.displayName,
-		Serving:        true,
-		Runtime:        f.runtime,
-		EngineTag:      f.engineTag,
-		ModelID:        f.modelID,
-		VariantID:      f.variantID,
-		PendingModelID: f.pendingModelID,
-		ContextWindow:  f.contextWindow,
-		Capacity:       f.capacity,
-		CapacityUsed:   f.capacityUsed,
-		Speed:          f.speed,
+		DeviceID:          f.deviceID,
+		DisplayName:       f.displayName,
+		Serving:           true,
+		Runtime:           f.runtime,
+		EngineTag:         f.engineTag,
+		ModelID:           f.modelID,
+		VariantID:         f.variantID,
+		PendingModelID:    f.pendingModelID,
+		ContextWindow:     f.contextWindow,
+		CustomModelWindow: f.customModelWindow,
+		ExcludeUnpinned:   f.excludeUnpinned,
+		Capacity:          f.capacity,
+		CapacityUsed:      f.capacityUsed,
+		Speed:             f.speed,
 	}
 }
 
