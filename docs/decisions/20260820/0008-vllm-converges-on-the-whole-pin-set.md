@@ -145,7 +145,7 @@ sv-mag (RTX PRO 4000 Blackwell) に実際に venv を作って converge を回�
    ここで作る venv は上の引数だけで定義される。
 
 4. **張り替えの直後の回収が、走っているエンジンの venv を消していた**
-   （waired-agent#1431、同じ sv-mag で 2 回）。
+   （waired-agent#1431、同じ Linux ホストで 2 回）。
    - 2026-09-16: venv 0.28.0 のホストに pin 0.29.0 の agent を入れた。
      デーモンの converge が 0.29.0 を作って張り替え、0.28.0 を消した。
      起動を試行中だった adapter は、起動時に解決した 0.28.0 の python を
