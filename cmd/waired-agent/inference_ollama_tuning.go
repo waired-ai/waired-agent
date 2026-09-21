@@ -239,8 +239,9 @@ type ollamaTuning struct {
 	// input-layer weights that live there regardless. PlannedLayerWeightMB
 	// is one repeating layer's weight, the verify pass's tolerance.
 	// PlannedDeviceWeightMB is the model buffer the engine is predicted to
-	// place in GPU-addressable memory when nothing spills (the projector
-	// blob, which loads outside load_tensors, excluded) — the figure the
+	// place in GPU-addressable memory when nothing spills (the projector,
+	// a blob or inline in the weights file, loads outside load_tensors and
+	// is excluded) — the figure the
 	// verify pass subtracts the logged device buffer from. All 0 when the
 	// variant carries no GGUF layout or the host no accelerator.
 	PlannedGPULayers      int
@@ -492,7 +493,13 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 		t.HostWeightsMB = est.HostWeightsMB
 		if g := v.GGUF; g != nil && g.BlockCount > g.NextNLayers {
 			t.PlannedLayerWeightMB = int(g.RepeatingBytes / int64(g.BlockCount-g.NextNLayers) >> 20)
-			t.PlannedDeviceWeightMB = est.DeviceWeightsMB - int(g.ProjectorBytes>>20)
+			// Both kinds of projector come off: the blob beside the model
+			// and the vision tensors inside the weights file. ollama loads
+			// either through mtmd, outside load_tensors, so neither is in
+			// the model buffer the verify pass reads. Leaving the inline
+			// one in made every qwen3.5 GGUF build read as a spill of its
+			// projector's size (waired-agent#1506).
+			t.PlannedDeviceWeightMB = est.DeviceWeightsMB - int((g.ProjectorBytes+g.InlineProjectorBytes)>>20)
 		}
 	}
 
