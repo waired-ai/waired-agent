@@ -42,7 +42,6 @@ func TestRenderLaunchDaemonPlist_HappyPath(t *testing.T) {
 		`<false/>`,
 		`<key>Crashed</key>`,
 		`<key>ProcessType</key>`,
-		`<string>Background</string>`,
 		`<key>WorkingDirectory</key>`,
 		`<string>/Library/Application Support/waired</string>`,
 		`<key>StandardOutPath</key>`,
@@ -56,6 +55,15 @@ func TestRenderLaunchDaemonPlist_HappyPath(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("plist missing %q\n--- got ---\n%s", want, s)
 		}
+	}
+
+	// PRODUCT CONTRACT (waired-agent#1521, owner decision 2026-09-22): the
+	// job is Standard, not Background. Everything the daemon spawns inherits
+	// the class, and under Background the engine's first Metal shader compile
+	// outlasted ollama's 30 s GPU-discovery watchdog, leaving it CPU-only.
+	// Asserted as a key/value pair: a bare "Standard" could match elsewhere.
+	if !strings.Contains(s, "<key>ProcessType</key>\n  <string>Standard</string>") {
+		t.Errorf("plist must set ProcessType=Standard\n--- got ---\n%s", s)
 	}
 
 	// #22: launchd exports no $HOME to a system daemon, so the plist must

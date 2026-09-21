@@ -36,9 +36,14 @@
   - そのプロセスの間、エンジンは自分を CPU として扱った(`total_vram="0 B"`、`reason=cpu` で mmap 無効)。
   - それでも、読み込んだモデルは Metal で動いた。
 - 次の起動では、同じファイルで 0.3 秒で検出できた。Windows では 1 回目の起動でも 1.6 秒だった。
-- 原因は確かめていない。
+- ~~原因は確かめていない。~~
 - 検証で GPU を判定するときは、この 1 回目を外して 2 回目の起動で見る。
 - #1514 以降、この打ち切りは `engine_discovery_error` として agent のログの WARN に出る。
+
+**訂正(20260922):** 原因は確かめた。
+- LaunchDaemon の plist が `ProcessType=Background` だったため、engine が起動する llama-server の Metal shader の compile が background QoS で走り、30 秒を超えた。
+- 詳細は `docs/decisions/20260922/0230-launchdaemon-runs-as-a-standard-job.md`(#1521)。
+- 検証で cache を冷やすには、root の `$(getconf DARWIN_USER_CACHE_DIR)com.apple.metal` と `com.apple.metalfe` を消す。版を動かさなくても再現する。
 
 ## Refs
 - https://github.com/waired-ai/waired-agent/pull/1512
