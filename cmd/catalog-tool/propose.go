@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 func init() {
@@ -224,7 +225,26 @@ func eligibleForPR(r researchRecord, accepted map[string]bool) bool {
 	if len(r.Scores) < 2 {
 		return false
 	}
+	// The model's own window has to reach the coding window, or the catalog
+	// cannot admit it however well it scores (decision 3 of
+	// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md,
+	// as narrowed by 20260920/0300): it would serve no Claude Code /model row
+	// on any hardware. The prompt asks the research step to say so, but a
+	// request to a model is not a gate — this is, so a 131,072-token model
+	// cannot become a draft PR whatever the research wrote
+	// (waired-ai/waired-agent#451).
+	if !windowAdmissible(r.Model) {
+		return false
+	}
 	return r.Model.ModelID != ""
+}
+
+// windowAdmissible reports whether a drafted model's own trained window
+// reaches the coding window. It reads context_length alone, deliberately:
+// rope scaling is what takes a model to 1,048,576 when someone chooses that
+// window, and it does not make a model trained for 131,072 tokens hold 200,704.
+func windowAdmissible(m *draftSpec) bool {
+	return m != nil && m.ContextLength >= hostfit.ServingWindow200k
 }
 
 // renderIssueBody produces the markdown body for the rolling "Model radar"
@@ -254,6 +274,11 @@ func renderIssueBody(records []researchRecord, summary proposeSummary, accepted 
 			status = "✅ draft PR"
 		case !r.Recommended:
 			status = "not recommended"
+		case r.Model != nil && !windowAdmissible(r.Model):
+			// Recommended by the research, refused by the gate. Said here,
+			// or it reads as "reported" — the same as a record with no
+			// accepted source — and nobody can tell which wall it hit.
+			status = fmt.Sprintf("context window %d, under 200,704", r.Model.ContextLength)
 		}
 		best := "—"
 		if v, ok := r.bestAccepted(accepted); ok {

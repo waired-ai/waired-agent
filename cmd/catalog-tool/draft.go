@@ -22,15 +22,20 @@ func init() {
 // field from these so they are never hand-typed. quality_tier is intentionally
 // NOT part of the spec — it is assigned catalog-wide by `tier` (#133).
 type draftSpec struct {
-	ModelID       string                `json:"model_id"`
-	DisplayName   string                `json:"display_name,omitempty"`
-	ModelAliases  []string              `json:"model_aliases,omitempty"`
-	License       string                `json:"license,omitempty"`
-	ContextLength int                   `json:"context_length"`
-	Capabilities  []string              `json:"capabilities,omitempty"`
-	Runtime       catalog.RuntimePolicy `json:"runtime"`
-	Security      catalog.Security      `json:"security"`
-	Variants      []draftVariant        `json:"variants"`
+	ModelID       string   `json:"model_id"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	ModelAliases  []string `json:"model_aliases,omitempty"`
+	License       string   `json:"license,omitempty"`
+	ContextLength int      `json:"context_length"`
+	// RopeScaling is the YaRN scaling the publisher documents, carried to
+	// the manifest as found. Without this field a rope_scaling the radar
+	// recorded was dropped silently here — json ignores an unknown key — and
+	// the drafted manifest reached no 1M window (waired-ai/waired#1456).
+	RopeScaling  *catalog.RopeScaling  `json:"rope_scaling,omitempty"`
+	Capabilities []string              `json:"capabilities,omitempty"`
+	Runtime      catalog.RuntimePolicy `json:"runtime"`
+	Security     catalog.Security      `json:"security"`
+	Variants     []draftVariant        `json:"variants"`
 }
 
 type draftVariant struct {
@@ -100,6 +105,7 @@ func runDraft(args []string) error {
 		ModelAliases:  spec.ModelAliases,
 		License:       spec.License,
 		ContextLength: spec.ContextLength,
+		RopeScaling:   spec.RopeScaling,
 		Capabilities:  spec.Capabilities,
 		Runtime:       spec.Runtime,
 		Security:      spec.Security,

@@ -52,7 +52,8 @@ you researched). Schema per record:
     "display_name": "...",
     "model_aliases": ["Org/Model"],
     "license": "apache-2.0",
-    "context_length": 131072,
+    "context_length": 262144,
+    "rope_scaling": {"type": "yarn", "factor": 4, "original_context_length": 262144, "publisher_max_context_length": 1010000},
     "capabilities": ["chat", "tool_use"],
     "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
     "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true},
@@ -129,6 +130,26 @@ you researched). Schema per record:
    Analysis's terms prohibit republishing its data outside a commercial licence,
    for instance. If a source's terms do not permit it, do not record the number,
    and say so in the rationale.
+
+11. **The model's own context window has to reach 200,704 tokens.** The
+    catalog admits only models whose native window reaches the coding window
+    every Claude Code `/model` row needs (decision 3 of
+    `docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md`,
+    as narrowed by `docs/decisions/20260920/0300-catalog-admits-what-was-run-on-the-reference-host.md`).
+    A candidate below it serves no such row on any hardware, however well it
+    scores — set `recommended: false` and say so in the rationale. The
+    131,072-token class is the common case: it is why gpt-oss left the catalog.
+
+    Record the window the model was **trained** for in `context_length`. When the
+    model card or `config.json` documents YaRN rope scaling to go past it — Qwen's
+    cards say "262,144 tokens natively and extensible up to 1,010,000" — record
+    that in `rope_scaling` exactly as published: `factor`, the
+    `original_context_length` it scales from, and the publisher's stated ceiling
+    as `publisher_max_context_length`. Never put the extended figure in
+    `context_length`. The two numbers mean different things: the catalog serves
+    the long window only through `rope_scaling`, and only when someone asks for
+    it (waired-ai/waired#1456). Leave `rope_scaling` out when nothing is
+    documented; do not derive a factor from two numbers yourself.
 
 Use WebSearch / WebFetch for research. Be skeptical: marketing pages overstate
 scores, and a vendor's own table is a claim rather than a measurement. When in

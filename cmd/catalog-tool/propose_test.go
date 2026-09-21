@@ -31,7 +31,7 @@ const researchFixture = `[
     "model": {
       "model_id": "fresh-coder-32b",
       "display_name": "Fresh Coder 32B",
-      "context_length": 131072,
+      "context_length": 262144,
       "variants": [
         {"variant_id": "q4-gguf", "format": "ollama-tag", "quantization": "Q4_K_M",
          "runtime_support": ["ollama"], "source": {"type": "ollama", "tag": "fresh-coder:32b-q4_K_M"},
@@ -165,7 +165,7 @@ func TestPropose_OnlyAnAcceptedSourceEscalates(t *testing.T) {
 			RepoID:      "Org/M",
 			Confidence:  catalog.ConfidenceHigh,
 			Recommended: true,
-			Model:       &draftSpec{ModelID: "m"},
+			Model:       &draftSpec{ModelID: "m", ContextLength: 262144},
 			Scores: map[string]catalog.BenchmarkScore{
 				"primary":   {Value: 70, Source: src, URL: "u", Retrieved: "2026-06-18"},
 				"secondary": {Value: 80, URL: "v", Retrieved: "2026-06-18"},
@@ -184,6 +184,38 @@ func TestPropose_OnlyAnAcceptedSourceEscalates(t *testing.T) {
 	}
 }
 
+// Record of today's behaviour, whose rule is decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md
+// as narrowed by 20260920/0300 (waired-ai/waired-agent#451): a model whose
+// own window stops short of 200,704 tokens cannot become a draft PR however
+// it scores, and the Issue names that wall instead of reading "reported".
+//
+// A/B: the records differ only in context_length, either side of the line.
+func TestPropose_AWindowUnderTheCodingWindowNeverEscalates(t *testing.T) {
+	accepted := map[string]bool{"livebench": true}
+	at := func(window int) researchRecord {
+		return researchRecord{
+			RepoID: "Org/Short", Confidence: catalog.ConfidenceHigh, Recommended: true,
+			Model: &draftSpec{ModelID: "short", ContextLength: window},
+			Scores: map[string]catalog.BenchmarkScore{
+				"primary":   {Value: 70, Source: "livebench", URL: "u", Retrieved: "2026-06-18"},
+				"secondary": {Value: 80, URL: "v", Retrieved: "2026-06-18"},
+			},
+		}
+	}
+	if !eligibleForPR(at(200704), accepted) {
+		t.Error("a model whose window is exactly 200,704 should escalate")
+	}
+	short := at(200703)
+	if eligibleForPR(short, accepted) {
+		t.Error("a model whose window stops short of 200,704 must never auto-draft")
+	}
+	body := renderIssueBody([]researchRecord{short}, proposeSummary{Reported: []string{short.RepoID}}, accepted)
+	if !strings.Contains(body, "context window 200703, under 200,704") {
+		t.Errorf("the Issue does not name the window wall:\n%s", body)
+	}
+}
+
 // Declared inversion (#523): the old gate required swe_bench_verified > 0, so
 // a model that genuinely SCORED zero could not escalate — the same defect that
 // made "not found" and "measured zero" indistinguishable in the store. A real
@@ -192,7 +224,7 @@ func TestPropose_MeasuredZeroCanEscalate(t *testing.T) {
 	accepted := map[string]bool{"livebench": true}
 	r := researchRecord{
 		RepoID: "Org/Zero", Confidence: catalog.ConfidenceHigh, Recommended: true,
-		Model: &draftSpec{ModelID: "zero"},
+		Model: &draftSpec{ModelID: "zero", ContextLength: 262144},
 		Scores: map[string]catalog.BenchmarkScore{
 			"primary":   {Value: 0, Source: "livebench", URL: "u", Retrieved: "2026-06-18"},
 			"secondary": {Value: 1, URL: "v", Retrieved: "2026-06-18"},
