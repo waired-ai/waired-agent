@@ -1131,8 +1131,12 @@ type HostSpeed struct {
 // full profile lives in management/inference status responses and
 // doesn't need to ride on every peer update.
 type HardwareSummary struct {
-	// GPUs lists each detected accelerator. Empty / nil for CPU-only
-	// hosts. Multi-GPU agents list one entry per device.
+	// GPUs lists each accelerator the inference engine uses. Since
+	// waired-agent#1484 an agent leaves out an integrated GPU the engine
+	// sets aside by default (ollama uses one only when it is a CUDA
+	// device or a ROCm gfx1151 device), so a host whose only GPU is such
+	// an iGPU sends none. Empty / nil for CPU-only hosts. Multi-GPU agents
+	// list one entry per device.
 	GPUs []HardwareGPUSummary `json:"gpus,omitempty"`
 
 	// RAMTotalGB is the total system RAM in GB (rounded). Used for
