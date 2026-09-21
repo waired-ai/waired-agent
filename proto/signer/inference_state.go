@@ -97,6 +97,26 @@ type InferenceState struct {
 	ExcludeMain bool `json:"exclude_main,omitempty"`
 	ExcludeSub  bool `json:"exclude_sub,omitempty"`
 
+	// ExcludeUnpinned is the CP-injected, per-recipient answer to "may a
+	// request that names no computer land on the custom model this device
+	// serves": true means no. It covers the rows that leave the choice of
+	// computer to the router — Claude Code's `Waired` and `Waired peer`
+	// (ids `waired` and `waired/peer`) and their OpenAI-surface twins. A
+	// row that names this computer, and a request that names the model id,
+	// reach it regardless.
+	//
+	// A person sets the choice per custom model, once for their own
+	// account and once for their team, and a team owner or admin can stop
+	// the team one (owner ruling 5, waired-ai/waired#1473). The control
+	// plane resolves those against the recipient when it assembles the
+	// map, so the same device can carry true for one reader and false for
+	// another. It is only ever set for a device serving a custom model.
+	//
+	// Negative sense + omitempty, the same shape and the same reason as
+	// ExcludeMain / ExcludeSub: the default stays off the wire. Gated on
+	// CapabilityCustomModelsV1, because it appears on peer entries.
+	ExcludeUnpinned bool `json:"exclude_unpinned,omitempty"`
+
 	// DesiredParallel is the operator's max-concurrent-requests target that the CP
 	// injects at map-assembly time ONLY when an admin inference_max_clients
 	// override is set (`effectiveInferenceState`) — it equals that override. The
@@ -380,6 +400,19 @@ type InferenceState struct {
 	// against that column, which is why it is not done speculatively here.
 	DesiredContextWindow int `json:"desired_context_window,omitempty"`
 
+	// CustomModelsRevision changes whenever the set of custom models this
+	// device may use changes: the owner's imports, or the routing copies of
+	// what the owner's teammates imported (waired-ai/waired#1473). It is
+	// opaque; an agent that sees a value it does not hold fetches the set
+	// from the control plane (POST /v1/devices/self/custom-models, whose
+	// catalog.CustomModelSet echoes it) and keeps what it got. Empty means
+	// the account and its team have none.
+	//
+	// Self entry only, written by the control plane, gated on
+	// CapabilityCustomModelsV1. omitempty keeps an account with no custom
+	// models byte-identical.
+	CustomModelsRevision string `json:"custom_models_revision,omitempty"`
+
 	// DesiredRemoveVariants are the stored builds the user asked this device
 	// to delete, each "<model_id>/<variant_id>" naming an entry of the
 	// device's own StoredVariants (decision 4 of
@@ -492,6 +525,24 @@ type InferenceState struct {
 	// on Self: the gate has to cover the whole map, not one entry.
 	// `omitempty` keeps the undeclared case byte-identical.
 	ContextWindow int `json:"context_window,omitempty"`
+
+	// CustomModelWindow is the input-token window this device's engine is
+	// loaded with when the model it serves is a custom model a person
+	// imported AND that window is under 200,704 tokens — the smallest
+	// window ContextWindow can declare. Zero otherwise, including for every
+	// bundled model.
+	//
+	// It exists so such a model can still answer the Waired rows
+	// (owner ruling 3, waired-ai/waired#1473). ContextWindow stays 0 for
+	// it — the two declarable windows are unchanged — and a requesting
+	// router admits the device against a 200,704 floor only when this
+	// field is set, sizing the request to it instead. A 1M floor never
+	// reads it, and a bundled model never gets it.
+	//
+	// Written by the serving agent on its own push; rides peer entries, so
+	// it is gated on CapabilityCustomModelsV1 like ContextWindow is on its
+	// own capability. omitempty keeps every other device byte-identical.
+	CustomModelWindow int `json:"custom_model_window,omitempty"`
 
 	// ActiveModel is the catalog model_id of the selection this device is
 	// committed to serving — `qwen3-8b-instruct`, never the engine-side tag

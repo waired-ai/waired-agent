@@ -162,6 +162,22 @@ var receiveOnly = []exemption{
 		"CP-injected list of stored builds the user asked to delete; the agent reads it once it declares variant-choice-v1 (#1348)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredContextWindow",
 		"CP-injected serving window a person chose for this computer; the agent reads it once it declares window-choice-v1 (waired-ai/waired#1456)"},
+	// Custom models (waired-ai/waired#1473). The control plane builds the
+	// manifest of a model a person imports and the set it returns to an
+	// agent, and writes the two map fields per recipient; the agent only
+	// decodes them.
+	{reflect.TypeFor[catalog.Manifest](), "Provenance",
+		"custom-model manifests are built by the control plane at import (waired-ai/waired#1476)"},
+	{reflect.TypeFor[catalog.Variant](), "VLLMToolCallParser",
+		"set on a custom model's manifest by the control plane at import (waired-ai/waired#1476)"},
+	{reflect.TypeFor[catalog.Variant](), "VLLMReasoningParser",
+		"set on a custom model's manifest by the control plane at import (waired-ai/waired#1476)"},
+	{reflect.TypeFor[catalog.CustomModelSet](), "Own",
+		"the control plane's reply to POST /v1/devices/self/custom-models (waired-ai/waired#1476)"},
+	{reflect.TypeFor[signer.InferenceState](), "ExcludeUnpinned",
+		"CP-injected per recipient at map assembly from the per-model routing choice (waired-ai/waired#1477)"},
+	{reflect.TypeFor[signer.InferenceState](), "CustomModelsRevision",
+		"CP-injected on the self entry from the account's and team's custom-model sets (waired-ai/waired#1476)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -367,6 +383,12 @@ var producedInProto = []exemption{
 // somewhere in this repo, and by the name-matching rule above the guard
 // would have taken one of those writes for this field's producer.
 var producerPending = []exemption{
+	// waired-ai/waired#1481 (C6): the serving agent publishes the window a
+	// custom model under 200,704 tokens is loaded with. Until then no
+	// device sends it, which is today's behaviour: such a model reaches no
+	// Waired row. Delete this entry in the PR that writes it.
+	{reflect.TypeFor[signer.InferenceState](), "CustomModelWindow",
+		"the serving agent writes it for a custom model under 200,704 tokens with waired-ai/waired#1481"},
 	// waired-ai/waired#1456. ChosenWindow was here too and is paid: the
 	// serve tuning now passes a person's chosen window into the sizing.
 	// What is left is the picker side — a row priced at the window being
