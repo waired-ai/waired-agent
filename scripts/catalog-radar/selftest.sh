@@ -49,7 +49,8 @@ cat > "${WORK}/research.json" <<JSON
       "display_name": "Fresh Coder 32B",
       "model_aliases": ["NewOrg/Fresh-Coder-32B"],
       "license": "apache-2.0",
-      "context_length": 131072,
+      "context_length": 262144,
+      "rope_scaling": {"type": "yarn", "factor": 4, "original_context_length": 262144, "publisher_max_context_length": 1010000},
       "capabilities": ["chat", "tool_use"],
       "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
       "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true},
@@ -76,7 +77,7 @@ cat > "${WORK}/research.json" <<JSON
       "model_id": "vendor-only-30b",
       "display_name": "Vendor Only 30B",
       "license": "apache-2.0",
-      "context_length": 131072,
+      "context_length": 262144,
       "capabilities": ["chat", "tool_use"],
       "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
       "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true},
@@ -127,6 +128,12 @@ tier="$(jq '.variants[0].quality_tier' "${manifest}")"
 # Footprint fields computed by catalog-tool.
 kv="$(jq '.variants[0].kv_bytes_per_token_fp16' "${manifest}")"
 [ "${kv}" -gt 0 ] 2>/dev/null || fail "kv_bytes_per_token_fp16 not computed"
+
+# The research's rope_scaling reaches the manifest. draft once dropped it
+# (json ignores an unknown key), so the drafted model reached no 1M window
+# (waired-ai/waired#1456).
+jq -e '.rope_scaling == {"type":"yarn","factor":4,"original_context_length":262144,"publisher_max_context_length":1010000}' \
+  "${manifest}" >/dev/null || fail "draft dropped the rope_scaling: $(jq -c '.rope_scaling' "${manifest}")"
 
 # The drafted manifest validates against the bundled catalog.
 (cd "${REPO_ROOT}" && go run ./cmd/catalog-tool validate --file "${manifest}") >/dev/null \

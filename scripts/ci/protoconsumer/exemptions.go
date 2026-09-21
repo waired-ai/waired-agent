@@ -63,8 +63,6 @@ var receiveOnly = []exemption{
 		"KV-cache types a build may be served with; authored in the manifest (#1349), read by the tuning"},
 	{reflect.TypeFor[catalog.Variant](), "MaxParallel",
 		"the most requests a build is served with at once; authored in the manifest (#1423), read by the tuning, local admission and the control plane"},
-	{reflect.TypeFor[catalog.Manifest](), "RopeScaling",
-		"the rope scaling a publisher documents for reaching past the model's own window; authored in the manifest (waired-ai/waired#1456), read by hostfit and the serve tuning"},
 	{reflect.TypeFor[catalog.RopeScaling](), "Factor",
 		"bundled catalog manifest field; transcribed from the model card, read by the serve tuning"},
 	{reflect.TypeFor[catalog.RopeScaling](), "OriginalContextLength",
