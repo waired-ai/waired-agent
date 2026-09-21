@@ -174,8 +174,6 @@ var receiveOnly = []exemption{
 		"set on a custom model's manifest by the control plane at import (waired-ai/waired#1476)"},
 	{reflect.TypeFor[catalog.Variant](), "VLLMReasoningParser",
 		"set on a custom model's manifest by the control plane at import (waired-ai/waired#1476)"},
-	{reflect.TypeFor[signer.InferenceState](), "ExcludeUnpinned",
-		"CP-injected per recipient at map assembly from the per-model routing choice (waired-ai/waired#1477)"},
 	{reflect.TypeFor[signer.InferenceState](), "CustomModelsRevision",
 		"CP-injected on the self entry from the account's and team's custom-model sets (waired-ai/waired#1476)"},
 	// scoring.ArchConfig moved into proto for custom-model import
