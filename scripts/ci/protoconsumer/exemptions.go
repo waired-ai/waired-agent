@@ -436,12 +436,6 @@ var producedInProto = []exemption{
 // somewhere in this repo, and by the name-matching rule above the guard
 // would have taken one of those writes for this field's producer.
 var producerPending = []exemption{
-	// waired-ai/waired#1481 (C6): the serving agent publishes the window a
-	// custom model under 200,704 tokens is loaded with. Until then no
-	// device sends it, which is today's behaviour: such a model reaches no
-	// Waired row. Delete this entry in the PR that writes it.
-	{reflect.TypeFor[signer.InferenceState](), "CustomModelWindow",
-		"the serving agent writes it for a custom model under 200,704 tokens with waired-ai/waired#1481"},
 	// waired-ai/waired#1456. ChosenWindow was here too and is paid: the
 	// serve tuning now passes a person's chosen window into the sizing.
 	// What is left is the picker side — a row priced at the window being

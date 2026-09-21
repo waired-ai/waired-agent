@@ -3760,6 +3760,35 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	return declaredTier(win)
 }
 
+// CustomModelWindow is the window a custom model under 200,704 tokens is
+// served with, for InferenceState.CustomModelWindow (waired-ai/waired#1481);
+// 0 for anything else. DeclaredContextWindow declares nothing below 200,704,
+// which leaves such a model reachable by no Waired row; this is how a
+// requester learns what it can send it instead (owner ruling 5 on
+// waired-ai/waired#1473: no minimum window for the coding-agent rows).
+func (p *agentInferenceProvider) CustomModelWindow() int {
+	active, ok := p.ActiveModelID()
+	if !ok || !catalog.IsCustomModelID(active) {
+		return 0
+	}
+	m, ok := catalog.LookupByAlias(active, p.catalogManifests())
+	if !ok {
+		return 0
+	}
+	t, ok := p.appliedTuningFor(m)
+	if !ok || t.ContextLength <= 0 {
+		return 0
+	}
+	win := t.ContextLength
+	if m.ContextLength > 0 && win > m.ContextLength {
+		win = m.ContextLength
+	}
+	if win >= hostfit.ServingWindow200k {
+		return 0
+	}
+	return win
+}
+
 // declaredTier is the tier a served window declares: 1048576 at or above the
 // 1M tier, 200704 at or above the 200k tier, and nothing below (owner decision
 // 2026-09-16, waired-agent#1396; #1434). Both tunings size by tier, so today

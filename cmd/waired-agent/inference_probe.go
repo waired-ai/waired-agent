@@ -173,6 +173,11 @@ type inferenceProbeDeps struct {
 	// leaves every consumer on its pre-#1031 behaviour.
 	DeclaredContextWindow func() int
 
+	// CustomModelWindow, when non-nil, returns the window a custom model
+	// under 200,704 tokens is served with, or 0 (waired-ai/waired#1481).
+	// Gated like DeclaredContextWindow on the model being advertised.
+	CustomModelWindow func() int
+
 	// ActiveModel and SubsystemState, when non-nil, answer the two
 	// questions a peer's picker asks about this node (waired#1064):
 	// which model it is committed to, in the catalog's namespace, and
@@ -630,6 +635,11 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if deps.DeclaredContextWindow != nil && len(s.Models) > 0 {
 			if w := deps.DeclaredContextWindow(); w > 0 {
 				s.ContextWindow = w
+			}
+		}
+		if deps.CustomModelWindow != nil && len(s.Models) > 0 {
+			if w := deps.CustomModelWindow(); w > 0 {
+				s.CustomModelWindow = w
 			}
 		}
 		// waired#1064: what this node runs and why it is or is not

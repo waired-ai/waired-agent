@@ -1478,6 +1478,7 @@ func run(ctx context.Context, args []string) error {
 			if inferenceSub != nil && inferenceSub.provider != nil {
 				prov := inferenceSub.provider
 				deps.DeclaredContextWindow = prov.DeclaredContextWindow
+				deps.CustomModelWindow = prov.CustomModelWindow
 				// #496: what one coding-agent turn costs here. Wired for
 				// every provider for the same reason as the window — the
 				// getter answers nil on a host that has not measured, and a
