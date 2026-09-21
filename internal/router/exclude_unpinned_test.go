@@ -79,3 +79,26 @@ func TestExcludeUnpinned(t *testing.T) {
 		})
 	}
 }
+
+// This computer's own custom model follows the same switch
+// (InferenceState.ExcludeUnpinned on its own map entry): a request that
+// names neither a model nor a computer does not land on it when the switch
+// is off; one that names the model does. Found on real hardware
+// (2026-09-22): only peers were filtered.
+func TestExcludeUnpinned_ThisComputer(t *testing.T) {
+	s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen(), customTiny()}})
+	o, v := wantSetsFor(s.in.Manifests)
+	w := meshWant{ollama: o, vllm: v}
+	ln := LocalNode{DeviceID: "dev_self", Serving: true, Runtime: catalog.RuntimeOllama,
+		EngineTag: customTag, ModelID: "custom-tiny-0123abcd", ContextWindow: 262144, ExcludeUnpinned: true}
+	if _, ok, _ := s.buildLocalCandidate(ln, 0, w, true); ok {
+		t.Error("an unnamed request landed on this computer's custom model with the switch off")
+	}
+	if _, ok, _ := s.buildLocalCandidate(ln, 0, w, false); !ok {
+		t.Error("a request naming the model was refused")
+	}
+	ln.ExcludeUnpinned = false
+	if _, ok, _ := s.buildLocalCandidate(ln, 0, w, true); !ok {
+		t.Error("the switch on, and the unnamed request still refused")
+	}
+}

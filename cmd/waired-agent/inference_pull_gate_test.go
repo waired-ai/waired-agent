@@ -286,3 +286,22 @@ func TestPullModel_DispatchesWhenTheEngineIsInstalled(t *testing.T) {
 func newTestPuller(r download.CommandRunner) *download.Puller {
 	return download.NewPuller("ollama-fake", r)
 }
+
+// TestPullModel_NoBuildForTheEngine: a model with no build for the engine
+// this computer runs is refused as that, naming the engine that runs it —
+// not as "requires <engine> >= " with no version, which is what an
+// ollama-only custom model got on a vLLM host (waired-ai/waired#1481). A
+// record of today's behaviour.
+func TestPullModel_NoBuildForTheEngine(t *testing.T) {
+	m := pullGateManifest(false)
+	for i := range m.Variants {
+		m.Variants[i].RuntimeSupport = []string{catalog.RuntimeVLLM}
+	}
+	p := pullGateProvider(t, m)
+	_, err := p.PullModel(context.Background(), m.ModelID)
+	if err == nil || !errors.Is(err, errUnsupportedSource) ||
+		!strings.Contains(err.Error(), "no build for ollama") || !strings.Contains(err.Error(), "it runs on vllm") ||
+		strings.Contains(err.Error(), ">=") {
+		t.Fatalf("err = %v", err)
+	}
+}

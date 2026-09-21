@@ -2104,6 +2104,10 @@ type agentInferenceProvider struct {
 	// that model reaches Ready. It distinguishes an operator switch from a
 	// boot-time pull so boot never triggers a spurious engine bounce.
 	pendingSwapModel atomic.Pointer[string]
+	// selfExcludeUnpinned is ExcludeUnpinned from this device's own map
+	// entry (applySelf): whether requests naming neither a model nor a
+	// computer may land on the custom model this device serves.
+	selfExcludeUnpinned atomic.Bool
 	// preferredOverride is the in-process source of truth for the operator's
 	// preferred model after a #812 switch. cfg.PreferredModelID is a frozen
 	// boot snapshot (preferred-model.json is only re-read on a restart), so
@@ -4209,6 +4213,19 @@ var (
 	errUnsupportedSource = errors.New("this device cannot fetch this model's files")
 )
 
+// variantEngines lists the engines m has a build for, in manifest order.
+func variantEngines(m catalog.Manifest) []string {
+	var out []string
+	for _, v := range m.Variants {
+		for _, r := range v.RuntimeSupport {
+			if !slices.Contains(out, r) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
 func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
 	return p.pullModelBuild(ctx, modelOrAlias, "")
 }
@@ -4276,6 +4293,15 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 	engineVersion := p.engineVersionFor(ctx, engine)
 	variant, pullable := router.FirstPullableVariant(manifest, engine, engineVersion)
 	if !pullable {
+		// No build for this engine at all is not a version problem: the
+		// message used to say "requires vllm >= " with nothing after it for
+		// an ollama-only custom model on a vLLM host (found on real
+		// hardware, waired-ai/waired#1481). Say which engine runs it.
+		if engines := variantEngines(manifest); !slices.Contains(engines, engine) {
+			return management.PullJob{}, fmt.Errorf(
+				"model %s has no build for %s, the engine this computer runs; it runs on %s: %w",
+				manifest.ModelID, engine, strings.Join(engines, ", "), errUnsupportedSource)
+		}
 		floor := manifest.Variants[0].MinEngineVersion
 		have := engineVersion
 		if have == "" {

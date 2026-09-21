@@ -49,6 +49,7 @@ func (p *agentInferenceProvider) localNodeForRouting() router.LocalNode {
 		}
 		f.contextWindow = p.DeclaredContextWindow()
 		f.customModelWindow = p.CustomModelWindow()
+		f.excludeUnpinned = p.selfExcludeUnpinned.Load()
 		f.capacity = p.WarmConversationSlots()
 		// The same counter /healthz reports as capacity_used: this
 		// machine's own work as well as any peer's. A machine busy with
@@ -79,6 +80,7 @@ type localFacts struct {
 	pendingModelID    string
 	contextWindow     int
 	customModelWindow int
+	excludeUnpinned   bool
 	capacity          int
 	capacityUsed      int
 	speed             *router.PeerSpeedReading
@@ -113,6 +115,7 @@ func localNodeFrom(f localFacts) router.LocalNode {
 		PendingModelID:    f.pendingModelID,
 		ContextWindow:     f.contextWindow,
 		CustomModelWindow: f.customModelWindow,
+		ExcludeUnpinned:   f.excludeUnpinned,
 		Capacity:          f.capacity,
 		CapacityUsed:      f.capacityUsed,
 		Speed:             f.speed,

@@ -1919,7 +1919,7 @@ func (s *Selector) tryMeshFallbackK(req Request, want meshWant, reasons []string
 	// filters (waired-agent#1302). The zero LocalNode yields nothing, which
 	// is what every arm but the ranked auto one passes.
 	localIn := false
-	lc, ok, localDropped := s.buildLocalCandidate(local, req.MinContextWindow, want)
+	lc, ok, localDropped := s.buildLocalCandidate(local, req.MinContextWindow, want, modelIsUnspecified(req.Model))
 	if ok {
 		raw = append(raw, lc)
 		localIn = true

@@ -735,6 +735,17 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 				"%s is sized for the ~200k coding window (ctx %d)",
 				m.ModelID, t.ContextLength))
 		}
+	case t.ContextLength > 0 && m.ContextLength > 0 && m.ContextLength < router.CodingAgentContextFloorTokens &&
+		t.ContextLength >= m.ContextLength:
+		// The model's own window is shorter than a coding session, and it is
+		// served whole: memory is not what set the window, so the warning
+		// below — which blames memory and says the window is declared to the
+		// mesh — would be false on both counts. A custom model is the case
+		// that reaches here (waired-ai/waired#1481); below 200,704 nothing
+		// is declared, and CustomModelWindow says what it can take.
+		reasons = append(reasons, fmt.Sprintf(
+			"%s is served at its own %d-token context window, under the 200,704 tokens a coding agent's session is sized for; a coding agent overflows it on every turn",
+			m.ModelID, t.ContextLength))
 	case t.ContextLength > 0:
 		// A rung this host's memory was not shown to hold (WindowFits
 		// false — the forced lowest rung, waired-agent#587). Served, and
