@@ -22,6 +22,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // notify shows a transient OS-level toast (best-effort; silent
@@ -1449,6 +1450,13 @@ func (t *tray) onSelectWindow(ctx context.Context, idx int) {
 	if !ok || model == "" || row.Wall != WindowReachable || row.Selected {
 		return
 	}
+	// Going to 1M asks first (waired-ai/waired#1456: "warn, then serve"),
+	// default No, the way the console and `waired models use --window 1m`
+	// do. The model rows do not ask: a switch made while 1M is in force
+	// keeps a window the person already accepted (windowToKeep).
+	if row.Tokens == hostfit.ServingWindow1M && !confirmLongWindow(model) {
+		return
+	}
 	slog.Debug("tray: menu action", "action", "window", "window", row.Tokens, "model", model)
 	resp, err := t.cli.SetPreferredModel(ctx, model, row.Tokens)
 	if err != nil {
@@ -1457,6 +1465,39 @@ func (t *tray) onSelectWindow(ctx context.Context, idx int) {
 	}
 	t.onModelSwitchAccepted(resp, "")
 	go t.pollOnce(ctx)
+}
+
+// confirmLongWindow is the 1M warn-and-ask. The words are the console's
+// (setup_window_long_*, owner-approved 2026-09-20). "Keep 200K" leaves
+// everything as it is: the preset only takes effect on "Use 1M anyway".
+//
+// No dialog to ask with is not consent, as in confirmUnfitSwitch: nothing
+// changes, and the CLI command that asks the same question is copied and
+// named.
+func confirmLongWindow(modelID string) bool {
+	title, body := longWindowPrompt()
+	confirmed, ok := confirmWithLabels(title, body, "Use 1M anyway", "Keep 200K")
+	if !ok {
+		slog.Warn("tray: cannot ask about the 1M context window", "model", modelID)
+		_ = copyToClipboard(longWindowCommand(modelID))
+		notify(`Can't ask here. Run "`+longWindowCommand(modelID)+`" in a terminal to switch anyway.`, notification.Warning)
+		return false
+	}
+	return confirmed
+}
+
+// longWindowPrompt is split out so the wording can be tested without a
+// dialog, as unfitSwitchPrompt is.
+func longWindowPrompt() (title, body string) {
+	return "1M runs models past what they were trained for",
+		"Models that reach 1M do so by extending their context from 262,144 to 1,048,576 tokens. " +
+			"The extension applies to every request, so short prompts may be affected; neither that nor how well it recalls text past 262,144 tokens has been measured. " +
+			"Re-reading a long session can take hours, which is what happens when a conversation branches. " +
+			"Use the 1M context window on this computer?"
+}
+
+func longWindowCommand(modelID string) string {
+	return unfitSwitchCommand(modelID) + " --window 1m"
 }
 
 // onUnloadModel frees the model's memory without stopping the engine
