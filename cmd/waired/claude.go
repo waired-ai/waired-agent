@@ -484,12 +484,32 @@ func claudeShellFormNote(fix string) string {
 		claudeStatusIndent + "  " + fix + "\n"
 }
 
+// claudeRetiredHookNote is the continuation under a hook an older Waired wrote:
+// it names a command this binary no longer has, so the reason is the same on
+// every OS and is not the shell (waired-agent#1526).
+func claudeRetiredHookNote(fix string) string {
+	return claudeStatusIndent + "It runs a command this version of Waired no longer has, so the\n" +
+		claudeStatusIndent + "/model rows are not refreshed when a session starts. To replace it:\n" +
+		claudeStatusIndent + "  " + fix + "\n"
+}
+
+// retiredRefreshRow is the /model refresh row for a hook an older Waired wrote.
+const retiredRefreshRow = "/model refresh:     installed by an older version of Waired, but does nothing"
+
 // claudeRefreshHookStatusRows is the same row for the SessionStart hook that
 // keeps the /model picker entries current (waired-agent#830). Separate row
 // rather than a combined one: the two can be in different states — the
 // refresh hook is only installed when the directives feature is on — and a
 // single "hooks: ok" would hide which of them is not.
+//
+// A hook an older Waired wrote is found too (the marker list keeps its old
+// spelling, waired-agent#1308) and cannot run anywhere. It gets its own row
+// before the shell-form check: explaining it with the Windows shell note told
+// macOS and Linux readers to look for Git Bash (waired-agent#1526).
 func claudeRefreshHookStatusRows(goos, hookCommand string) string {
+	if claudemanaged.RefreshHookRetired(hookCommand) {
+		return retiredRefreshRow + "\n" + claudeRetiredHookNote(elevationHintFor(goos, "waired claude enable"))
+	}
 	return hookStatusRow(goos, "/model refresh:", hookCommand, claudemanaged.RefreshHookRunsOn)
 }
 

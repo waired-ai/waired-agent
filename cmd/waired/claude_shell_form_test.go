@@ -13,6 +13,15 @@ import (
 // per-OS shell rule is the same for it.
 const rc9POSIXHookCommand = "command -v waired >/dev/null 2>&1 && waired claude _picker write --from-managed || true"
 
+// The SessionStart command as Waired wrote it before waired-agent#1185 renamed
+// `_models-cache` to `_picker`, in the POSIX form every OS got up to rc9 and the
+// bare form Windows gets since waired-agent#787. It calls a subcommand this
+// binary no longer has, so it does nothing on any OS (waired-agent#1308).
+const (
+	retiredPOSIXHookCommand = "command -v waired >/dev/null 2>&1 && waired claude _models-cache write --from-managed --peer-entries 5 || true"
+	retiredBareHookCommand  = "waired claude _models-cache write --from-managed --peer-entries 5"
+)
+
 // PRODUCT CONTRACT (waired-agent#787): `waired claude status` must not call a
 // command "installed" full stop when this computer's shell cannot run it. The
 // row was rendered from a presence check, which is precisely how a Windows host
@@ -28,6 +37,9 @@ func TestClaudeRefreshHookStatusRows(t *testing.T) {
 		wantNote   bool
 		wantInFix  string
 		notWantFix string
+		// notWantNote is a phrase the continuation must not contain: the
+		// Git Bash explanation is true only of a POSIX command on Windows.
+		notWantNote string
 	}{
 		"linux, nothing installed": {
 			goos: "linux", cmd: "", wantFirst: "/model refresh:     not installed"},
@@ -51,6 +63,29 @@ func TestClaudeRefreshHookStatusRows(t *testing.T) {
 		"windows, the bare form": {
 			goos: "windows", cmd: "waired claude _picker write --from-managed",
 			wantFirst: "/model refresh:     installed"},
+
+		// waired-agent#1526: a hook an older Waired wrote is found (the marker
+		// list keeps its old spelling) and cannot run on any OS. The row used to
+		// explain that with the Windows shell note, which is false on macOS and
+		// Linux; the fix command was right, the reason was not.
+		"linux, a retired command": {
+			goos: "linux", cmd: retiredPOSIXHookCommand,
+			wantFirst: retiredRefreshRow, wantNote: true,
+			wantInFix: "sudo waired claude enable", notWantNote: "Git Bash"},
+		"darwin, a retired command": {
+			goos: "darwin", cmd: retiredPOSIXHookCommand,
+			wantFirst: retiredRefreshRow, wantNote: true,
+			wantInFix: "sudo waired claude enable", notWantNote: "Git Bash"},
+		// On Windows the POSIX form is wrong twice over. The retired reason
+		// wins: it is the one `waired claude enable` answers in full.
+		"windows, a retired command in the POSIX form": {
+			goos: "windows", cmd: retiredPOSIXHookCommand,
+			wantFirst: retiredRefreshRow, wantNote: true,
+			wantInFix: "elevated (Administrator) prompt", notWantFix: "sudo", notWantNote: "Git Bash"},
+		"windows, a retired command in the bare form": {
+			goos: "windows", cmd: retiredBareHookCommand,
+			wantFirst: retiredRefreshRow, wantNote: true,
+			wantInFix: "elevated (Administrator) prompt", notWantFix: "sudo", notWantNote: "Git Bash"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -77,6 +112,9 @@ func TestClaudeRefreshHookStatusRows(t *testing.T) {
 			}
 			if tc.notWantFix != "" && strings.Contains(got, tc.notWantFix) {
 				t.Errorf("note says %q, which is wrong for %s:\n%s", tc.notWantFix, tc.goos, got)
+			}
+			if tc.notWantNote != "" && strings.Contains(got, tc.notWantNote) {
+				t.Errorf("note says %q, which is not why this hook does nothing:\n%s", tc.notWantNote, got)
 			}
 		})
 	}
