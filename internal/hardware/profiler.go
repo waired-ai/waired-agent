@@ -61,7 +61,14 @@ type Profile struct {
 	// reading that produced the standing figure, not this snapshot.
 	RAMAvailableAtInstallMeasuredAt string `json:"ram_available_at_install_measured_at,omitempty"`
 
+	// GPUs are the GPUs the inference engine will run on, and the only
+	// ones any fit rule, budget, host key or backend plan reads.
+	// UnusedGPUs are the ones that were detected but that the engine
+	// leaves off by default — today, integrated GPUs other than a CUDA
+	// device or a ROCm gfx1151 (engine_gpus.go, waired-agent#1484).
+	// DetectedGPUs returns both.
 	GPUs         []GPU            `json:"gpus"`
+	UnusedGPUs   []UnusedGPU      `json:"unused_gpus,omitempty"`
 	Accelerators Accelerators     `json:"accelerators"`
 	Storage      StorageInfo      `json:"storage"`
 	Engines      InstalledEngines `json:"engines"`
@@ -253,13 +260,19 @@ type GPU struct {
 	// the question, the per-OS readings, and why the answer is
 	// three-state (waired-agent#459).
 	//
-	// They are a REPORT, not a policy. Nothing here decides a budget:
+	// They are a REPORT, not a budget. Nothing here decides a budget:
 	// UnifiedMemory below still gates that, because a class carries a
 	// budget rule with it and knowing a part is integrated does not by
 	// itself say how much of the pool it may wire down. llama.cpp keeps
 	// the same two switches apart for the same reason — its CUDA
 	// backend reports the device type from a live cudaDeviceProp while
 	// its scheduler reads a separately gated flag.
+	//
+	// The one decision the report DOES feed is which devices the engine
+	// uses: a device known to be integrated is moved to
+	// Profile.UnusedGPUs unless the engine uses such a device by default
+	// (engine_gpus.go, waired-agent#1484). A known answer is required;
+	// silence keeps the device in use.
 	//
 	// IntegratedKnown false means NO SOURCE ANSWERED, which is not the
 	// same as "discrete" and must never be read as it: on this platform
@@ -282,6 +295,12 @@ type GPU struct {
 	// tell two machines apart without trusting a label
 	// (waired-agent#1455).
 	PCIID string `json:"pci_id,omitempty"`
+
+	// GFXTarget is an AMD device's ISA target as the ROCm stack names it
+	// ("gfx1151"), or "" where no source reported one. It is the key
+	// ollama's own allowlist of integrated devices is written in, which
+	// is why engineUsesByDefault reads it.
+	GFXTarget string `json:"gfx_target,omitempty"`
 }
 
 // GPUSummary is the minimal per-device shape suitable for inclusion in
@@ -662,6 +681,12 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 		}
 		prof.GPUs[i].Integrated, prof.GPUs[i].IntegratedKnown = got.integrated, got.known
 	}
+
+	// Then set aside the GPUs the engine will not run on. Here, after
+	// every reading above has been taken over every detected device (the
+	// persisted record needs them all), and before anything that turns
+	// the list into a budget, a class or a key.
+	prof.GPUs, prof.UnusedGPUs = partitionForEngine(&prof)
 
 	// UMA detection runs after so it can inspect GPUs / RAM / CPU.Model
 	// (used by the Linux Strix Halo path) without re-walking sysfs.

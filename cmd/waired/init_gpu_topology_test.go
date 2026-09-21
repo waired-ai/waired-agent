@@ -91,6 +91,26 @@ func TestGPUTopologyFrom(t *testing.T) {
 	}
 }
 
+// A device the engine does not use by default is still a device whose
+// reading is worth keeping — the reading is what put it in UnusedGPUs,
+// and a daemon that could not read it back would put the device back in
+// use (waired-agent#1484). The sv-mag shape: a discrete NVIDIA card in
+// use, a 2-CU AMD iGPU set aside.
+func TestGPUTopologyFrom_RecordsUnusedGPUs(t *testing.T) {
+	at := func() time.Time { return time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC) }
+	prof := hardware.Profile{
+		GPUs: []hardware.GPU{{Vendor: "nvidia", PCIID: "10de:2c34"}},
+		UnusedGPUs: []hardware.UnusedGPU{{
+			GPU:    hardware.GPU{Vendor: "amd", PCIID: "1002:13c0", Integrated: true, IntegratedKnown: true},
+			Reason: "not used by default",
+		}},
+	}
+	rec, ok := gpuTopologyFrom(prof, at)
+	if !ok || len(rec.Devices) != 1 || rec.Devices[0].PCIID != "1002:13c0" || !rec.Devices[0].Integrated {
+		t.Fatalf("record = %+v ok=%v, want the unused iGPU's reading", rec, ok)
+	}
+}
+
 // The Apple Silicon row above is not an oversight: the reading is
 // certain there (the architecture says so) and there is no PCI bus to
 // key it by. Nothing is lost — that reading needs no privilege, so the

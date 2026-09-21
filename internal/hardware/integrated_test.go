@@ -106,20 +106,27 @@ func TestProfile_RecordsIntegratedPerDevice(t *testing.T) {
 		}),
 	).Profile(context.Background())
 
-	if len(prof.GPUs) != 3 {
-		t.Fatalf("GPUs = %d, want 3", len(prof.GPUs))
+	// Asserted over every DETECTED device and by name: the integrated AMD
+	// part is one the engine leaves off by default, so it is recorded in
+	// UnusedGPUs rather than GPUs (waired-agent#1484) — the reading must
+	// be recorded wherever the device ends up.
+	detected := prof.DetectedGPUs()
+	if len(detected) != 3 {
+		t.Fatalf("detected GPUs = %d, want 3", len(detected))
 	}
-	for i, want := range []integration{
-		integratedKnown(false), integratedKnown(true), integrationUnknown(),
-	} {
-		got := integration{
-			integrated: prof.GPUs[i].Integrated,
-			known:      prof.GPUs[i].IntegratedKnown,
+	want := map[string]integration{
+		"discrete card":   integratedKnown(false),
+		"integrated part": integratedKnown(true),
+		"unanswered":      integrationUnknown(),
+	}
+	for _, g := range detected {
+		got := integration{integrated: g.Integrated, known: g.IntegratedKnown}
+		if got != want[g.Model] {
+			t.Errorf("%s = %+v, want %+v", g.Model, got, want[g.Model])
 		}
-		if got != want {
-			t.Errorf("GPUs[%d] (%s) = %+v, want %+v",
-				i, prof.GPUs[i].Model, got, want)
-		}
+	}
+	if len(prof.UnusedGPUs) != 1 || prof.UnusedGPUs[0].Model != "integrated part" {
+		t.Errorf("UnusedGPUs = %+v, want only the integrated AMD part", prof.UnusedGPUs)
 	}
 }
 
@@ -169,8 +176,13 @@ func TestIntegratedReportDoesNotSetUnifiedMemory(t *testing.T) {
 		WithCPU(func(context.Context) CPUInfo { return CPUInfo{Model: "not a strix halo", Cores: 8} }),
 		WithRAM(func(context.Context) (int, int, error) { return 64, 32, nil }),
 		WithStorage(func(context.Context, string) (int64, error) { return 1 << 40, nil }),
+		// An NVIDIA part, because the engine uses an integrated CUDA device
+		// by default and so the device stays in GPUs where the hook reads
+		// it. An integrated AMD part that is not gfx1151 would be set aside
+		// before the hook ran (waired-agent#1484), and the test would pass
+		// without the report ever reaching the policy's inputs.
 		WithGPU(func(context.Context) ([]GPU, Accelerators, error) {
-			return []GPU{{Vendor: "amd", Model: "an integrated part", VRAMTotalMB: 2048}}, Accelerators{}, nil
+			return []GPU{{Vendor: "nvidia", Model: "an integrated part", VRAMTotalMB: 2048}}, Accelerators{}, nil
 		}),
 		// A hook that runs and settles nothing: the only way UnifiedMemory
 		// can be true below is if the reading put it there.
@@ -322,8 +334,8 @@ func TestProfile_PersistedIntegration(t *testing.T) {
 			}
 			return true, true
 		})
-		if !got.GPUs[0].IntegratedKnown || !got.GPUs[0].Integrated {
-			t.Errorf("GPUs[0] = %+v, want a known integrated reading", got.GPUs[0])
+		if !got.DetectedGPUs()[0].IntegratedKnown || !got.DetectedGPUs()[0].Integrated {
+			t.Errorf("GPUs[0] = %+v, want a known integrated reading", got.DetectedGPUs()[0])
 		}
 	})
 
@@ -332,16 +344,16 @@ func TestProfile_PersistedIntegration(t *testing.T) {
 			func(*Profile, int) integration { return integratedKnown(false) },
 			func(string) (bool, bool) { return true, true },
 		)
-		if !got.GPUs[0].IntegratedKnown || got.GPUs[0].Integrated {
-			t.Errorf("GPUs[0] = %+v, want the LIVE answer (discrete) to win", got.GPUs[0])
+		if !got.DetectedGPUs()[0].IntegratedKnown || got.DetectedGPUs()[0].Integrated {
+			t.Errorf("GPUs[0] = %+v, want the LIVE answer (discrete) to win", got.DetectedGPUs()[0])
 		}
 	})
 
 	t.Run("a record with no entry for this card says nothing", func(t *testing.T) {
 		got := build(silent, unread)
-		if got.GPUs[0].IntegratedKnown {
+		if got.DetectedGPUs()[0].IntegratedKnown {
 			t.Errorf("GPUs[0] = %+v, want unknown — a card the reading never covered "+
-				"must not read as discrete", got.GPUs[0])
+				"must not read as discrete", got.DetectedGPUs()[0])
 		}
 	})
 }

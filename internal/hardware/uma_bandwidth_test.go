@@ -57,8 +57,9 @@ func TestUnifiedMemoryBandwidthGBs(t *testing.T) {
 
 		// A non-Strix AMD APU must NOT borrow Strix Halo's figure: its
 		// iGPU hangs off ordinary dual-channel system memory, nowhere near
-		// 256 GB/s. IsAMDMobileAPU recognises these separately and this
-		// table deliberately has no entry for them.
+		// 256 GB/s. This table deliberately has no entry for them, and
+		// since waired-agent#1484 the engine does not run on them by
+		// default anyway (engine_gpus.go).
 		{"amd mobile apu is not strix halo", "AMD Ryzen 7 7840U w/ Radeon 780M Graphics", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

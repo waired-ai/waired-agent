@@ -72,17 +72,24 @@ func TestResolveOllamaBackend(t *testing.T) {
 			wantSteps: []BackendStep{{Backend: BackendCUDA}},
 		},
 		{
-			name: "amd integrated 780M windows: vulkan + igpu (not rocm)",
+			// INVERTED by waired-agent#1484. This row used to expect
+			// Vulkan + OLLAMA_IGPU_ENABLE, chosen from the NAME. A 780M
+			// the profiler knows is integrated never reaches the plan (it
+			// is in Profile.UnusedGPUs); one whose integration nothing
+			// read is left to the engine, which drops it by default. The
+			// name decides nothing, and nothing here switches an iGPU on.
+			name: "amd 780M by name, windows: no igpu-enable",
 			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon 780M Graphics"},
 			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
-			name: "amd integrated 780M linux: vulkan + igpu (not rocm)",
+			name: "amd 780M by name, linux: no igpu-enable",
 			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon 780M Graphics"},
 			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendROCm},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
@@ -90,7 +97,7 @@ func TestResolveOllamaBackend(t *testing.T) {
 			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX"},
 			wantSteps: []BackendStep{
 				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
@@ -98,7 +105,7 @@ func TestResolveOllamaBackend(t *testing.T) {
 			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX"},
 			wantSteps: []BackendStep{
 				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
@@ -107,7 +114,7 @@ func TestResolveOllamaBackend(t *testing.T) {
 			name: "amd unsupported discrete RX 6600 windows: vulkan (no overlay)",
 			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 6600"},
 			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
@@ -117,7 +124,7 @@ func TestResolveOllamaBackend(t *testing.T) {
 			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 6600"},
 			wantSteps: []BackendStep{
 				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
@@ -126,7 +133,7 @@ func TestResolveOllamaBackend(t *testing.T) {
 			name: "amd vendor, empty model, windows: vulkan",
 			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd"},
 			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
@@ -134,34 +141,20 @@ func TestResolveOllamaBackend(t *testing.T) {
 			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd"},
 			wantSteps: []BackendStep{
 				{Backend: BackendROCm},
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}},
 			},
 		},
 		{
-			name:      "intel igpu: vulkan",
+			// Only a discrete Intel card reaches the plan (an integrated
+			// one is set aside by the profiler), so no igpu-enable.
+			name:      "intel discrete: vulkan",
 			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: "intel"},
-			wantSteps: []BackendStep{{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}}},
+			wantSteps: []BackendStep{{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1"}}},
 		},
 		{
 			name:      "no gpu: cpu, no override",
 			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: ""},
 			wantSteps: []BackendStep{{Backend: BackendCPU}},
-		},
-		{
-			// Linux mobile APU whose iGPU is invisible without rocm-smi:
-			// engage it via Vulkan by CPU-model signal instead of CPU (#68).
-			name: "undetected amd mobile apu linux: vulkan + igpu",
-			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "", AMDMobileAPU: true},
-			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
-			},
-		},
-		{
-			name: "undetected amd mobile apu windows: vulkan + igpu",
-			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "", AMDMobileAPU: true},
-			wantSteps: []BackendStep{
-				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
-			},
 		},
 		{
 			name:      "unrecognised vendor: auto",
@@ -218,26 +211,28 @@ func TestAMDROCmSupported(t *testing.T) {
 	}
 }
 
-func TestAMDIsIntegratedModel(t *testing.T) {
-	cases := []struct {
-		model string
-		want  bool
-	}{
-		{"AMD Radeon 780M Graphics", true},
-		{"AMD Radeon 760M Graphics", true},
-		{"AMD Radeon 890M", true},
-		{"AMD Radeon Graphics", true},            // bare Vega/Cezanne iGPU
-		{"AMD Radeon(TM) Vega 8 Graphics", true}, // Vega iGPU
-		// Discrete markers win, including mobile discrete.
-		{"AMD Radeon RX 7900 XTX", false},
-		{"AMD Radeon RX 7600M XT", false},
-		{"AMD Radeon PRO W7900", false},
-		{"AMD Instinct MI300X", false},
-		{"", false}, // unknown -> treated as discrete/unknown, not integrated
-	}
-	for _, c := range cases {
-		if got := amdIsIntegratedModel(c.model); got != c.want {
-			t.Errorf("amdIsIntegratedModel(%q) = %v, want %v", c.model, got, c.want)
+// TestOnlyStrixHaloSetsIGPUEnable pins the rule waired-agent#1484 set:
+// the engine's own default decides which integrated GPUs run, and the
+// one place waired overrides it is the chip the engine itself admits
+// (gfx1151) where waired routes it through Vulkan. Any other plan that
+// set OLLAMA_IGPU_ENABLE would switch on an iGPU the engine leaves off —
+// for a desktop Ryzen with a discrete card, the 2-CU iGPU beside it.
+func TestOnlyStrixHaloSetsIGPUEnable(t *testing.T) {
+	models := []string{"", "AMD Radeon 780M Graphics", "AMD Radeon(TM) Graphics", "AMD Radeon RX 7900 XTX", "AMD Radeon RX 6600", "NVIDIA GeForce RTX 4090", "Intel(R) Arc(TM) B580 Graphics"}
+	for _, goos := range []string{"linux", "windows", "darwin"} {
+		for _, vendor := range []string{"", "amd", "intel", "nvidia", "apple", "moore-threads"} {
+			for _, model := range models {
+				for _, strix := range []bool{false, true} {
+					in := BackendInputs{GOOS: goos, PrimaryGPUVendor: vendor, PrimaryGPUModel: model, StrixHaloAPU: strix}
+					for _, step := range ResolveOllamaBackend(in).Steps {
+						for _, kv := range step.Env {
+							if kv == envOllamaIGPUEnable && !strix {
+								t.Errorf("%+v: step %s sets %s", in, step.Backend, kv)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 }
