@@ -294,9 +294,17 @@ func (m darwinManager) Stop() error {
 //     into the process. RestartOnExitFor("darwin") states this, and one
 //     table test on the Linux leg keeps all three OSes' answers in view.
 //
-//   - ProcessType=Background tells App Nap to leave us alone — the
-//     agent is doing useful overlay-routing work even when no UI is
-//     visible.
+//   - ProcessType=Standard, not Background (waired-agent#1521; owner
+//     decision 2026-09-22). Every process the daemon spawns inherits the
+//     job's class, the inference engine included. Under Background, macOS
+//     compiled a new llama-server's Metal shaders at background QoS; on a
+//     cold shader cache that outlasted ollama's fixed 30 s GPU-discovery
+//     watchdog, and the engine counted no GPU until its next restart.
+//     Model loads were 3-5x slower as well. The measurements, and the cost
+//     (more power while generating), are in
+//     docs/decisions/20260922/0230-launchdaemon-runs-as-a-standard-job.md.
+//     App Nap, the reason this once said Background, is a mechanism for
+//     apps and does not apply to a LaunchDaemon.
 //
 //   - StandardOutPath / StandardErrorPath under /Library/Logs (a
 //     system location, since the daemon runs as root) so a tail-able
@@ -344,7 +352,7 @@ func renderLaunchDaemonPlist(cfg Config) ([]byte, error) {
 	writeKeyBool(&b, "Crashed", true)
 	b.WriteString("  </dict>\n")
 
-	writeKeyString(&b, "ProcessType", "Background")
+	writeKeyString(&b, "ProcessType", "Standard")
 	writeKeyString(&b, "WorkingDirectory", cfg.StateDir)
 	// The constants come from internal/platform/logrotate because the
 	// daemon rotates these two files itself (#331). One definition, so
