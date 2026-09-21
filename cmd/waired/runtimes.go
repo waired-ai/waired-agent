@@ -230,6 +230,14 @@ func runRuntimesInstallBody(autoVal bool, preferVal string, yesVal bool, stateDi
 		}
 		return installVLLM(*stateDir)
 	case "ollama":
+		// Under the install lock the daemon's converge takes too (#1511).
+		ctx, cancel := context.WithTimeout(context.Background(), ollamaInstallTimeout(os.Getenv))
+		defer cancel()
+		unlock, err := ollamaInstallLock(ctx, infruntime.BundledOllamaDir(*stateDir), announceEngineInstallWait)
+		if err != nil {
+			return err
+		}
+		defer unlock()
 		// No sink: `waired runtimes install` is a hand-run command, with
 		// nothing on the other side of a lease to report to.
 		return installOllama(*yes, *stateDir, nil)
@@ -454,6 +462,19 @@ func recommendEngineFor(goos string, gpus []recommendGPU) string {
 		}
 	}
 	return "ollama"
+}
+
+// ollamaInstallLock is the bundled engine's cross-process install lock, a
+// seam so tests can record that it is taken. The daemon's start-up converge
+// takes the same one (waired-agent#1511).
+var ollamaInstallLock = func(ctx context.Context, baseDir string, onWait func()) (func(), error) {
+	return infruntime.NewOllamaInstaller(baseDir).Lock(ctx, onWait)
+}
+
+// announceEngineInstallWait is what a person sees while another install of
+// the engine — the daemon's start-up converge, usually — holds the lock.
+func announceEngineInstallWait() {
+	fmt.Fprintln(stdout, "Another engine install is running on this computer; waiting for it to finish...")
 }
 
 // vllmInstall is a seam so tests exercise installVLLM's path/ownership

@@ -935,14 +935,17 @@ const engineVersionTimeout = 5 * time.Second
 //
 // Which marker appears is decided by whether a server answers, not by the
 // engine's version: with one up the CLI reports the SERVER's version as
-// "ollama version is X"; with none it reports its own as "Warning: client
-// version is X". Reading only the first meant a stopped engine had no
-// version anywhere in the product (#826) — including the version this
-// package's own callers compare against OllamaPinnedVersion. The server
-// line is still preferred, so this can only fill in an answer that was
-// empty.
+// "ollama version is X", and then its own as "Warning: client version is
+// Y" when the two differ; with none it reports only its own (ollama
+// v0.34.2 cmd/cmd.go versionHandler). The question asked here is always
+// the BINARY's version, so its own line wins. The server that answers is
+// whatever listens on OLLAMA_HOST's default, 127.0.0.1:11434 — never
+// waired's engine, which runs on its own port — so on a host whose own
+// Ollama runs a different release, preferring the server line reported
+// that release for the bundled binary, and the converge re-downloaded the
+// pin on every start (waired-agent#1511).
 func ParseEngineVersion(binary, output string) string {
-	clientVersion := ""
+	clientVersion, serverVersion := "", ""
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -950,15 +953,16 @@ func ParseEngineVersion(binary, output string) string {
 		}
 		switch binary {
 		case "ollama":
-			// Format: "ollama version is X.Y.Z"
+			// Format: "ollama version is X.Y.Z" — the answering
+			// server's; it is the binary's own only when no client line
+			// follows.
 			const marker = "ollama version is "
-			if i := strings.Index(line, marker); i >= 0 {
-				return strings.TrimSpace(line[i+len(marker):])
+			if i := strings.Index(line, marker); i >= 0 && serverVersion == "" {
+				serverVersion = strings.TrimSpace(line[i+len(marker):])
 			}
-			// Format: "Warning: client version is X.Y.Z" — printed
-			// instead of the above when no server is answering. Held
-			// rather than returned so a server line later in the
-			// output still wins.
+			// Format: "Warning: client version is X.Y.Z" — the binary's
+			// own, printed whenever it differs from the server's or no
+			// server answered.
 			const clientMarker = "client version is "
 			if i := strings.Index(line, clientMarker); i >= 0 && clientVersion == "" {
 				clientVersion = strings.TrimSpace(line[i+len(clientMarker):])
@@ -971,5 +975,8 @@ func ParseEngineVersion(binary, output string) string {
 			}
 		}
 	}
-	return clientVersion
+	if clientVersion != "" {
+		return clientVersion
+	}
+	return serverVersion
 }

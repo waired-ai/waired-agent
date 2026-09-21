@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -22,16 +23,21 @@ import (
 // repo exists: the .deb postinst restarts the agent and knows nothing
 // about the engine.
 //
-// What it does NOT do is bounce a running engine. Replacing the binary on
-// disk is safe while the old one runs — it holds its own inode — and the
-// adapter's BinaryResolver is consulted on each EnsureRunning, so the new
-// one is picked up at the next engine start (ollama.go's own comment says
-// so). The path where the user is waiting restarts the service anyway, so
-// it converges immediately there; here the choice is between a lagging
-// converge and an unannounced restart of an engine that may be mid-answer,
-// and the lag is the smaller harm. vLLM reaches the same place by a
-// different route: its install builds a new versioned venv and swaps a
-// symlink at the end, so the venv in use is never edited at all.
+// What it does NOT do is bounce a running engine, and it never has to:
+// nothing waired started runs from what it replaces. For ollama that is
+// because the engine's first start waits for this converge
+// (engineStartGate). Replacing bin/ and lib/ under a running `ollama
+// serve` was NOT safe, which is what this used to say: the server launches
+// its runners from its own directory on every model load, so a load
+// mid-swap found lib/ half gone and one after it ran new runners under an
+// old server; on Windows the locked ollama.exe failed the swap after lib/
+// was already deleted (waired-ai/waired-agent#1511). Nothing is serving at
+// daemon start, so holding the first start costs one `--version` on a
+// host already at the pin and the download on one that is not — an
+// engine off the pin was not going to serve what this build claims
+// anyway. vLLM reaches the same place by a different route: its install
+// builds a new versioned venv and swaps a symlink at the end, so the venv
+// in use is never edited at all.
 //
 // engineConvergeTimeout is a backstop, not the working bound: the download
 // itself is bounded by download.Fetch's no-progress watchdog (#189), the
@@ -102,7 +108,12 @@ func convergeVLLMVenv(ctx context.Context, logger *slog.Logger, deps infruntime.
 // installed should not have them compete for its uplink while it serves.
 // vLLM second because it is the larger and the rarer — off Linux, and on
 // any host without a venv, its whole pass is one symlink read.
-func startEngineConverge(logger *slog.Logger, stateDir string) {
+//
+// It returns a channel closed once the ollama pass is over, however it
+// ended; the ollama adapter's StartGate waits on it (engineStartGate).
+// wantROCmOverlay is setup.OllamaROCmOverlayWanted for this host — the
+// answer the CLI's install gives too (#1511).
+func startEngineConverge(logger *slog.Logger, stateDir string, wantROCmOverlay bool) <-chan struct{} {
 	vllmBase := filepath.Join(stateDir, "runtimes", "vllm")
 	vllmDeps := infruntime.NewVLLMConvergeDeps(vllmBase, func() int64 {
 		free, err := hardware.FreeDiskBytes(vllmBase)
@@ -122,11 +133,39 @@ func startEngineConverge(logger *slog.Logger, stateDir string) {
 		func(ctx context.Context, _ string) (bool, string) {
 			return engineVersionOnHost(runtime.GOOS, stateDir, hardware.EngineVersionAt)(ctx, "ollama")
 		},
+		wantROCmOverlay,
 	)
+	ollamaDone := make(chan struct{})
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), engineConvergeTimeout)
 		defer cancel()
 		convergeBundledEngine(ctx, logger, deps)
+		close(ollamaDone)
 		convergeVLLMVenv(ctx, logger, vllmDeps)
 	}()
+	return ollamaDone
+}
+
+// engineStartGate is the ollama adapter's StartGate: it returns once the
+// start-up converge's ollama pass is over, or with the start's own context
+// error when a Stop or Park ends the wait first. It says so once, the first
+// time a start actually has to wait.
+func engineStartGate(done <-chan struct{}, logger *slog.Logger) func(context.Context) error {
+	var once sync.Once
+	return func(ctx context.Context) error {
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+		once.Do(func() {
+			logger.Info("engine start is waiting for the bundled engine update to finish")
+		})
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }

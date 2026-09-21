@@ -505,6 +505,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// on a fresh install predates the engine install entirely (#361).
 	engineVersionProbe := engineVersionOnHost(runtime.GOOS, stateDir, hardware.EngineVersionAt)
 
+	profiler := hardware.NewProfiler(cachePath,
+		hardware.WithEngineVersion(engineVersionProbe),
+		// The persisted memory figure (#568): the catalog endpoint's
+		// fit verdicts must match what the wire publishes.
+		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)),
+		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir)),
+		hardware.WithPersistedVRAM(persistedGPUVRAM(stateDir)))
+
 	// #826: bring an already-installed bundled engine onto this build's
 	// pin. Background and once per process; the installer scripts cover
 	// the path a person watches, this covers `apt upgrade` and anything
@@ -515,15 +523,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// does not match the pin cannot serve the moment it does; the
 	// download only happens where an engine is already installed, which
 	// is itself the record that this host opted into running models.
-	startEngineConverge(logger, stateDir)
-
-	profiler := hardware.NewProfiler(cachePath,
-		hardware.WithEngineVersion(engineVersionProbe),
-		// The persisted memory figure (#568): the catalog endpoint's
-		// fit verdicts must match what the wire publishes.
-		hardware.WithRAMAvailableAtInstall(hostMemoryMeasurement(stateDir, os.Getenv)),
-		hardware.WithPersistedIntegration(persistedGPUIntegration(stateDir)),
-		hardware.WithPersistedVRAM(persistedGPUVRAM(stateDir)))
+	//
+	// Started once the profiler exists, because the ollama pass needs the
+	// host's ROCm-overlay answer (waired-ai/waired-agent#1511); still ahead
+	// of everything that can fail this function, so a host whose engine
+	// choice errors below is still converged.
+	ollamaConverged := startEngineConverge(logger, stateDir,
+		setup.OllamaROCmOverlayWanted(runtime.GOOS, profiler.Profile(ctx), os.Getenv("WAIRED_OLLAMA_GPU_MODE")))
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
@@ -629,6 +635,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// runtime dir (ollama creates ~/.ollama there for its key/config);
 		// harmless where the launcher already sets HOME (Linux systemd).
 		StateHome: infruntime.BundledOllamaDir(stateDir),
+		// Not while the start-up converge may be replacing the engine's
+		// files (waired-ai/waired-agent#1511).
+		StartGate: engineStartGate(ollamaConverged, logger),
 	}
 	migrateLegacyOllamaModels(logger, bundledOllamaModels, "")
 	ollama := infruntime.NewOllamaAdapter(ollamaCfg)

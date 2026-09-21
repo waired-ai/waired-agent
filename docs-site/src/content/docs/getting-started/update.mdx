@@ -61,7 +61,9 @@ Your downloaded models are not touched. The inference engine is: if this
 computer already has one, the update brings it to the version this build of
 Waired runs, because that is the only version Waired uses. A computer with no
 engine does not get one from an update. Turning local inference on is what
-installs it.
+installs it. When the engine update happens in the background, as it does
+after `apt upgrade` on Linux, local inference on this computer starts once the
+new engine version has downloaded.
 
 Whether the Waired app starts when you log in is not changed. If an update
 finds that the app is not set to start for the person logged in, it says so

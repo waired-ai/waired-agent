@@ -131,6 +131,59 @@ func TestConvergeOllama_InstallsOnlyWhenDecided(t *testing.T) {
 	}
 }
 
+// Two convergers on one host — the daemon's and the installer's, on the apt
+// path (waired-agent#1511). The lock is taken only for an install, and the
+// second converger probes again once it holds it: the first has already
+// installed the pin, so there is one download, not two sharing a staging
+// directory.
+func TestConvergeOllama_ProbesAgainUnderTheLock(t *testing.T) {
+	version := "0.1.0"
+	var events []string
+	got, err := ConvergeOllama(context.Background(), OllamaConvergeDeps{
+		Present:    func() bool { return true },
+		BinaryPath: func() string { return "/x/ollama" },
+		Probe: func(context.Context, string) (bool, string) {
+			events = append(events, "probe:"+version)
+			return true, version
+		},
+		Install: func(context.Context) error { events = append(events, "install"); return nil },
+		Lock: func(context.Context) (func(), error) {
+			events = append(events, "lock")
+			version = OllamaPinnedVersion // the other converger finished while this one waited
+			return func() { events = append(events, "unlock") }, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ConvergeOllama: %v", err)
+	}
+	want := "probe:0.1.0,lock,probe:" + OllamaPinnedVersion + ",unlock"
+	if joined := strings.Join(events, ","); joined != want {
+		t.Errorf("events = %s, want %s", joined, want)
+	}
+	if got.Install {
+		t.Errorf("decision = %+v; the host was at the pin by the time the lock was held", got)
+	}
+
+	// At the pin from the start: no lock at all.
+	events = nil
+	version = OllamaPinnedVersion
+	if _, err := ConvergeOllama(context.Background(), OllamaConvergeDeps{
+		Present:    func() bool { return true },
+		BinaryPath: func() string { return "/x/ollama" },
+		Probe:      func(context.Context, string) (bool, string) { return true, version },
+		Install:    func(context.Context) error { events = append(events, "install"); return nil },
+		Lock: func(context.Context) (func(), error) {
+			events = append(events, "lock")
+			return func() {}, nil
+		},
+	}); err != nil {
+		t.Fatalf("ConvergeOllama: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("events = %v on a host at the pin, want none", events)
+	}
+}
+
 // A failed install surfaces as an error AND keeps the decision, so a
 // caller can say what it was trying to do when it failed.
 func TestConvergeOllama_InstallFailureIsReported(t *testing.T) {

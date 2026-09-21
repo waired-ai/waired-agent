@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -139,6 +141,47 @@ func TestPromoteStagedInstall_FirstInstall(t *testing.T) {
 		t.Fatalf("promote: %v", err)
 	}
 	mustRead(t, filepath.Join(dest, "ollama"), "new")
+}
+
+// A promotion either completes or leaves the previous install exactly as
+// it was (waired-agent#1511). Deleting the previous install first went
+// wrong on Windows in particular: lib/ was gone by the time the locked,
+// running ollama.exe refused to be deleted, and nothing was restored. The
+// previous install is now moved aside and moved back on any failure, which
+// this drives by failing each rename in turn.
+func TestPromoteStagedInstall_AFailureRestoresThePreviousInstall(t *testing.T) {
+	for _, exclusive := range []bool{false, true} {
+		// Renames in order: 2 set aside (bin, lib), then 2 moved in.
+		for failAt := 1; failAt <= 4; failAt++ {
+			t.Run(fmt.Sprintf("exclusive=%v fail rename %d", exclusive, failAt), func(t *testing.T) {
+				root := t.TempDir()
+				staged, dest := filepath.Join(root, "stage", "payload"), filepath.Join(root, "dest")
+				mustWrite(t, filepath.Join(staged, "bin", "ollama"), "new")
+				mustWrite(t, filepath.Join(staged, "lib", "new.so"), "new")
+				mustWrite(t, filepath.Join(dest, "bin", "ollama"), "old")
+				mustWrite(t, filepath.Join(dest, "lib", "old.so"), "old")
+
+				prev := renameFn
+				t.Cleanup(func() { renameFn = prev })
+				n := 0
+				renameFn = func(from, to string) error {
+					if n++; n == failAt {
+						return errors.New("the process cannot access the file because it is being used by another process")
+					}
+					return prev(from, to)
+				}
+
+				if err := promoteStagedInstall(staged, dest, exclusive); err == nil {
+					t.Fatal("the injected failure did not surface")
+				}
+				mustRead(t, filepath.Join(dest, "bin", "ollama"), "old")
+				mustRead(t, filepath.Join(dest, "lib", "old.so"), "old")
+				if _, err := os.Stat(filepath.Join(dest, "lib", "new.so")); !os.IsNotExist(err) {
+					t.Errorf("a file of the new version was left in the previous install (err=%v)", err)
+				}
+			})
+		}
+	}
 }
 
 func mustWrite(t *testing.T, path, body string) {

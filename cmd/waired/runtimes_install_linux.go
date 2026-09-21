@@ -56,8 +56,8 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 
 func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	inst := infruntime.NewOllamaInstaller(baseDir)
-	inst.WantROCmOverlay = infruntime.WantsROCmOverlay(
-		setup.OllamaBackendInputs("linux", hardware.NewProfiler("").Profile(ctx)))
+	// The same answer the daemon's start-up converge gives (#1511).
+	inst.WantROCmOverlay = setup.OllamaROCmOverlayWanted("linux", hardware.NewProfiler("").Profile(ctx), "")
 	// Renderer shared with the darwin flow: runtimes_install_render.go.
 	// The terminal bar and the daemon sink are peers — teeOllamaProgress
 	// keeps the former even when the latter is absent.

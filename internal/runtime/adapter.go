@@ -170,6 +170,13 @@ var ErrEngineParked = errors.New("the inference engine on this computer is stopp
 // from when the sentinel lived in ollama.go and carried the prefix itself.
 var ErrEngineUnrecoverable = errors.New("engine repeatedly crashed; not retrying (see last_error)")
 
+// ErrEngineStartHeld wraps the error of a start that ended while it was
+// held back from spawning (OllamaConfig.StartGate): the start-up converge
+// was still replacing the engine's files, and a Stop or Park ended the
+// wait. Nothing was spawned, so it is no evidence against the engine
+// (startFailureIsEvidence).
+var ErrEngineStartHeld = errors.New("engine start held until the engine update finished")
+
 // RunningProcess abstracts an started OS process.
 type RunningProcess interface {
 	PID() int

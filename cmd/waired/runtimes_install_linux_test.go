@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +146,43 @@ func TestInstallOllamaLinux_Error(t *testing.T) {
 	}
 	if fixCalled {
 		t.Error("fixStateOwnership should not run when the install failed")
+	}
+}
+
+// `waired runtimes install ollama` installs under the lock the daemon's
+// start-up converge takes too, so the two never share a staging directory
+// (waired-agent#1511).
+func TestRuntimesInstallOllama_TakesTheInstallLock(t *testing.T) {
+	orig := installOllamaBundled
+	t.Cleanup(func() { installOllamaBundled = orig })
+	origLock := ollamaInstallLock
+	t.Cleanup(func() { ollamaInstallLock = origLock })
+	origFix := fixStateOwnership
+	t.Cleanup(func() { fixStateOwnership = origFix })
+	fixStateOwnership = func(string) error { return nil }
+
+	var events []string
+	installOllamaBundled = func(context.Context, string, func(infruntime.OllamaInstallProgress)) error {
+		events = append(events, "install")
+		return nil
+	}
+	var lockedDir string
+	ollamaInstallLock = func(_ context.Context, baseDir string, _ func()) (func(), error) {
+		lockedDir = baseDir
+		events = append(events, "lock")
+		return func() { events = append(events, "unlock") }, nil
+	}
+
+	dir := t.TempDir()
+	cmd := newRuntimesInstallCmd()
+	cmd.SetArgs([]string{"ollama", "--yes", "--state-dir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("runtimes install ollama: %v", err)
+	}
+	if got := strings.Join(events, ","); got != "lock,install,unlock" {
+		t.Errorf("events = %s, want lock,install,unlock", got)
+	}
+	if want := infruntime.BundledOllamaDir(dir); lockedDir != want {
+		t.Errorf("locked %q, want the bundled engine's directory %q", lockedDir, want)
 	}
 }

@@ -71,6 +71,12 @@ func runRuntimesUpgradeBody(engine, stateDir string, quiet bool) error {
 		// user afterwards. yes=true because the decision above IS the
 		// confirmation — there is nothing left to ask.
 		Install: func(context.Context) error { return installOllama(true, stateDir, nil) },
+		// The daemon's converge may be installing the same release right
+		// now (the apt path restarts it before this runs): wait for it,
+		// and ConvergeOllama probes again and finds nothing to do (#1511).
+		Lock: func(ctx context.Context) (func(), error) {
+			return ollamaInstallLock(ctx, baseDir, announceEngineInstallWait)
+		},
 	})
 	if err != nil {
 		return err

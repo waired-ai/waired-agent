@@ -119,6 +119,14 @@ type OllamaConfig struct {
 	// engine on the host; nil gives this adapter a private one
 	// (waired-ai/waired-agent#1443).
 	PendingExits *PendingExits
+	// StartGate, when set, is waited on before every spawn. The daemon's
+	// start-up converge may be replacing bin/ and lib/ under BaseDir, and
+	// an `ollama serve` started from them launches its runners from its own
+	// directory on every model load — so a server spawned mid-swap loads
+	// from a half-replaced tree, and one spawned before it runs new runners
+	// under an old server (waired-agent#1511). An error ends the start
+	// with ErrEngineStartHeld; nil lets it spawn.
+	StartGate func(ctx context.Context) error
 	// OnUnhealthy, when set, is called once per detected engine death with
 	// the reason (including a tail of engine.log). The adapter has already
 	// moved to StateFailed by then; the callback owns the recovery policy
@@ -876,7 +884,7 @@ func (a *OllamaAdapter) runStart(ctx context.Context, cancel context.CancelFunc,
 // ErrEngineParked, while a Park that instead killed the child mid-wait
 // surfaces as an ordinary startup error with only the flag to go on.
 func startFailureIsEvidence(err error, parked bool) bool {
-	return err != nil && !parked && !errors.Is(err, ErrEngineParked)
+	return err != nil && !parked && !errors.Is(err, ErrEngineParked) && !errors.Is(err, ErrEngineStartHeld)
 }
 
 // ensureRunningLeader is EnsureRunning's body, run by whichever caller won
@@ -886,6 +894,13 @@ func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context) error {
 	// A Stop that landed while this start was being set up (#947).
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// Not while the engine's own files are being replaced (#1511). Before
+	// resolveBinary, which reads the path the converge is swapping.
+	if gate := a.cfg.StartGate; gate != nil {
+		if err := gate(ctx); err != nil {
+			return fmt.Errorf("%w: %v", ErrEngineStartHeld, err)
+		}
 	}
 	binary, err := a.resolveBinary()
 	if err != nil {
