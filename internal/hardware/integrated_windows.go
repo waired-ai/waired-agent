@@ -85,6 +85,15 @@ func osVisibleBytes() (uint64, bool) {
 
 // integratedFromOS is Windows's answer for prof.GPUs[i].
 func integratedFromOS(prof *Profile, i int) integration {
+	// NVIDIA's own answer first, where the CUDA driver API gives one:
+	// CU_DEVICE_ATTRIBUTE_INTEGRATED is the predicate NVIDIA names for
+	// exactly this question, and it answers both ways (#1482). The
+	// arithmetic below can only ever say "integrated".
+	if devs, ok := cudaDevicesFromOS(); ok {
+		if d, ok := cudaFactsFor(prof, i, devs); ok {
+			return integratedKnown(d.integrated)
+		}
+	}
 	if i < 0 || i >= len(prof.GPUs) || prof.GPUs[i].VRAMTotalMB <= 0 {
 		return integrationUnknown()
 	}
