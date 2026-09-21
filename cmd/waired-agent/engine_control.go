@@ -243,6 +243,7 @@ func (e *engineController) EngineState() (management.EnginePowerState, bool) {
 	}
 	if engine == catalog.RuntimeVLLM {
 		in.Parked = e.p.vllmIsParked()
+		in.WeightsDownloading = e.p.vllmTargetDownloading()
 		if a := e.p.vllmAdapter(); a != nil {
 			in.AdapterPresent = true
 			in.Health = a.Health(e.agentCtx).State

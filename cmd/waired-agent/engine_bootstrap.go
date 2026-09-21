@@ -165,13 +165,26 @@ func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason 
 		return
 	}
 	if !p.engineStartInFlight.CompareAndSwap(false, true) {
-		return // a start is already running; it does exactly what this caller wants
+		// A start is already running. It may have decided before this
+		// caller's reason existed — a vLLM switch whose weights landed
+		// while the previous model was still starting — so it runs once
+		// more when it ends rather than this being dropped
+		// (waired-agent#1515).
+		p.engineStartAgain.Store(true)
+		return
 	}
-	defer p.engineStartInFlight.Store(false)
-
-	if err := p.startEngineAndBootstrap(ctx, reason); err != nil {
-		p.logOnChange(&p.lastStartDecline, "engine start did not complete",
-			err.Error(), "trigger", reason)
+	for {
+		p.engineStartAgain.Store(false)
+		if err := p.startEngineAndBootstrap(ctx, reason); err != nil {
+			p.logOnChange(&p.lastStartDecline, "engine start did not complete",
+				err.Error(), "trigger", reason)
+		}
+		p.engineStartInFlight.Store(false)
+		// Asked again while it ran, and nobody else has claimed it since.
+		if !p.engineStartAgain.Load() || !p.engineStartInFlight.CompareAndSwap(false, true) {
+			return
+		}
+		reason = "a start asked for while another ran"
 	}
 }
 

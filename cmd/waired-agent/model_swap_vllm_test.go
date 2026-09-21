@@ -156,27 +156,34 @@ func TestSwapPreferredModel_VLLMHostPullsWhenTheWeightsAreAbsent(t *testing.T) {
 	}
 }
 
-// TestSwapPreferredModel_VLLMEngineUpKeepsTheRestartPath pins the boundary
-// this fix deliberately did NOT cross.
-//
-// Record of today's behaviour, with a reason: swapping the model of a RUNNING
-// vLLM engine means killing the process and spawning another on the new
-// weights — the KV pool is reserved at start-up and held to exit — so it is
-// minutes with nothing serving. That stays on the restart path (#347); the
-// in-process arm is for a host where nothing is serving in the first place.
-func TestSwapPreferredModel_VLLMEngineUpKeepsTheRestartPath(t *testing.T) {
+// TestSwapPreferredModel_VLLMEngineUpSwitchesInProcess: a serving vLLM
+// engine is switched without restarting the whole service
+// (waired-agent#1515). INVERTED: this pinned errSwapNeedsRestart, the
+// whole-service restart that left nothing answering from the moment of the
+// choice. Owner decision 2026-09-21: the engine keeps answering until the
+// new weights are on disk, and the bootstrap switches it then — here they
+// already are, so a start is asked for at once.
+func TestSwapPreferredModel_VLLMEngineUpSwitchesInProcess(t *testing.T) {
 	p := vllmSwapProvider(t)
 	p.setVLLM(&recordingAdapter{name: "vllm", health: infruntime.StateReady})
 	if err := p.store.Update(func(s *catalog.State) {
 		s.Models = map[string]catalog.ModelState{
-			"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors"},
+			"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
 		}
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.SwapPreferredModel(context.Background(), "hybrid"); !errors.Is(err, errSwapNeedsRestart) {
-		t.Errorf("SwapPreferredModel against a serving vLLM engine = %v, want errSwapNeedsRestart", err)
+	downloading, err := p.SwapPreferredModel(context.Background(), "hybrid")
+	if err != nil {
+		t.Fatalf("SwapPreferredModel against a serving vLLM engine = %v, want an in-process switch", err)
 	}
+	if downloading {
+		t.Error("the weights are on disk; downloading should be false")
+	}
+	if got := p.effectivePreferredModelID(); got != "hybrid" {
+		t.Errorf("effectivePreferredModelID = %q, want hybrid", got)
+	}
+	waitForStartDecline(t, p, "the switch to ask the engine to start")
 }
 
 // TestSwapPreferredModel_TargetTheServingEngineCannotLoadNeedsRestart: the
@@ -206,6 +213,7 @@ func TestNoteWeightsLanded(t *testing.T) {
 		engine      string
 		pendingSwap string
 		refusal     string
+		chosen      string
 		modelID     string
 		want        bool
 	}{
@@ -237,11 +245,25 @@ func TestNoteWeightsLanded(t *testing.T) {
 			name:   "a vLLM host with no refusal recorded is left alone",
 			engine: catalog.RuntimeVLLM, modelID: "hybrid", want: false,
 		},
+		{
+			// waired-agent#1515: the chosen model landing is what moves a
+			// vLLM host that kept answering with its previous one.
+			name:   "the chosen model landing on a vLLM host asks for the switch",
+			engine: catalog.RuntimeVLLM, chosen: "hybrid", modelID: "hybrid", want: true,
+		},
+		{
+			name:   "another model landing on a vLLM host does not",
+			engine: catalog.RuntimeVLLM, chosen: "hybrid", modelID: "ollama-only", want: false,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &agentInferenceProvider{}
+			p := &agentInferenceProvider{manifests: vllmSwapManifests()}
 			p.setServingEngine(tc.engine)
+			if tc.chosen != "" {
+				id := tc.chosen
+				p.preferredOverride.Store(&id)
+			}
 			if tc.pendingSwap != "" {
 				id := tc.pendingSwap
 				p.pendingSwapModel.Store(&id)

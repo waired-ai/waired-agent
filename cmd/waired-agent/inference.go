@@ -1977,6 +1977,16 @@ type agentInferenceProvider struct {
 	// runs the boot bootstrap (#304), the way engineReconcileInFlight
 	// coalesces the serve-env reconcile.
 	engineStartInFlight atomic.Bool
+	// engineStartAgain records a start asked for while one was running:
+	// runEngineBootstrap runs once more when the running one ends instead
+	// of dropping it. A vLLM switch whose weights landed while the previous
+	// model was still starting is such a request (waired-agent#1515).
+	engineStartAgain atomic.Bool
+	// vllmServing is the model the registered vLLM adapter serves, and
+	// vllmDispatched the builds whose download a vLLM bootstrap started
+	// (vllm_switch.go, waired-agent#1515).
+	vllmServing    atomic.Pointer[vllmServingModel]
+	vllmDispatched vllmDispatched
 	// engineBootstrapOnce latches once the post-start bootstrap (bundled /
 	// preferred model, backend probe, tuning verify) has run. The engine
 	// START stays re-entrant — that is what adopts a late install — but the
@@ -2351,6 +2361,16 @@ func (p *agentInferenceProvider) noteWeightsLanded(modelID string) bool {
 	}
 	if p.servingEngine() == catalog.RuntimeVLLM && p.engineBootstrapRefused() != "" {
 		swap = true
+	}
+	// A vLLM host keeps answering with its previous model while the chosen
+	// one downloads (waired-agent#1515): the chosen model landing is what
+	// moves it. Keyed on the model, not on pendingSwapModel, so a download
+	// any path started — a choice, the bootstrap, `waired models pull` —
+	// completes the switch, and an older choice landing late does not.
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		if m, ok := p.preferredManifest(); ok && m.ModelID == modelID {
+			swap = true
+		}
 	}
 	if swap {
 		p.swapBounceDeferred.Store(true)
@@ -3153,9 +3173,12 @@ type inferenceSubsystemFacts struct {
 	// HasActive is "a model has been chosen"; ModelKnown is "and the
 	// catalog has a row for it". ModelState is that row's lifecycle
 	// state, meaningless unless ModelKnown.
-	HasActive  bool
-	ModelKnown bool
-	ModelState string
+	// WeightsDownloading: no adapter yet, on a vLLM host whose chosen
+	// model is downloading (waired-agent#1515).
+	WeightsDownloading bool
+	HasActive          bool
+	ModelKnown         bool
+	ModelState         string
 }
 
 // subsystemState answers WHAT is wrong, never whether it will fix
@@ -3260,6 +3283,13 @@ func subsystemState(f inferenceSubsystemFacts) string {
 		// arm is decided from the registered adapters, and the refusals
 		// this one reports are exactly the ones that register nothing.
 		return signer.SubsystemStateEngineFailed
+	case f.EngineInstalledNoAdapter && f.HasActive && f.WeightsDownloading:
+		// Nothing is answering yet and the chosen model is downloading: a
+		// vLLM host with no previous model it can run in the meantime
+		// (waired-agent#1515). `loading` is what the fleet already renders
+		// as "downloading or loading its model"; `starting` said a start
+		// was imminent for the length of a 23 GB download.
+		return signer.SubsystemStateLoading
 	case f.EngineInstalledNoAdapter && f.HasActive:
 		// The engine is installed and a model is chosen, and the adapter
 		// has not been built yet — a bootstrap is expected, which is what
@@ -3316,6 +3346,7 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 		// with rather than for the ones that happen to have an adapter
 		// (waired-agent#1298).
 		f.EngineInstalledNoAdapter = engineUsableOnHost(p.servingEngine(), hw, p.ollamaUsable, p.vllmUsable)
+		f.WeightsDownloading = p.vllmTargetDownloading()
 	}
 	if st.Active != nil {
 		f.HasActive = true
@@ -5780,16 +5811,14 @@ func (p *agentInferenceProvider) SwapPreferredBuild(ctx context.Context, modelOr
 	if _, pullable := router.FirstPullableVariant(manifest, engine, p.engineVersionFor(ctx, engine)); !pullable {
 		return false, errSwapNeedsRestart // the running engine has no servable variant
 	}
-	// A vLLM engine that IS serving stays on the restart-to-swap path (#347).
-	// Swapping its model means killing the process and spawning another on the
-	// new weights — the KV pool is reserved at start-up and held to exit — so
-	// it is minutes with nothing serving, and building that in process is the
-	// deferred #812 follow-up rather than this fix.
-	//
-	// Nothing is serving on the host this arm exists for: its bootstrap never
-	// got off the ground. There is no swap to make, only a start.
-	if engine == catalog.RuntimeVLLM && p.engineIsUp(ctx) {
-		return false, errSwapNeedsRestart
+	// A vLLM engine that is serving is switched in process too
+	// (waired-agent#1515): it keeps answering while the new weights
+	// download, and the bootstrap drains it, stops it and starts the new
+	// model once they are on disk. That used to restart the whole service,
+	// with nothing answering from the moment of the choice. A new choice
+	// asks for the download again even if a cancelled one was dispatched.
+	if engine == catalog.RuntimeVLLM {
+		p.vllmDispatched.forget(manifest.ModelID)
 	}
 
 	// Publish the effective preference so every in-process reader (tuning

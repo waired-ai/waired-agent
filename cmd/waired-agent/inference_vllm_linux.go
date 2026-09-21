@@ -186,18 +186,67 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, infruntime
 		release()
 		return nil, venv, func() {}, catalog.Manifest{}, catalog.Variant{}, err
 	}
-	// Someone else is already fetching these weights. Spawning now would run
-	// a second `hf download` into the same directory, because the bootstrap's
-	// own fetch does not pass through the in-flight registry. The finished
-	// job asks for the engine on its way out (noteWeightsLanded), so this is
-	// a wait, not a dead end (waired-agent#1170).
-	if p.pullInFlight(manifest.ModelID) {
-		release()
-		return nil, venv, func() {}, catalog.Manifest{}, catalog.Variant{}, fmt.Errorf(
-			"the weights for %s are still downloading; the engine starts when they land",
-			manifest.ModelID)
-	}
 	return puller, venv, release, manifest, variant, nil
+}
+
+// vllmStartResolution is everything a vLLM start resolved before it acts:
+// the venv (held), the chosen model and the build of it this engine loads,
+// the model this host was running when it may answer in the meantime, and
+// the plan (planVLLMTarget, waired-agent#1515).
+type vllmStartResolution struct {
+	puller            *download.HFPuller
+	venv              infruntime.InstallResult
+	release           func()
+	target            catalog.Manifest
+	variant           catalog.Variant
+	targetPath        string
+	targetDownloading bool
+	prev              catalog.Manifest
+	prevVariant       catalog.Variant
+	prevPath          string
+	plan              vllmTargetPlan
+}
+
+// resolveVLLMStart gathers the facts and makes the plan. engineUp and the
+// serving model are what the bootstrap found registered. On an error the
+// venv is already released.
+func (p *agentInferenceProvider) resolveVLLMStart(engineUp bool) (vllmStartResolution, error) {
+	puller, venv, release, manifest, variant, err := p.vllmStartPlan()
+	if err != nil {
+		return vllmStartResolution{release: release}, err
+	}
+	r := vllmStartResolution{puller: puller, venv: venv, release: release, target: manifest, variant: variant}
+	st, _ := p.store.Load()
+	if ms := st.Models[manifest.ModelID]; ms.State == catalog.ModelStateReady && ms.LocalPath != "" &&
+		(ms.VariantID == "" || ms.VariantID == variant.VariantID) && dirExists(ms.LocalPath) {
+		r.targetPath = ms.LocalPath
+	}
+	r.targetDownloading = p.pullInFlight(manifest.ModelID)
+	var hasPrev bool
+	r.prev, r.prevVariant, r.prevPath, hasPrev = vllmPreviousCandidate(st.Active, p.manifests, st,
+		manifest.ModelID, venv.Version, dirExists)
+	facts := vllmTargetFacts{
+		EngineUp:          engineUp,
+		TargetModel:       manifest.ModelID,
+		TargetVariant:     variant.VariantID,
+		TargetOnDisk:      r.targetPath != "",
+		TargetDownloading: r.targetDownloading,
+		AllowPull:         p.cfg.AllowPull,
+		AlreadyDispatched: p.vllmDispatched.seen(manifest.ModelID, variant.VariantID),
+		HasPrevious:       hasPrev,
+	}
+	if s := p.vllmServing.Load(); s != nil {
+		facts.ServingModel, facts.ServingVariant = s.ModelID, s.VariantID
+	}
+	r.plan = planVLLMTarget(facts)
+	return r, nil
+}
+
+// vllmNoPullRefusal is the reason a start cannot begin when the chosen
+// model's weights are absent and downloads are turned off.
+func vllmNoPullRefusal(modelID string) string {
+	return fmt.Sprintf("the weights for %s are not on this computer and downloads are turned off"+
+		" (inference.allow_pull=false in agent.json)", modelID)
 }
 
 // vllmStartRefusal reports why a vLLM start cannot begin, or nil when it can.
@@ -205,9 +254,26 @@ func (p *agentInferenceProvider) vllmStartPlan() (*download.HFPuller, infruntime
 // The untagged half of vllmStartPlan: engineController lives in an untagged
 // file and must not name download.HFPuller, which exists only on this leg.
 func (p *agentInferenceProvider) vllmStartRefusal() error {
-	_, _, release, _, _, err := p.vllmStartPlan()
-	release()
-	return err
+	up := false
+	if a := p.vllmAdapter(); a != nil {
+		st := a.Health(context.Background()).State
+		up = st == infruntime.StateReady || st == infruntime.StateStarting
+	}
+	r, err := p.resolveVLLMStart(up)
+	r.release()
+	if err != nil {
+		return err
+	}
+	switch {
+	case r.plan.Action == vllmRefuseNoPull:
+		return errors.New(vllmNoPullRefusal(r.target.ModelID))
+	case r.plan.Action == vllmWait && r.targetDownloading:
+		// Nothing to start until they land; the finished download asks for
+		// the engine on its way out (noteWeightsLanded).
+		return fmt.Errorf("the weights for %s are still downloading; the engine starts when they land",
+			r.target.ModelID)
+	}
+	return nil
 }
 
 // hfProgressPollInterval is how often the weights download's byte progress
@@ -404,10 +470,17 @@ func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID strin
 		return
 	}
 	p.logger.Info("hf pull job completed", "model", modelID, "job", jobID)
-	if p.isBundledModel(modelID) {
-		p.activateBundledIfUnset(modelID, variant.VariantID)
+	// Active names what the engine serves. While an engine is up it is
+	// still serving the previous model, so the switch — not the download —
+	// moves Active, once the engine is ready on the new one
+	// (waired-agent#1515). With nothing up there is no such gap, and a
+	// fresh host's first model is recorded as before.
+	if !p.engineIsUp(ctx) {
+		if p.isBundledModel(modelID) {
+			p.activateBundledIfUnset(modelID, variant.VariantID)
+		}
+		p.activatePreferredIfNeeded(modelID, variant.VariantID)
 	}
-	p.activatePreferredIfNeeded(modelID, variant.VariantID)
 	// The edge back to the engine. Before this the vLLM path had none at all:
 	// the weights landed, Active was committed, and a bootstrap that had
 	// refused for want of them stayed refused until someone restarted the
@@ -438,6 +511,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			latched, latchedReason = l.FailureLatchedReason()
 		}
 	}
+	engineUp := false
 	switch decideVLLMBootstrap(existing, existingState, p.vllmIsParked(), latched, p.vllmProbeEngineUp.Load()) {
 	case vllmBootstrapParked:
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
@@ -459,9 +533,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 			"reason", latchedReason, "fix", "waired inference engine start")
 		return
 	case vllmBootstrapSkip:
-		p.logger.Info("vllm bootstrap: an engine is already running; leaving it alone",
-			"state", existingState, "endpoint", existing.BaseURL())
-		return
+		// Up — but it may be serving a model other than the chosen one,
+		// which the plan below decides (waired-agent#1515).
+		engineUp = true
 	case vllmBootstrapStopFirst:
 		p.logger.Warn("vllm bootstrap: stopping the previous engine before spawning a new one",
 			"state", existingState, "endpoint", existing.BaseURL())
@@ -475,17 +549,16 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// success so a refusal later in this function is the one that stands.
 	p.clearEngineBootstrapRefusal()
 
-	puller, venv, release, manifest, variant, err := p.vllmStartPlan()
-	// Held until the adapter below is registered, which then holds it for
-	// as long as it is the registered one; every return before that
-	// releases it (waired-agent#1431).
+	r, err := p.resolveVLLMStart(engineUp)
+	// Held until an adapter is registered on it, which then holds it for as
+	// long as it is the registered one; every return before that releases
+	// it (waired-agent#1431).
 	held := false
 	defer func() {
 		if !held {
-			release()
+			r.release()
 		}
 	}()
-	python := filepath.Join(venv.BinDir, "python")
 	if errors.Is(err, errVLLMNoModelChosen) {
 		// Not a fault, so nothing is recorded: a refusal reaches the
 		// surfaces as engine_failed, and telling an operator who is
@@ -501,35 +574,80 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		return
 	}
 
-	// Ensure the weights are present. A prior run (or `waired models pull`)
-	// may have already downloaded them.
-	localPath := ""
-	if st, _ := p.store.Load(); st.Models[manifest.ModelID].State == catalog.ModelStateReady {
-		if lp := st.Models[manifest.ModelID].LocalPath; lp != "" {
-			if fi, statErr := os.Stat(lp); statErr == nil && fi.IsDir() {
-				localPath = lp
+	// The chosen model's weights, when they are not here, are fetched by
+	// the ordinary pull path — cancellable, listed, one per model — and not
+	// inside this start (waired-agent#1515). The engine keeps answering in
+	// the meantime, or the previous model does; the finished download asks
+	// for the engine again (noteWeightsLanded), which lands on the switch
+	// below.
+	if r.plan.Download {
+		p.startVLLMTargetDownload(r.target, r.variant)
+	}
+	m, v, localPath, chosen := r.target, r.variant, r.targetPath, true
+	switch r.plan.Action {
+	case vllmKeep:
+		if engineUp {
+			p.logger.Info("vllm bootstrap: the running engine keeps answering",
+				"serving", servingModelID(p.vllmServing.Load()), "chosen", r.target.ModelID,
+				"chosen_on_disk", r.targetPath != "")
+		}
+		return
+	case vllmWait:
+		p.logger.Info("vllm bootstrap: nothing to start until the chosen model's weights are on disk",
+			"model", r.target.ModelID, "downloading", r.targetDownloading || r.plan.Download)
+		return
+	case vllmRefuseNoPull:
+		p.logger.Error("vllm bootstrap: weights absent and pulls disabled (allow_pull=false)", "model", r.target.ModelID)
+		p.refuseEngineBootstrap(vllmNoPullRefusal(r.target.ModelID))
+		return
+	case vllmStartPrevious:
+		p.logger.Info("vllm bootstrap: starting the previous model until the chosen one is on disk",
+			"previous", r.prev.ModelID, "chosen", r.target.ModelID)
+		m, v, localPath, chosen = r.prev, r.prevVariant, r.prevPath, false
+	case vllmSwitchToTarget:
+		// Drained first: the switch is minutes with nothing answering
+		// here, and a turn cut mid-answer is worse than one that waits a
+		// little for the drain budget.
+		p.drainBeforeBounce(ctx, "vllm model switch")
+		p.logger.Info("vllm bootstrap: switching the engine to the chosen model",
+			"from", servingModelID(p.vllmServing.Load()), "to", r.target.ModelID)
+		if existing != nil {
+			if err := existing.Stop(ctx); err != nil {
+				p.logger.Warn("vllm bootstrap: stopping the previous engine returned error", "err", err)
 			}
 		}
 	}
-	if localPath == "" {
-		if !p.cfg.AllowPull {
-			p.logger.Error("vllm bootstrap: weights absent and pulls disabled (allow_pull=false)", "model", manifest.ModelID)
-			p.refuseEngineBootstrap(fmt.Sprintf(
-				"the weights for %s are not on this computer and downloads are turned off"+
-					" (inference.allow_pull=false in agent.json)", manifest.ModelID))
-			return
-		}
-		// Boot-time fetch: the weights are absent (localPath == ""), so this
-		// is a genuine download, not a refresh of a ready model.
-		localPath, err = p.downloadHFWeights(ctx, manifest.ModelID, variant, puller, false)
-		if err != nil {
-			p.logger.Error("vllm bootstrap: model download failed", "model", manifest.ModelID, "err", err)
-			p.refuseEngineBootstrap(fmt.Sprintf("downloading the weights for %s failed: %v",
-				manifest.ModelID, err))
-			return
-		}
-	}
+	held = true // spawnVLLM hands it to the adapter it registers
+	p.spawnVLLM(ctx, r.venv, r.release, m, v, localPath, chosen)
+}
 
+// servingModelID is the model id in s, or "" for none.
+func servingModelID(s *vllmServingModel) string {
+	if s == nil {
+		return ""
+	}
+	return s.ModelID
+}
+
+// startVLLMTargetDownload starts the chosen model's download through the
+// ordinary pull path, once per build per process (planVLLMTarget).
+func (p *agentInferenceProvider) startVLLMTargetDownload(m catalog.Manifest, v catalog.Variant) {
+	p.vllmDispatched.mark(m.ModelID, v.VariantID)
+	if _, err := p.pullModelBuild(p.backgroundCtx(), m.ModelID, v.VariantID); err != nil {
+		p.logger.Warn("vllm bootstrap: starting the chosen model's download failed", "model", m.ModelID, "err", err)
+		return
+	}
+	p.logger.Info("vllm bootstrap: downloading the chosen model; the engine switches to it once it is on disk",
+		"model", m.ModelID, "variant", v.VariantID)
+}
+
+// spawnVLLM builds the adapter for one model and brings it up. chosen says
+// the model is the one chosen for this computer rather than the previous
+// one answering in the meantime: only the chosen build takes the KV-cache
+// type the person chose with it. It takes over the venv hold (release).
+func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.InstallResult, release func(),
+	manifest catalog.Manifest, variant catalog.Variant, localPath string, chosen bool) {
+	python := filepath.Join(venv.BinDir, "python")
 	hwProfile := p.profiler.Profile(ctx)
 	tp := resolveVLLMTensorParallel(p.cfg.VLLMTensorParallel, hwProfile, p.logger)
 	// #676: fp8 (e4m3) KV cache on Ada+ (compute_cap ≥ 8.9) halves KV to
@@ -541,7 +659,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// is (waired-agent#1348): the choice and the setting are the same
 	// instruction from two places.
 	kvCacheDType, kvFactor := resolveVLLMKVCache(hwProfile,
-		p.cfg.VLLMDisableFP8KV || p.effectiveBuildChoice().KVCacheType == catalog.KVCacheFP16)
+		p.cfg.VLLMDisableFP8KV || (chosen && p.effectiveBuildChoice().KVCacheType == catalog.KVCacheFP16))
 	// The serve-flag gate (waired-agent#885). activeVer is the "current"
 	// symlink's version, which may predate this build on a host installed
 	// by an older agent — and an unrecognised flag is an argparse exit 2
@@ -642,8 +760,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	adapter.SetAppliedTuning(tuning)
 	p.registry.Register(adapter)
 	p.setVLLM(adapter)
+	p.vllmServing.Store(&vllmServingModel{ModelID: manifest.ModelID, VariantID: variant.VariantID})
 	p.holdVLLMVenvForAdapter(venv.Dir, release)
-	held = true
 
 	// Same reason the ollama arm clears it before its loop: while these
 	// attempts are in flight the honest answer is "still trying"
