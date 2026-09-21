@@ -308,6 +308,16 @@ func RefreshHookCommandAt(path string) string {
 // RefreshHookRunsOn is StopHookRunsOn for the refresh hook.
 func RefreshHookRunsOn(goos, cmd string) bool { return hookRunsOn(goos, cmd, refreshHookMarker) }
 
+// RefreshHookRetired reports whether cmd is the SessionStart command an older
+// Waired wrote (retiredRefreshHookMarker). It calls a subcommand this binary no
+// longer has, so it does nothing whatever the shell — which is why
+// `waired claude status` must say so rather than explain it as a shell-form
+// problem, true only of a POSIX command on Windows (waired-agent#1526).
+// `waired claude enable` replaces it on every OS.
+func RefreshHookRetired(cmd string) bool {
+	return strings.Contains(cmd, retiredRefreshHookMarker) && !strings.Contains(cmd, refreshHookMarker)
+}
+
 // StopHookInstalled reports whether managed-settings.json currently carries
 // waired's Stop hook. Used by `waired claude status`. A missing / unparseable
 // file reports false.

@@ -71,6 +71,8 @@ waired node:        auto (this device or a mesh peer)   (change with `waired wor
 
 `installed, but not in the form this computer runs`と表示される行は、ステータス行か`/model`の更新フックが別のOSのシェル向けに書かれていることを意味します。`sudo waired claude enable`で書き直されます。
 
+`/model refresh:`の行に`installed by an older version of Waired, but does nothing`と表示される場合は、更新フックが今のバージョンのWairedにないコマンドを実行しているため、セッションの開始時に`/model`の行が更新されません。`sudo waired claude enable`で置き換えられます。
+
 ### <a id="waired-claude-statusline"></a>`waired claude statusline`
 
 ```sh

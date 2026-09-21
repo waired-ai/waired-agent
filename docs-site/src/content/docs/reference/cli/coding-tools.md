@@ -97,6 +97,11 @@ A row reading `installed, but not in the form this computer runs` means the
 status line or the `/model` refresh hook was written for another operating
 system's shell. `sudo waired claude enable` rewrites them.
 
+A `/model refresh:` row reading
+`installed by an older version of Waired, but does nothing` means the hook
+runs a command this version of Waired no longer has, so the `/model` rows are
+not refreshed when a session starts. `sudo waired claude enable` replaces it.
+
 ### `waired claude statusline`
 
 ```sh

@@ -84,9 +84,11 @@ func TestRetiredRefreshHookMarkerIsRecognised(t *testing.T) {
 		}
 	})
 
-	// `waired claude status` has to be able to say "installed, but not in the
-	// form this computer runs" about one of these.
-	t.Run("status sees it and reports it as not runnable here", func(t *testing.T) {
+	// `waired claude status` has to be able to see one of these, and to say it
+	// is an older Waired's rather than blame the shell: on macOS and Linux the
+	// shell is the right one, and the row used to send the reader looking for
+	// Git Bash (waired-ai/waired-agent#1526).
+	t.Run("status sees it, reports it as not runnable, and knows it is retired", func(t *testing.T) {
 		path := withTempPath(t)
 		seedSettings(t, path, retiredRefreshObject())
 		cmd := RefreshHookCommandAt(path)
@@ -95,6 +97,23 @@ func TestRetiredRefreshHookMarkerIsRecognised(t *testing.T) {
 		}
 		if RefreshHookRunsOn("linux", cmd) {
 			t.Errorf("the pre-rename command was reported as runnable: %q", cmd)
+		}
+		if !RefreshHookRetired(cmd) {
+			t.Errorf("the pre-rename command was not recognised as retired: %q", cmd)
+		}
+	})
+
+	// Anti-vacuity for the check above: today's command, in either OS's form,
+	// is not retired — or every healthy host would be told to re-enable.
+	t.Run("today's command is not retired", func(t *testing.T) {
+		for _, goos := range []string{"linux", "darwin", "windows"} {
+			cmd := hookCommandFor(goos, refreshHookCommand(5))
+			if RefreshHookRetired(cmd) {
+				t.Errorf("%s: today's command %q was reported as retired", goos, cmd)
+			}
+		}
+		if RefreshHookRetired("") {
+			t.Error("no command at all was reported as retired")
 		}
 	})
 
