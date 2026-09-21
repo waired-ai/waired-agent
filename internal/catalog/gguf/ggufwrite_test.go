@@ -42,28 +42,6 @@ func (b *headerBuilder) text(key, v string) {
 	b.nKV++
 }
 
-func (b *headerBuilder) i32s(key string, vs []int32) {
-	b.str(&b.kvs, key)
-	_ = binary.Write(&b.kvs, binary.LittleEndian, uint32(typeArray))
-	_ = binary.Write(&b.kvs, binary.LittleEndian, uint32(typeInt32))
-	_ = binary.Write(&b.kvs, binary.LittleEndian, uint64(len(vs)))
-	for _, v := range vs {
-		_ = binary.Write(&b.kvs, binary.LittleEndian, v)
-	}
-	b.nKV++
-}
-
-func (b *headerBuilder) strs(key string, vs []string) {
-	b.str(&b.kvs, key)
-	_ = binary.Write(&b.kvs, binary.LittleEndian, uint32(typeArray))
-	_ = binary.Write(&b.kvs, binary.LittleEndian, uint32(typeString))
-	_ = binary.Write(&b.kvs, binary.LittleEndian, uint64(len(vs)))
-	for _, v := range vs {
-		b.str(&b.kvs, v)
-	}
-	b.nKV++
-}
-
 func (b *headerBuilder) tensor(name string, typ uint32, shape ...uint64) {
 	b.str(&b.tensors, name)
 	_ = binary.Write(&b.tensors, binary.LittleEndian, uint32(len(shape)))
@@ -90,8 +68,6 @@ func (b *headerBuilder) bytes() []byte {
 // specification. The reader that defines them moved to proto/gguf; the
 // writer is test-only and keeps its own copy.
 const (
-	typeInt32   = 5
 	typeFloat32 = 6
 	typeString  = 8
-	typeArray   = 9
 )
