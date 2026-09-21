@@ -17,7 +17,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 // DefaultBaseURL is the public Hugging Face Hub origin.

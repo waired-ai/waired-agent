@@ -1,12 +1,3 @@
-// Package scoring encodes the deterministic model-footprint formulas used to
-// author bundled catalog manifests: weight size, KV-cache footprint, decode
-// FLOPs, and the quality_tier composite. It is pure (no I/O) so the numbers
-// it produces are trivially testable and re-derivable by a reviewer.
-//
-// The formulas and constants come verbatim from
-// docs/reports/20260516-coding-model-scoring.md §2 (and §5.2 for the tier
-// composite). See internal/catalog/scoring/scoring.go for the physics and
-// tier.go for quality_tier derivation.
 package scoring
 
 import "strings"

@@ -1250,3 +1250,51 @@ func TestIsValidEngineStoppedCause(t *testing.T) {
 		t.Error("an unrecognised cause passed the boundary validator")
 	}
 }
+
+// TestInferenceState_CustomModelFields_CanonicalJSON pins the bytes of the
+// three custom-model fields (waired-ai/waired#1475 wire contract): absent
+// when zero, so every device that serves no custom model encodes exactly as
+// before, and in struct order when set.
+func TestInferenceState_CustomModelFields_CanonicalJSON(t *testing.T) {
+	base := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"hf.co/unsloth/Qwen3-0.6B-GGUF:Q4_K_M"},
+		LastCheck: "2026-09-22T12:00:00Z",
+	}
+	const wantBase = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["hf.co/unsloth/Qwen3-0.6B-GGUF:Q4_K_M"],"last_check":"2026-09-22T12:00:00Z"}`
+	data, err := json.Marshal(&base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != wantBase {
+		t.Errorf("a device with no custom model changed the encoding:\n got %s\nwant %s", got, wantBase)
+	}
+
+	set := base
+	set.ExcludeUnpinned = true
+	set.CustomModelsRevision = "r7"
+	set.CustomModelWindow = 40960
+	const wantSet = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["hf.co/unsloth/Qwen3-0.6B-GGUF:Q4_K_M"],"last_check":"2026-09-22T12:00:00Z",` +
+		`"exclude_unpinned":true,"custom_models_revision":"r7","custom_model_window":40960}`
+	data, err = json.Marshal(&set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != wantSet {
+		t.Errorf("custom-model fields encode differently:\n got %s\nwant %s", got, wantSet)
+	}
+	var back InferenceState
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !back.ExcludeUnpinned || back.CustomModelsRevision != "r7" || back.CustomModelWindow != 40960 {
+		t.Errorf("round trip lost a field: %+v", back)
+	}
+	if CapabilityCustomModelsV1 != "custom-models-v1" {
+		t.Errorf("capability string moved: %q", CapabilityCustomModelsV1)
+	}
+}

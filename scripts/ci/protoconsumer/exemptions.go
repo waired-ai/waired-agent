@@ -6,8 +6,10 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 	"github.com/waired-ai/waired-agent/proto/disco"
 	"github.com/waired-ai/waired-agent/proto/frame"
+	"github.com/waired-ai/waired-agent/proto/gguf"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/modelrank"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -162,6 +164,56 @@ var receiveOnly = []exemption{
 		"CP-injected list of stored builds the user asked to delete; the agent reads it once it declares variant-choice-v1 (#1348)"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredContextWindow",
 		"CP-injected serving window a person chose for this computer; the agent reads it once it declares window-choice-v1 (waired-ai/waired#1456)"},
+	// Custom models (waired-ai/waired#1473). The control plane builds the
+	// manifest of a model a person imports and the set it returns to an
+	// agent, and writes the two map fields per recipient; the agent only
+	// decodes them.
+	{reflect.TypeFor[catalog.Manifest](), "Provenance",
+		"custom-model manifests are built by the control plane at import (waired-ai/waired#1476)"},
+	{reflect.TypeFor[catalog.Variant](), "VLLMToolCallParser",
+		"set on a custom model's manifest by the control plane at import (waired-ai/waired#1476)"},
+	{reflect.TypeFor[catalog.Variant](), "VLLMReasoningParser",
+		"set on a custom model's manifest by the control plane at import (waired-ai/waired#1476)"},
+	{reflect.TypeFor[catalog.CustomModelSet](), "Own",
+		"the control plane's reply to POST /v1/devices/self/custom-models (waired-ai/waired#1476)"},
+	{reflect.TypeFor[signer.InferenceState](), "ExcludeUnpinned",
+		"CP-injected per recipient at map assembly from the per-model routing choice (waired-ai/waired#1477)"},
+	{reflect.TypeFor[signer.InferenceState](), "CustomModelsRevision",
+		"CP-injected on the self entry from the account's and team's custom-model sets (waired-ai/waired#1476)"},
+	// scoring.ArchConfig moved into proto for custom-model import
+	// (waired-ai/waired#1476). It is the subset of a Hugging Face
+	// config.json the formulas read: decoded from the model's own file, never
+	// assembled field by field.
+	{reflect.TypeFor[scoring.ArchConfig](), "FullAttentionInterval",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "HeadDim",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "HiddenSize",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "IndexerHeadDim",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "IndexerKVHeads",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "LayerTypes",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "MTPNumHiddenLayers",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "MaxPositionEmbeddings",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumAttentionHeads",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumExperts",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumExpertsPerTok",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumHiddenLayers",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "NumLocalExperts",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "SlidingWindow",
+		"decoded from a Hugging Face config.json"},
+	{reflect.TypeFor[scoring.ArchConfig](), "VocabSize",
+		"decoded from a Hugging Face config.json"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -170,6 +222,25 @@ var receiveOnly = []exemption{
 // its own parsed structs. guard() verifies the claim: an entry here
 // whose field nothing under proto/ writes fails.
 var producedInProto = []exemption{
+	// The GGUF reader and the catalog formulas moved into proto for
+	// custom-model import (waired-ai/waired#1476); these are what they
+	// compute.
+	{reflect.TypeFor[scoring.ArchConfig](), "NumKeyValueHeads",
+		"decoded from config.json, and defaulted to the attention heads by EstimateKVFromConfig"},
+	{reflect.TypeFor[scoring.KVEstimate](), "BytesPerTokenFP16",
+		"the estimate EstimateKVFromConfig / EstimateKVFromGGUF compute"},
+	{reflect.TypeFor[scoring.KVEstimate](), "FullAttnLayers",
+		"the estimate EstimateKVFromConfig / EstimateKVFromGGUF compute"},
+	{reflect.TypeFor[scoring.Quant](), "BPW",
+		"the quantization table in quant.go"},
+	{reflect.TypeFor[scoring.Quant](), "Tier",
+		"the quantization table in quant.go"},
+	{reflect.TypeFor[gguf.Header](), "Complete",
+		"set by the header decoder"},
+	{reflect.TypeFor[gguf.Header](), "Tensors",
+		"set by the header decoder"},
+	{reflect.TypeFor[gguf.ValueLocation](), "Offset",
+		"set by the header decoder"},
 	{reflect.TypeFor[hostfit.Presentation](), "PricedWindow",
 		"the window a projected row was priced at, written by ProjectModelFrom (waired-ai/waired#1456)"},
 	{reflect.TypeFor[hostfit.Verdict](), "NeedMB",
@@ -367,6 +438,12 @@ var producedInProto = []exemption{
 // somewhere in this repo, and by the name-matching rule above the guard
 // would have taken one of those writes for this field's producer.
 var producerPending = []exemption{
+	// waired-ai/waired#1481 (C6): the serving agent publishes the window a
+	// custom model under 200,704 tokens is loaded with. Until then no
+	// device sends it, which is today's behaviour: such a model reaches no
+	// Waired row. Delete this entry in the PR that writes it.
+	{reflect.TypeFor[signer.InferenceState](), "CustomModelWindow",
+		"the serving agent writes it for a custom model under 200,704 tokens with waired-ai/waired#1481"},
 	// waired-ai/waired#1456. ChosenWindow was here too and is paid: the
 	// serve tuning now passes a person's chosen window into the sizing.
 	// What is left is the picker side — a row priced at the window being

@@ -81,7 +81,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 ### 全バリアント（数値）
 
-vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM で動かす場合、min RAM は ollama で動かす場合の下限。数値の導出根拠は dev-docs の「推論層」と `internal/catalog/scoring/` を参照。
+vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM で動かす場合、min RAM は ollama で動かす場合の下限。数値の導出根拠は dev-docs の「推論層」と `proto/catalog/scoring/` を参照。
 
 #### Ollama で動かす場合（Mac / Windows / CPU / 内蔵・低VRAM GPU）
 

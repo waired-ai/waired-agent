@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 func nvidiaGPU(model string, vramMB int) hardware.GPU {

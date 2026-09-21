@@ -37,12 +37,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 // smokeRepo / smokeModelName: cheapest Qwen safetensors release that

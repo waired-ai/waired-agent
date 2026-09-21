@@ -295,4 +295,17 @@ const (
 	// device REPORTS. This one gates the window it is ASKED for, and a
 	// device may well know one and not the other.
 	CapabilityWindowChoiceV1 = "window-choice-v1"
+
+	// CapabilityCustomModelsV1 says the agent handles custom models, the
+	// models a person imports from Hugging Face through the console
+	// (waired-ai/waired#1473): it fetches the account's set when
+	// InferenceState.CustomModelsRevision changes, resolves and serves a
+	// custom model id as a desired model, refuses public callers while it
+	// serves one, and reads InferenceState.ExcludeUnpinned and
+	// CustomModelWindow on peer entries. The control plane withholds all
+	// three fields from a poller that does not declare it — they ride the
+	// SIGNED map, so an agent that does not know them would drop them on
+	// canonical re-marshal and fail verification — and answers 409 to a
+	// desired custom model for a device that does not declare it.
+	CapabilityCustomModelsV1 = "custom-models-v1"
 )

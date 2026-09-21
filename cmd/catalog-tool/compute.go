@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog/hfclient"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 // standardContexts are the context lengths the VRAM curve is reported at, so a

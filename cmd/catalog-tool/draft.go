@@ -9,7 +9,7 @@ import (
 	"slices"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
+	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 )
 
 func init() {

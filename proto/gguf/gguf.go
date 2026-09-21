@@ -9,6 +9,11 @@
 // Only what the sizing needs is decoded. Array values are skipped unless
 // they are numeric and short: the tokenizer arrays run to hundreds of
 // thousands of strings and nothing here reads them.
+//
+// It lives in the proto module so the control plane can read the header of
+// a GGUF a person imports (waired-ai/waired#1476). Like the rest of proto it
+// depends on the standard library only. The agent keeps the in-place
+// rewrite of a header value in internal/catalog/gguf.
 package gguf
 
 import (
@@ -37,6 +42,10 @@ const (
 	typeInt64   = 11
 	typeFloat64 = 12
 )
+
+// TypeUint32 is the value type code of a uint32, the only type an in-place
+// rewrite of a header value handles.
+const TypeUint32 = typeUint32
 
 // maxNumericArray bounds the numeric arrays kept in Header.Arrays. The
 // per-layer arrays the sizing reads (head_count_kv) have one element per
@@ -85,6 +94,11 @@ type Header struct {
 	// SetArchUint32.
 	ScalarValueAt map[string]ValueLocation
 	Tensors       []Tensor
+
+	// Complete is true when the whole header was decoded, tensor table
+	// included. Read always returns a complete header or an error;
+	// ReadPrefix may return one that stops early.
+	Complete bool
 }
 
 // ValueLocation is where a scalar metadata value sits in the file.
@@ -149,6 +163,36 @@ var ErrNotGGUF = errors.New("gguf: not a GGUF file")
 // Read decodes the header from r, stopping after the tensor table. It
 // reads no further, so r may be an HTTP body the caller closes after.
 func Read(r io.Reader) (Header, error) {
+	return read(r, false)
+}
+
+// ReadPrefix decodes as much of the header as r holds. r is typically the
+// first few kilobytes of a GGUF fetched with an HTTP Range request: the
+// general.* and architecture keys come first, and the tokenizer arrays that
+// follow them run to megabytes. When r ends before the header does,
+// ReadPrefix returns every key decoded until then, with Complete false and
+// no error. A key cut off part-way is left out. Anything that is not a
+// truncation — a wrong magic, an unsupported version, a malformed value —
+// is still an error.
+func ReadPrefix(r io.Reader) (Header, error) {
+	return read(r, true)
+}
+
+func read(r io.Reader, prefix bool) (Header, error) {
+	h, err := decode(r)
+	if err == nil {
+		return h, nil
+	}
+	if prefix && h.Scalars != nil && (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+		h.Complete = false
+		return h, nil
+	}
+	return Header{}, err
+}
+
+// decode is the body of Read. On a read error it still returns the header
+// decoded so far, which read keeps only for a prefix.
+func decode(r io.Reader) (Header, error) {
 	d := decoder{r: bufio.NewReaderSize(r, 1<<20)}
 	var magic [4]byte
 	if _, err := io.ReadFull(d.r, magic[:]); err != nil {
@@ -163,26 +207,26 @@ func Read(r io.Reader) (Header, error) {
 	d.off = int64(len(magic))
 	h := Header{Scalars: map[string]any{}, Arrays: map[string][]int64{}, ScalarValueAt: map[string]ValueLocation{}}
 	h.Version = d.u32()
-	if h.Version < 2 {
+	if d.err == nil && h.Version < 2 {
 		return Header{}, fmt.Errorf("gguf: version %d is not supported", h.Version)
 	}
 	nTensors := d.u64()
 	nKV := d.u64()
 	if d.err != nil {
-		return Header{}, d.err
+		return h, d.err
 	}
 	for i := uint64(0); i < nKV; i++ {
 		key := d.str()
 		vt := d.u32()
 		if d.err != nil {
-			return Header{}, d.err
+			return h, d.err
 		}
 		if vt == typeArray {
 			et := d.u32()
 			n := d.u64()
 			vals, keep := d.array(et, n)
 			if d.err != nil {
-				return Header{}, fmt.Errorf("gguf: key %s: %w", key, d.err)
+				return h, fmt.Errorf("gguf: key %s: %w", key, d.err)
 			}
 			if keep {
 				h.Arrays[key] = vals
@@ -192,7 +236,7 @@ func Read(r io.Reader) (Header, error) {
 		at := d.off
 		v := d.scalar(vt)
 		if d.err != nil {
-			return Header{}, fmt.Errorf("gguf: key %s: %w", key, d.err)
+			return h, fmt.Errorf("gguf: key %s: %w", key, d.err)
 		}
 		h.Scalars[key] = v
 		h.ScalarValueAt[key] = ValueLocation{Offset: at, Type: vt}
@@ -211,10 +255,11 @@ func Read(r io.Reader) (Header, error) {
 		typ := d.u32()
 		_ = d.u64() // offset into the data section
 		if d.err != nil {
-			return Header{}, fmt.Errorf("gguf: tensor %d: %w", i, d.err)
+			return h, fmt.Errorf("gguf: tensor %d: %w", i, d.err)
 		}
 		h.Tensors = append(h.Tensors, Tensor{Name: name, Shape: shape, Type: typ})
 	}
+	h.Complete = true
 	return h, nil
 }
 
