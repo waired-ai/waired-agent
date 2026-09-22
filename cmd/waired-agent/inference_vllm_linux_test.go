@@ -180,7 +180,7 @@ func TestDownloadHFWeights_RecordsReadyAndEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("downloadHFWeights: %v", err)
 	}
-	if want := p.hfLocalDir("openai/gpt-oss-20b"); localDir != want {
+	if want := p.hfLocalDir(m.ModelID, variant); localDir != want || filepath.Base(want) != "openai__gpt-oss-20b" {
 		t.Fatalf("localDir=%q, want %q", localDir, want)
 	}
 
@@ -233,7 +233,7 @@ func TestDownloadHFWeights_RefreshFailureKeepsReady(t *testing.T) {
 		s.VLLMModels[m.ModelID] = catalog.ModelState{
 			VariantID: variant.VariantID,
 			HFRepo:    variant.Source.RepoID,
-			LocalPath: p.hfLocalDir(variant.Source.RepoID),
+			LocalPath: p.hfLocalDir(m.ModelID, variant),
 			State:     catalog.ModelStateReady,
 		}
 	}); err != nil {

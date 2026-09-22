@@ -316,11 +316,44 @@ func (p *agentInferenceProvider) hfLister() download.HFFileLister {
 	return download.DefaultHFFileLister{}
 }
 
-// hfLocalDir is the on-disk directory the safetensors for repoID land in.
+// hfLocalDir is the on-disk directory the safetensors for a model land in.
 // The repo id's "/" is flattened to "__" so the whole repo maps to a single
 // directory under hfModelsRoot without nesting or traversal risk.
-func (p *agentInferenceProvider) hfLocalDir(repoID string) string {
-	return filepath.Join(hfModelsRoot(p.stateDir), strings.ReplaceAll(repoID, "/", "__"))
+//
+// A custom model's directory also names its commit: an import pins one, and
+// two imports of one repository at different commits are two models
+// (waired-ai/waired#1473 ruling 2) that must not write into — or delete —
+// each other's weights (waired-ai/waired#1480). A bundled build keeps the
+// directory it always had, so its weights are not downloaded again.
+func (p *agentInferenceProvider) hfLocalDir(modelID string, v catalog.Variant) string {
+	name := strings.ReplaceAll(v.Source.RepoID, "/", "__")
+	if catalog.IsCustomModelID(modelID) && len(v.Source.Revision) >= 12 {
+		name += "@" + v.Source.Revision[:12]
+	}
+	return filepath.Join(hfModelsRoot(p.stateDir), name)
+}
+
+// failHFPull records a pull that stopped before it began, the way a failed
+// `hf download` is recorded below: a refresh keeps the model ready.
+func (p *agentInferenceProvider) failHFPull(modelID string, refresh bool, why string) {
+	_ = p.store.Update(func(s *catalog.State) {
+		m := s.VLLMModels[modelID]
+		if !refresh {
+			m.State = catalog.ModelStateFailed
+		}
+		m.Error = why
+		s.VLLMModels[modelID] = m
+	})
+}
+
+// hfModelsRootOrState is the directory whose filesystem the weights will land
+// on: the weights root once it exists, the state directory before the first
+// download creates it.
+func hfModelsRootOrState(stateDir string) string {
+	if dirExists(hfModelsRoot(stateDir)) {
+		return hfModelsRoot(stateDir)
+	}
+	return stateDir
 }
 
 // downloadHFWeights fetches the safetensors for variant into hfLocalDir and
@@ -333,7 +366,7 @@ func (p *agentInferenceProvider) hfLocalDir(repoID string) string {
 // nothing, because settleCancelledPull is about to drop the row, and "failed"
 // would be a wrong answer — the same rule runPullJob follows for ollama.
 func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, refresh bool, stopRequested func() bool) (string, error) {
-	localDir := p.hfLocalDir(variant.Source.RepoID)
+	localDir := p.hfLocalDir(modelID, variant)
 	// The directory is this download's until it returns, so every partial
 	// file in it now is one a killed download left: huggingface_hub never
 	// resumes them (download.SweepHFIncomplete), and they would otherwise
@@ -372,7 +405,22 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	// fetch falls back to the whole repository, exactly as it behaved
 	// before, and the row goes back to reporting nothing.
 	files, listErr := p.hfLister().ListTopLevel(ctx, variant.Source.RepoID, variant.Source.Revision)
+	custom := catalog.IsCustomModelID(modelID)
+	if custom && listErr == nil {
+		files = download.CustomHFFiles(files)
+	}
 	switch {
+	case custom && (listErr != nil || !download.HFHasSafetensors(files)):
+		// A custom model is pulled narrowly or not at all: the whole-repository
+		// fallback below would fetch whatever the repository holds, and the
+		// import only vouched for its top-level safetensors
+		// (waired-ai/waired#1480).
+		err := fmt.Errorf("download: %s: the repository's top level has no safetensors weights at the imported commit, so there is nothing vLLM can load", variant.Source.RepoID)
+		if listErr != nil {
+			err = fmt.Errorf("download: %s: could not list the repository's files at the imported commit (%v); try again later", variant.Source.RepoID, listErr)
+		}
+		p.failHFPull(modelID, refresh, err.Error())
+		return "", err
 	case listErr != nil:
 		p.logger.Warn("hf file listing unavailable; fetching the whole repository and reporting no byte progress",
 			"model", modelID, "repo", variant.Source.RepoID, "err", listErr)
@@ -390,6 +438,13 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	default:
 		p.logger.Info("hf pull scope", "model", modelID, "repo", variant.Source.RepoID,
 			"files", len(files), "bytes", download.HFTotalBytes(files))
+	}
+	// Before a byte is fetched, as the ollama pull does (pull_size.go): a
+	// multi-GB download that ends in a full disk costs the time and leaves
+	// the disk full (waired-ai/waired#1480).
+	if short := diskShortfallAt(hfModelsRootOrState(p.stateDir), download.HFTotalBytes(files)); short != "" {
+		p.failHFPull(modelID, refresh, short)
+		return "", fmt.Errorf("%w: %s", errDiskShort, short)
 	}
 
 	watchCtx, stopWatch := context.WithCancel(ctx)

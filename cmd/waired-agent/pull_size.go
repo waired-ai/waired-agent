@@ -72,10 +72,19 @@ var freeDiskFn = hardware.FreeDiskBytes
 // restart already holds part of it and may be refused while it would have
 // fitted. The message names both figures, and the fix is the same.
 func (p *agentInferenceProvider) diskShortfall(total int64) string {
-	if p == nil || total <= 0 || p.ollamaModelsDir == "" {
+	if p == nil {
 		return ""
 	}
-	free, err := freeDiskFn(p.ollamaModelsDir)
+	return diskShortfallAt(p.ollamaModelsDir, total)
+}
+
+// diskShortfallAt is diskShortfall for the filesystem holding dir: the
+// engine's model store for ollama, the weights root for vLLM.
+func diskShortfallAt(dir string, total int64) string {
+	if total <= 0 || dir == "" {
+		return ""
+	}
+	free, err := freeDiskFn(dir)
 	if err != nil {
 		return ""
 	}

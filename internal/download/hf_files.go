@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -90,13 +91,54 @@ func (l DefaultHFFileLister) ListTopLevel(ctx context.Context, repo, revision st
 	}
 	out := make([]HFRepoFile, 0, len(entries))
 	for _, e := range entries {
-		if e.Type != "file" || e.Path == "" || strings.Contains(e.Path, "/") {
+		if e.Type != "file" || !hfFileNameRe.MatchString(e.Path) {
 			continue
 		}
 		out = append(out, HFRepoFile{Name: e.Path, Size: e.Size})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// hfFileNameRe is the file names a pull passes to `hf download` as
+// arguments. The names are the Hub's, which means the repository owner's: a
+// top-level file named "--dry-run" would otherwise reach the command line as
+// a flag, finish the "download" with nothing fetched and leave the model
+// marked ready (review of waired-ai/waired#1473, 2026-09-22). A name that
+// starts with anything but a letter, a digit, "_" or "." — or holds a "/",
+// a space or a character outside this set — is left out of the pull.
+var hfFileNameRe = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9._+-]*$`)
+
+// CustomHFFiles narrows a listing to what vLLM loads for a custom model
+// (waired-ai/waired#1480): the configuration and tokenizer files, the chat
+// template, and the safetensors weights with their index. Everything else a
+// repository holds — pickle weights, GGUF builds, scripts — stays on the Hub:
+// Waired loads safetensors only (--load-format safetensors) and never runs
+// a repository's code.
+func CustomHFFiles(files []HFRepoFile) []HFRepoFile {
+	out := make([]HFRepoFile, 0, len(files))
+	for _, f := range files {
+		n := strings.ToLower(f.Name)
+		switch {
+		case strings.HasSuffix(n, ".safetensors"), strings.HasSuffix(n, ".safetensors.index.json"),
+			n == "config.json", n == "generation_config.json", n == "preprocessor_config.json",
+			strings.HasPrefix(n, "tokenizer") && (strings.HasSuffix(n, ".json") || strings.HasSuffix(n, ".model")),
+			n == "special_tokens_map.json", n == "added_tokens.json", n == "vocab.json", n == "merges.txt",
+			n == "chat_template.jinja", n == "chat_template.json":
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// HFHasSafetensors reports whether a listing carries safetensors weights.
+func HFHasSafetensors(files []HFRepoFile) bool {
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.Name), ".safetensors") {
+			return true
+		}
+	}
+	return false
 }
 
 // HFHasWeights reports whether a top-level listing contains the weights
