@@ -37,8 +37,14 @@ func TestVLLMStartFailureKind(t *testing.T) {
 			t.Errorf("%.50q → %q, want %q", log, got, want)
 		}
 	}
-	if mem, _ := vllmStartFailedForMemory(vllmLogEstimatedLen, false); !mem || vllmEngineMaxWindow(vllmLogEstimatedLen) != 18432 {
+	mem, reason := vllmStartFailedForMemory(vllmLogEstimatedLen, false)
+	if !mem || vllmEngineMaxWindow(vllmLogEstimatedLen) != 18432 {
 		t.Errorf("the KV shortfall: memory=%v window=%d, want memory and 18432", mem, vllmEngineMaxWindow(vllmLogEstimatedLen))
+	}
+	// The reason ends the "did not load" notice, so it is a sentence, not
+	// the middle of vLLM's.
+	if !strings.Contains(reason, "at most 18432 tokens") || strings.Contains(reason, "estimated maximum model length") {
+		t.Errorf("the KV shortfall's reason = %q", reason)
 	}
 }
 

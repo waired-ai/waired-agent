@@ -120,6 +120,45 @@ computer: it is the one that knows the window. When a request that names no
 computer could go to one that holds 200,704 tokens, Waired sends it there
 instead.
 
+## When a custom model doesn't run
+
+Each of these messages says why, and what to do.
+
+| Message | Why | What to do |
+|---|---|---|
+| **… was imported for vllm, but this computer runs ollama — …** | A custom model runs only on the engine it was imported for. `waired models use`, the Waired app and a download all refuse it, and nothing on the computer changes. | Choose a model for this computer's engine, or import the model again for that engine. |
+| **the file behind … on Hugging Face was replaced after this model was imported** | The file was replaced on Hugging Face after you imported it. The new file is a different model, so the computer doesn't download it. | Import the model again. The new import pins the new file. |
+| **the repository's top level has no safetensors weights at the imported commit** | vLLM loads the safetensors weights at the top of the repository, and there are none. | Choose another model, or import one whose safetensors weights are at the repository's top level. |
+| **insufficient disk space for this model: it needs … and only … is free** | Before a vLLM download starts, Waired compares its size with the free disk space. | Free up space, or choose a smaller model. |
+| **This computer has no custom model …** | `waired models use` named a custom model this computer doesn't have. It was imported moments ago and hasn't reached the computer yet, or it was deleted. | Wait a minute and try again, or import it again. |
+| **custom model … is no longer in this account's list** | Setup shows it for a model that was deleted in the console. | Choose another model, or import it again. |
+| **custom model … is in this account's list, but this version of Waired can't read it** | Setup shows it when the Waired on that computer is too old to read the model. | Update Waired on that computer, then choose the model again. |
+
+On vLLM, a model that fails to start for a reason another try can't fix is
+not started again. Waired stops the engine and shows the notice **⚠ … did not
+start on this computer**, and `waired status` says **Waired stopped the engine
+because it cannot start the chosen model on this computer.** The notice names
+the reason:
+
+- **the vLLM version Waired installs does not support this model's
+  architecture …**: choose another model.
+- **this model needs to run its own code to load, which Waired does not
+  allow**: choose another model.
+- **this GPU is too old for the model's … quantization**: choose a build with
+  another quantization, or another model.
+- **vLLM found no safetensors weights in the downloaded files**: remove the
+  model with `waired models rm` and choose it again to download a fresh copy.
+
+Choosing a model starts the engine again. Two more reasons show on the
+engine's line in `waired status` and in the console:
+
+- **on this computer the KV cache holds at most … tokens for this model, less
+  than the context window it was started with**: choose a smaller model, or
+  raise `inference.vllm_gpu_memory_utilization`. This is also the notice **⚠ …
+  did not load on this computer**.
+- **another program is using this GPU's memory**: close that program, or lower
+  `inference.vllm_gpu_memory_utilization`, then choose the model again.
+
 ## Delete a model
 
 Delete it from the **Custom models** tab. A model that a computer runs,

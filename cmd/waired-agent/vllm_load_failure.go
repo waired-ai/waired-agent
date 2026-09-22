@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -40,13 +41,18 @@ func vllmStartFailedForMemory(lastSpawnLog string, weightsOverBudget bool) (bool
 		"torch.OutOfMemoryError",
 		"No available memory for the cache blocks",
 		"larger than the maximum number of tokens that can be stored in KV cache",
-		// vLLM v0.29.0's KV-cache shortfall, which names the window it could
-		// hold (vllm/v1/core/kv_cache_utils.py; waired-ai/waired#1480).
-		"the estimated maximum model length is",
 	} {
 		if strings.Contains(lastSpawnLog, marker) {
 			return true, marker
 		}
+	}
+	// vLLM v0.29.0's KV-cache shortfall, which names the window it could
+	// hold (vllm/v1/core/kv_cache_utils.py; waired-ai/waired#1480). Its
+	// marker is the middle of a sentence, so the reason is written out:
+	// the notice ends with it.
+	if n := vllmEngineMaxWindow(lastSpawnLog); n > 0 {
+		return true, fmt.Sprintf("its KV cache holds at most %d tokens for this model on this computer, "+
+			"less than the context window it was started with", n)
 	}
 	return false, ""
 }
