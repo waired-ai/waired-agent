@@ -247,7 +247,9 @@ func firstAMDWithVRAM(p *Profile) GPU {
 // # What this does NOT generalise
 //
 // Linux AMD APUs other than Strix Halo now REPORT integrated (the
-// amdgpu FUSION bit reaches the profile through `sudo waired init`), and
+// amdgpu FUSION bit reaches the profile through the render node, which
+// the service user can open since #1535, or through `sudo waired
+// init`), and
 // this function still does not act on it. That is not an oversight: the
 // Linux AMD budget rule is the carve-out reading, which nothing in this
 // repository has measured on any APU but the reference host, and a

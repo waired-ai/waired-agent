@@ -5,6 +5,7 @@ supersedes:
 superseded_by:
   - docs/decisions/20260921/0300-nvidia-single-pool-parts-are-named.md
   - docs/decisions/20260921/1600-amd-parts-are-named-by-their-isa-target.md
+  - docs/decisions/20260922/1430-linux-service-user-joins-render.md
 ---
 
 # 測定の出自は、チップの粒度で事実から導く (20260920 20:00)
@@ -28,6 +29,11 @@ Accepted。waired-agent#1455、および #459 の Ask 1・2。
 部分的に改めた** — 「AMD は `CPU.Model` が部品を名指す」は APU に限った文になり、
 ディスクリートカードは ISA ターゲット（`gfx1100` など）で名指す（#1485）。
 `GPU.Model` を使わない点は AMD についても変わらない。
+
+**Consequences の「`render` グループを常時与える案は採らない」の 1 文は、
+`docs/decisions/20260922/1430-linux-service-user-joins-render.md` が改めた**（#1535）。推論エンジンも同じサービスユーザーで
+動き、AMD / Intel の GPU で計算するのに render ノードが要るため。
+installer がサービスユーザーを `render` に入れる。残りは不変。
 
 ## Context
 

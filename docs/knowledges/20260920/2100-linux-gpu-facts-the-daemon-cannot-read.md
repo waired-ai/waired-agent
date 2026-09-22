@@ -87,6 +87,13 @@ GB10 と Grace には存在しない**（ACPI/UEFI の SBSA で起動するた�
 デーモンは PCI ペアをキーに読み戻す。**`render` グループを常時与える案は
 採らない** — 変わらない事実のために常時の特権を増やさないため。
 
+**訂正（20260922）:** この結論は #1535 で改めた。推論エンジン（ollama）も
+デーモンの子として同じ `waired` で動き、AMD / Intel の GPU で計算するのに
+render ノードが要る。この節はプロファイラの読み取りだけを見ていた。
+installer がサービスユーザーを `render` に入れ、永続化はグループに
+入っていない機械のための下限として残る。
+`docs/decisions/20260922/1430-linux-service-user-joins-render.md`
+
 ## Refs
 
 - https://github.com/waired-ai/waired-agent/issues/459
@@ -96,3 +103,4 @@ GB10 と Grace には存在しない**（ACPI/UEFI の SBSA で起動するた�
 - https://github.com/lmstudio-ai/lms/issues/589
 - docs/decisions/20260920/2000-host-provenance-is-derived-at-chip-granularity.md
 - internal/hardware/integrated_linux.go, internal/runtime/state/gpu_topology.go
+- https://github.com/waired-ai/waired-agent/issues/1535

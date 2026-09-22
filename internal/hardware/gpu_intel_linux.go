@@ -19,9 +19,11 @@ import (
 // i915's DRM_I915_QUERY_MEMORY_REGIONS, the same two queries Mesa's
 // anv/iris use to size local memory. Both are DRM_RENDER_ALLOW, so the
 // only obstacle is the node's mode (0660 root:render on Debian-family
-// systems): the daemon's own reading usually fails, and `sudo waired
-// init` takes it and persists it alongside the integration reading
-// (cmd/waired/init_gpu_topology.go), which is how the daemon gets it.
+// systems). The installer puts the service user in `render` (#1535), so
+// the daemon reads it itself. `sudo waired init` also takes it and
+// persists it alongside the integration reading
+// (cmd/waired/init_gpu_topology.go), the floor for a host whose service
+// user is not in the group.
 //
 // No Intel discrete card has been available to measure this against. The
 // layouts below are transcribed from include/uapi/drm/xe_drm.h and

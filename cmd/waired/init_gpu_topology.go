@@ -9,15 +9,17 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-// Taking the GPU topology reading during `sudo waired init`, because the
-// daemon cannot take it (waired-agent#459).
+// Taking the GPU topology reading during `sudo waired init`, for a daemon
+// that cannot take it itself (waired-agent#459).
 //
 // On Linux the fact — is this accelerator's memory the system's memory?
-// — is behind /dev/dri/renderD*, which is mode 0660 root:render while
-// the unit runs as User=waired with no supplementary groups. An elevated
-// setup can open it; the service never can. So the reading is taken here
-// and persisted, the way host-memory.json persists a measurement the
-// daemon can only take under conditions it has to arrange.
+// — is behind /dev/dri/renderD*, which is mode 0660 root:render on
+// Debian and Ubuntu. The installer puts the service user in `render`
+// (#1535), so the daemon normally reads it live; an elevated setup can
+// always open it. The reading is taken here and persisted, the way
+// host-memory.json persists a measurement the daemon can only take under
+// conditions it has to arrange, as the floor for a host whose service
+// user is not in the group.
 //
 // `init` rather than the installer, because a re-setup is the supported
 // way to re-take it — which is also what makes a swapped GPU stop being

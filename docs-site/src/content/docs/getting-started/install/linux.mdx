@@ -83,6 +83,7 @@ You can add it later with `sudo waired runtimes install ollama`.
 |---|---|
 | Packages | `waired` and `waired-tray`, from Waired's apt repository |
 | Background service | `waired-agent.service` (systemd), starts at boot |
+| Service user | `waired`, added to the `render` group so the engine can use an AMD or Intel GPU |
 | Settings | `/etc/waired` |
 | State | `/var/lib/waired` |
 

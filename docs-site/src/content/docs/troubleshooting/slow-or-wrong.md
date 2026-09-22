@@ -59,10 +59,13 @@ not use that GPU by default, and models are sized for the processor. That is
 the engine's decision, not a detection failure.
 
 On Linux, Waired reads AMD GPUs from the `amdgpu` driver directly, so ROCm
-does not need to be installed for an AMD GPU to be found. An Intel Arc card's
-memory size can only be read with administrator rights there, so it is read
-once when you run `sudo waired init`. Until then the first line says its
-memory size is not known, and models are sized for the processor.
+does not need to be installed for an AMD GPU to be found. The engine reaches
+an AMD or Intel GPU through the `render` group, and the installer adds
+`waired`, the user the service runs as, to that group. If such a GPU is found
+but models still run on the processor, or the first line says an Intel Arc
+card's memory size is not known, run `id waired` and check that `render` is
+listed. If it is not, run `sudo usermod -a -G render waired` and restart the
+service.
 
 To have the engine use a built-in GPU anyway, set `OLLAMA_IGPU_ENABLE=1` for
 the service the same way as `WAIRED_NVIDIA_SMI` below, then restart it. Waired

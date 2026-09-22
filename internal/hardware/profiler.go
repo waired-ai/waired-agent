@@ -562,13 +562,14 @@ func WithIntegratedDetector(fn integratedFrom) Option {
 }
 
 // WithPersistedIntegration injects a reading taken earlier, under
-// privileges this process does not have, keyed by the accelerator's PCI
+// privileges this process may not have, keyed by the accelerator's PCI
 // vendor:device pair (waired-agent#459).
 //
-// The daemon runs as a service user that cannot open /dev/dri/renderD*,
-// so on Linux the live reading is almost always "unknown". `sudo waired
-// init` can open it, takes the reading once and persists it; this is how
-// it gets back. The pair is the key so that swapping the card leaves the
+// The daemon opens /dev/dri/renderD* itself where its service user is in
+// the `render` group, which the installer arranges (#1535). Where it is
+// not, the live reading on Linux is "unknown". `sudo waired init` can
+// always open the node, takes the reading once and persists it; this is
+// how it gets back. The pair is the key so that swapping the card leaves the
 // old entry matching nothing, rather than describing hardware that is
 // gone.
 //
@@ -580,7 +581,7 @@ func WithPersistedIntegration(fn func(pciID string) (integrated, ok bool)) Optio
 }
 
 // WithPersistedVRAM injects a memory reading taken earlier under
-// privileges this process does not have, keyed like the integration
+// privileges this process may not have, keyed like the integration
 // reading above. It fills only a device whose own detector found no
 // memory figure: an Intel discrete card on Linux, whose size the drivers
 // publish only through the render node (waired-agent#1483). A live

@@ -47,7 +47,12 @@ i915 の region info は 4 + 4 + 8 + 8 + 64 バイトの union で **88 バイ�
 
 どちらも `DRM_RENDER_ALLOW` だが、render ノードは Debian 系で 0660
 root:render なので、デーモンからは開けない。`sudo waired init` が 1 度読み、
-`gpu-topology.json` に `vram_total_mb` として残す。AMD の FUSION の読みと
+`gpu-topology.json` に `vram_total_mb` として残す。
+**訂正（20260922）:** デーモンから開けないままでは、エンジンもこのカードを
+開けず、Vulkan で使えなかった。#1535 で installer がサービスユーザーを
+`render` に入れ、デーモンもエンジンも開けるようになった。永続化は、
+グループに入っていない機械のための下限として残る
+（`docs/decisions/20260922/1430-linux-service-user-joins-render.md`）。AMD の FUSION の読みと
 同じ経路である。読めていない単体カードは「使わない GPU」の側に理由つきで置く。
 エンジンは使うかもしれないので、表示は「CPU で動く」とは言わず、
 「メモリ容量が分からない」と言う。

@@ -64,6 +64,27 @@ func TestRenderSystemdUnit_MatchesThePackagedUnitOnRestartPolicy(t *testing.T) {
 	}
 }
 
+// Record of today's design (#1535): neither unit names
+// SupplementaryGroups=. The service user's GPU group comes from the group
+// database, where the postinst and ensureGPUGroups put it; a group named
+// here that the host lacks would stop the unit from starting (exit
+// 216/GROUP).
+func TestSystemdUnits_NameNoSupplementaryGroups(t *testing.T) {
+	packaged, err := os.ReadFile("../../../packaging/systemd/waired-agent.service")
+	if err != nil {
+		t.Fatalf("read the packaged unit: %v", err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*SupplementaryGroups=`)
+	for name, unit := range map[string]string{
+		"packaged": string(packaged),
+		"rendered": renderTestUnit(),
+	} {
+		if re.MatchString(unit) {
+			t.Errorf("the %s unit names SupplementaryGroups=; add the user to the group instead (#1535)", name)
+		}
+	}
+}
+
 // directive returns the value of `key=` in a systemd unit, ignoring comments.
 func directive(unit, key string) string {
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `=(.*)$`)
