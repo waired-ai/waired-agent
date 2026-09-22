@@ -5,8 +5,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
 )
 
@@ -148,4 +150,43 @@ func hfDirOwnedBy(stateDir, dir string) bool {
 	root := filepath.Clean(hfModelsRoot(stateDir))
 	clean := filepath.Clean(dir)
 	return filepath.Dir(clean) == root && filepath.Base(clean) != "." && filepath.Base(clean) != ".."
+}
+
+// hfLocalDir is the on-disk directory the safetensors for a model land in.
+// The repo id's "/" is flattened to "__" so the whole repo maps to a single
+// directory under hfModelsRoot without nesting or traversal risk.
+//
+// A custom model's directory also names its commit: an import pins one, and
+// two imports of one repository at different commits are two models
+// (waired-ai/waired#1473 ruling 2) that must not write into — or delete —
+// each other's weights (waired-ai/waired#1480). A bundled build keeps the
+// directory it always had, so its weights are not downloaded again.
+func (p *agentInferenceProvider) hfLocalDir(modelID string, v catalog.Variant) string {
+	name := strings.ReplaceAll(v.Source.RepoID, "/", "__")
+	if catalog.IsCustomModelID(modelID) && len(v.Source.Revision) >= 12 {
+		name += "@" + v.Source.Revision[:12]
+	}
+	return filepath.Join(hfModelsRoot(p.stateDir), name)
+}
+
+// derivedHFDir is where a model's weights would be for its vLLM record when
+// the record never got as far as naming them: a download that failed, was
+// stopped or never started records no LocalPath, and the shards it finished
+// stay in this directory (waired-ai/waired#1480). "" when the model or its
+// build is not in the catalog, or nothing is on disk there.
+func (p *agentInferenceProvider) derivedHFDir(modelID string, rec catalog.ModelState) string {
+	for _, m := range p.catalogManifests() {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			if v.Source.RepoID == "" || (rec.VariantID != "" && v.VariantID != rec.VariantID) {
+				continue
+			}
+			if dir := p.hfLocalDir(modelID, v); dirExists(dir) {
+				return dir
+			}
+		}
+	}
+	return ""
 }

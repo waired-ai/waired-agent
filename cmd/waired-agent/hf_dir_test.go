@@ -249,3 +249,27 @@ func seedVLLMModels(t *testing.T, store *catalog.Store, models map[string]catalo
 		t.Fatal(err)
 	}
 }
+
+// A download that failed or was stopped names no directory, and the shards it
+// did fetch used to stay on disk after `waired models rm` (waired-ai/waired#1480).
+// The directory the catalog says the build downloads into goes with the
+// record. Record of today's behaviour.
+func TestDeleteModel_RemovesTheDirectoryOfADownloadThatNeverFinished(t *testing.T) {
+	p, store, root := hfDeleteProvider(t, nil)
+	bundled, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.manifests = bundled
+	dir := filepath.Join(root, "RedHatAI__Qwen3.5-9B-quantized.w4a16")
+	writeHFFile(t, dir, "model-00001-of-00002.safetensors", 64)
+	seedVLLMModels(t, store, map[string]catalog.ModelState{
+		"qwen3.5-9b": {VariantID: "w4a16", HFRepo: "RedHatAI/Qwen3.5-9B-quantized.w4a16", State: catalog.ModelStateFailed, Error: "network"},
+	})
+	if err := p.DeleteModel(context.Background(), "qwen3.5-9b"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if exists(dir) {
+		t.Error("the shards of the unfinished download survived `models rm`")
+	}
+}

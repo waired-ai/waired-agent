@@ -6122,7 +6122,16 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	// directory stayed, tens of GB that no record named — #641's shape on
 	// the other engine. Removed before the record for the same reason as
 	// the tag above.
-	if dir := records[catalog.RuntimeVLLM].LocalPath; dir != "" {
+	dir := records[catalog.RuntimeVLLM].LocalPath
+	if rec, ok := records[catalog.RuntimeVLLM]; ok && dir == "" {
+		// A download that never finished names no directory, and the
+		// shards it did fetch stay behind unless this finds them
+		// (waired-ai/waired#1480). CancelPull above has already stopped
+		// this model's own download, and removeHFModelDir waits for any
+		// other writer and keeps a directory another record names.
+		dir = p.derivedHFDir(modelID, rec)
+	}
+	if dir != "" {
 		if err := p.removeHFModelDir(ctx, modelID, dir); err != nil {
 			p.logger.Warn("deleting the weights failed; keeping the model record",
 				"model", modelID, "dir", dir, "err", err)

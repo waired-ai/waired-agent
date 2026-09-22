@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -314,23 +313,6 @@ func (p *agentInferenceProvider) hfLister() download.HFFileLister {
 		return p.hfFiles
 	}
 	return download.DefaultHFFileLister{}
-}
-
-// hfLocalDir is the on-disk directory the safetensors for a model land in.
-// The repo id's "/" is flattened to "__" so the whole repo maps to a single
-// directory under hfModelsRoot without nesting or traversal risk.
-//
-// A custom model's directory also names its commit: an import pins one, and
-// two imports of one repository at different commits are two models
-// (waired-ai/waired#1473 ruling 2) that must not write into — or delete —
-// each other's weights (waired-ai/waired#1480). A bundled build keeps the
-// directory it always had, so its weights are not downloaded again.
-func (p *agentInferenceProvider) hfLocalDir(modelID string, v catalog.Variant) string {
-	name := strings.ReplaceAll(v.Source.RepoID, "/", "__")
-	if catalog.IsCustomModelID(modelID) && len(v.Source.Revision) >= 12 {
-		name += "@" + v.Source.Revision[:12]
-	}
-	return filepath.Join(hfModelsRoot(p.stateDir), name)
 }
 
 // failHFPull records a pull that stopped before it began, the way a failed
