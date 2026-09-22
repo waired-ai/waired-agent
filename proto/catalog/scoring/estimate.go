@@ -33,6 +33,40 @@ type KVEstimate struct {
 	Reason string
 }
 
+// The largest shape the estimate prices. The numbers come from the file a
+// person names, so they are input: a header or config.json that states
+// 2^32 layers is not a model, and pricing it would allocate one entry per
+// stated layer (review of waired-ai/waired#1473, 2026-09-22) or overflow
+// the products below. Published models stay far inside both — a few
+// hundred layers, at most a few hundred heads of at most a few thousand
+// dimensions.
+const (
+	maxLayers  = 4096
+	maxHeads   = 1 << 16
+	maxHeadDim = 1 << 16
+)
+
+// implausibleShape is the reason a stated shape is out of range, or "".
+func implausibleShape(layers, heads, kvHeads, keyLen, valLen uint64) string {
+	switch {
+	case layers > maxLayers:
+		return fmt.Sprintf("the file states %d layers, more than any model has", layers)
+	case heads > maxHeads || kvHeads > maxHeads:
+		return "the file states more attention heads than any model has"
+	case keyLen > maxHeadDim || valLen > maxHeadDim:
+		return "the file states a head dimension larger than any model has"
+	}
+	return ""
+}
+
+// nonNeg is n as a uint64, with a negative config.json value read as 0.
+func nonNeg(n int) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
 // configProbe reads the config.json keys that mark an attention shape the
 // ArchConfig formula does not price. Each is a real family: DeepSeek's
 // latent attention, Nemotron-H's hybrid pattern, Jamba / Falcon-H's
@@ -91,6 +125,11 @@ func EstimateKVFromConfig(data []byte) (KVEstimate, error) {
 	if headDim <= 0 {
 		return unknownKV(est, "config.json gives no head dimension", ""), nil
 	}
+	if r := implausibleShape(nonNeg(c.NumHiddenLayers),
+		max(nonNeg(c.NumAttentionHeads), nonNeg(c.IndexerKVHeads)), nonNeg(c.NumKeyValueHeads),
+		nonNeg(headDim), nonNeg(c.IndexerHeadDim)); r != "" {
+		return unknownKV(est, r, ""), nil
+	}
 	if c.NumKeyValueHeads <= 0 {
 		// Hugging Face's own default: no num_key_value_heads means one KV
 		// head per attention head.
@@ -137,6 +176,9 @@ func EstimateKVFromGGUF(h gguf.Header) KVEstimate {
 	blocks, ok := h.ArchUint("block_count")
 	if !ok || blocks == 0 {
 		return unknownKV(est, "the GGUF header gives no block_count", "")
+	}
+	if r := implausibleShape(blocks, 0, 0, 0, 0); r != "" {
+		return unknownKV(est, r, "")
 	}
 	prefix := arch + "."
 	var recurrent, indexer, sliding bool
@@ -192,6 +234,9 @@ func EstimateKVFromGGUF(h gguf.Header) KVEstimate {
 	if keyLen == 0 || valLen == 0 {
 		return unknownKV(est, "the GGUF header gives a zero head dimension", "")
 	}
+	if r := implausibleShape(0, heads, 0, keyLen, valLen); r != "" {
+		return unknownKV(est, r, "")
+	}
 
 	var kvHeads []int64
 	if arr, ok := h.Arrays[prefix+"attention.head_count_kv"]; ok {
@@ -199,6 +244,11 @@ func EstimateKVFromGGUF(h gguf.Header) KVEstimate {
 			return unknownKV(est, "the per-layer KV head list is shorter than the model", "")
 		}
 		kvHeads = arr[:decoder]
+		for _, n := range kvHeads {
+			if n > maxHeads {
+				return unknownKV(est, implausibleShape(0, 0, uint64(n), 0, 0), "")
+			}
+		}
 	} else {
 		n, ok := h.ArchUint("attention.head_count_kv")
 		if !ok {
@@ -206,6 +256,9 @@ func EstimateKVFromGGUF(h gguf.Header) KVEstimate {
 		}
 		if n == 0 {
 			return unknownKV(est, "the GGUF header gives no KV heads", "")
+		}
+		if r := implausibleShape(0, 0, n, 0, 0); r != "" {
+			return unknownKV(est, r, "")
 		}
 		interval, _ := h.ArchUint("full_attention_interval")
 		if recurrent && interval <= 1 {

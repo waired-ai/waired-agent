@@ -448,6 +448,15 @@ var producerPending = []exemption{
 		"the window a catalog row is priced at; the pickers write it with the agent half of waired-ai/waired#1456"},
 	{reflect.TypeFor[modelrank.PickInput](), "Window",
 		"the window a ranking is for; the pickers write it once the two windows are ranked separately (owner ruling 2026-09-20 on waired-ai/waired#1359)"},
+	// waired-ai/waired#1480. The load-failure reason landed alone, as a
+	// proto PR, ahead of the vLLM start-up diagnosis that writes it. Its
+	// sibling ModelLoadFailure.Reason is owed by the same PR but cannot be
+	// listed: by the name-matching rule above, the many other Reason
+	// fields this repo writes count as its producer. Until that PR every
+	// device sends neither, which readers take as a memory failure with no
+	// figure — what every record meant before the fields existed.
+	{reflect.TypeFor[signer.ModelLoadFailure](), "EngineMaxWindow",
+		"the window the engine said it could hold; written by the vLLM start-up diagnosis of waired-ai/waired#1480"},
 	// waired-agent#69. The contract had to land alone
 	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2),
 	// and there is nothing to publish from yet: hardware.GPU has no

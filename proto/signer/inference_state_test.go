@@ -1155,6 +1155,36 @@ func TestInferenceState_LoadFailures_CanonicalJSON(t *testing.T) {
 		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", reported, out)
 	}
 
+	// waired-ai/waired#1480: a failure that is not memory says so, and a
+	// KV-cache shortfall carries the window the engine could hold. A memory
+	// failure with no figure encodes exactly as above — the two fields are
+	// omitempty, so every record written before them keeps its bytes.
+	reasoned := none
+	reasoned.LoadFailures = []ModelLoadFailure{{
+		ModelID: "custom-x-0123abcd", VariantID: "safetensors", EngineKind: "vllm",
+		EngineVersion: "0.21.0", Reason: LoadFailureMemory, EngineMaxWindow: 61440,
+		FailedAt: "2026-09-22T04:00:00Z",
+	}, {
+		ModelID: "custom-y-89abcdef", VariantID: "safetensors", EngineKind: "vllm",
+		EngineVersion: "0.21.0", Reason: LoadFailureArchitectureUnsupported,
+		FailedAt: "2026-09-22T04:01:00Z",
+	}}
+	const wantReasoned = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"load_failures":[{"model_id":"custom-x-0123abcd","variant_id":"safetensors",` +
+		`"engine_kind":"vllm","engine_version":"0.21.0","failed_at":"2026-09-22T04:00:00Z",` +
+		`"reason":"memory","engine_max_window":61440},` +
+		`{"model_id":"custom-y-89abcdef","variant_id":"safetensors","engine_kind":"vllm",` +
+		`"engine_version":"0.21.0","failed_at":"2026-09-22T04:01:00Z",` +
+		`"reason":"architecture_unsupported"}]}`
+	data, err = json.Marshal(&reasoned)
+	if err != nil {
+		t.Fatalf("marshal with reasons: %v", err)
+	}
+	if got := string(data); got != wantReasoned {
+		t.Errorf("reasoned load-failure encoding drifted:\n got %s\nwant %s", got, wantReasoned)
+	}
+
 	// A payload from an agent that predates the field leaves it nil, and
 	// nil has to mean "this device has not told us", never "this device has
 	// nothing that failed" — the second would let a consumer conclude a

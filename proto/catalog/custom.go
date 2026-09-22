@@ -173,6 +173,12 @@ func ValidateCustomManifest(m Manifest, bundled []Manifest) error {
 	if v.MTPLayers != 0 || v.MTPKVBytesPerTokenFP16 != 0 || v.MTPDraftTokens != 0 {
 		return fmt.Errorf("custom model %s: multi-token prediction is not carried on a custom model", m.ModelID)
 	}
+	if err := validCustomLicense(m.License); err != nil {
+		return fmt.Errorf("custom model %s: %w", m.ModelID, err)
+	}
+	if !customVLLMDTypes[v.DType] {
+		return fmt.Errorf("custom model %s: dtype %q is not one vLLM accepts", m.ModelID, v.DType)
+	}
 	if err := validateCustomSource(m.ModelID, v, false); err != nil {
 		return err
 	}
@@ -266,8 +272,51 @@ func validCustomDisplayName(name string) error {
 		if unicode.IsControl(r) {
 			return errors.New("display_name contains a control character")
 		}
+		// Format characters (zero-width spaces and joiners, bidi
+		// overrides and isolates), private-use characters and the line
+		// and paragraph separators render as nothing or reorder the
+		// text around them, so a name holding one can look exactly like
+		// a bundled model's or a teammate's (review of
+		// waired-ai/waired#1473, 2026-09-22).
+		if unicode.In(r, unicode.Cf, unicode.Co, unicode.Zl, unicode.Zp) {
+			return errors.New("display_name contains an invisible or formatting character")
+		}
 	}
 	return nil
+}
+
+// CustomNameKey is the form two custom-model names are compared in: without
+// case, and with every run of whitespace (any Unicode space, including the
+// full-width one) read as one ASCII space. "Qwen3 8B" and "qwen3  8b" are
+// the same name to a person reading a list, so they are the same name here
+// — for the bundled-name clash and for the control plane's per-account
+// uniqueness alike.
+func CustomNameKey(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
+}
+
+// maxCustomLicenseBytes bounds Manifest.License on a custom model. The
+// control plane copies it from the model card, which is free text of any
+// size; a license identifier ("apache-2.0", "llama3.1", "other") is short.
+const maxCustomLicenseBytes = 64
+
+func validCustomLicense(license string) error {
+	if len(license) > maxCustomLicenseBytes {
+		return fmt.Errorf("license is longer than %d bytes", maxCustomLicenseBytes)
+	}
+	for i := 0; i < len(license); i++ {
+		if c := license[i]; c < 0x20 || c > 0x7e {
+			return errors.New("license is not printable ASCII")
+		}
+	}
+	return nil
+}
+
+// customVLLMDTypes are the --dtype values a custom vLLM build may carry.
+// The control plane sets none today; the list is what vLLM's own flag
+// accepts, so the agent never passes it anything else.
+var customVLLMDTypes = map[string]bool{
+	"": true, "auto": true, "half": true, "float16": true, "bfloat16": true, "float": true, "float32": true,
 }
 
 // customNameClash refuses a custom id or display name that any bundled
@@ -277,21 +326,21 @@ func validCustomDisplayName(name string) error {
 func customNameClash(m Manifest, bundled []Manifest) error {
 	taken := map[string]string{}
 	for _, b := range bundled {
-		taken[strings.ToLower(b.ModelID)] = b.ModelID
+		taken[CustomNameKey(b.ModelID)] = b.ModelID
 		if b.DisplayName != "" {
-			taken[strings.ToLower(b.DisplayName)] = b.ModelID
+			taken[CustomNameKey(b.DisplayName)] = b.ModelID
 		}
 		for _, a := range b.ModelAliases {
-			taken[strings.ToLower(a)] = b.ModelID
+			taken[CustomNameKey(a)] = b.ModelID
 		}
 	}
 	for _, r := range Retirements() {
 		for _, n := range r.Names {
-			taken[strings.ToLower(n)] = "retired " + n
+			taken[CustomNameKey(n)] = "retired " + n
 		}
 	}
 	for _, name := range []string{m.ModelID, m.DisplayName} {
-		if owner, ok := taken[strings.ToLower(name)]; ok {
+		if owner, ok := taken[CustomNameKey(name)]; ok {
 			return fmt.Errorf("custom model %s: %q is already a bundled or retired name (%s)", m.ModelID, name, owner)
 		}
 	}
