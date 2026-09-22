@@ -118,7 +118,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Mode = string(s.ollama.Mode())
 		tuning := s.ollama.AppliedTuning()
 		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
-		out.ServedWindow = tuning.ContextLength
+		out.ServedWindow, out.ServedModelID = tuning.ContextLength, tuning.ModelID
 		return out
 	}
 	out.Engine = s.provider.servingEngine()
@@ -130,7 +130,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		}); ok {
 			tuning := tuner.AppliedTuning()
 			out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
-			out.ServedWindow = tuning.ContextLength
+			out.ServedWindow, out.ServedModelID = tuning.ContextLength, tuning.ModelID
 		}
 		// nil in unit tests that build a bare provider; production always
 		// has one. An unknown version reports none rather than ollama's.
@@ -147,7 +147,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Mode = string(s.ollama.Mode())
 		tuning := s.ollama.AppliedTuning()
 		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
-		out.ServedWindow = tuning.ContextLength
+		out.ServedWindow, out.ServedModelID = tuning.ContextLength, tuning.ModelID
 	}
 	return out
 }
@@ -179,6 +179,9 @@ type engineProvenance struct {
 	// is a standing fact about it rather than an event
 	// (waired-ai/waired#1456). 0 when nothing has been tuned.
 	ServedWindow int
+	// ServedModelID is the model the engine was tuned for, so a surface can
+	// tell a custom model's short window from any other (waired-ai/waired#1481).
+	ServedModelID string
 }
 
 // servingFailureReason is why the engine this host serves with is not

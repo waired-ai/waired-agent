@@ -987,6 +987,36 @@ var engineRequestShapeMarkers = []string{
 	"system message must be at the beginning",
 }
 
+// engineContextOverflowMarkers identify an engine's own refusal of a
+// prompt longer than the context window it serves. The gateway's guard
+// counts approximately (CountOpenAIPromptTokensApprox) and can let such a
+// prompt through; the engine counts exactly and refuses it. Said as the
+// engine says it, that refusal reaches Claude Code as a raw API error and
+// no compaction happens; said as the gateway's own over-window 400, the
+// client compacts and sends the turn again (waired-ai/waired#1481 item 4).
+//
+// Same narrowness rule as the lists above: add to it only from an observed
+// run or the pinned engine's own source, and say which.
+var engineContextOverflowMarkers = []string{
+	// vLLM v0.29.0 (the pin, internal/runtime/vllm_pins.go),
+	// vllm/renderers/params.py: a VLLMValidationError, answered 400, that
+	// reads "This model's maximum context length is N tokens. However, you
+	// requested …". ollama's path truncates instead of refusing, so it has
+	// no entry.
+	"This model's maximum context length is",
+}
+
+// IsEngineContextOverflow reports whether an upstream error body is the
+// engine refusing a prompt longer than its context window.
+func IsEngineContextOverflow(body string) bool {
+	for _, m := range engineContextOverflowMarkers {
+		if strings.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsEngineRequestShapeRejection reports whether an upstream error body
 // shows the engine refusing the shape of the request we sent — a
 // deterministic rejection that fails identically on every attempt, so
