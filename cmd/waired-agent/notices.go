@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -152,14 +153,32 @@ func (p *agentInferenceProvider) loadFailureNotices(ctx context.Context) []notic
 	if !blocked {
 		return nil
 	}
+	name := p.noticeModelName(rec.ModelID)
 	if rec.Kind != "" && rec.Kind != signer.LoadFailureMemory {
 		// Not memory: a smaller model is not the answer, and "ran out of
 		// memory" would be false (waired-ai/waired#1480).
-		return []notice.Notice{notice.ModelCouldNotStart(rec.ModelID, rec.Reason)}
+		return []notice.Notice{notice.ModelCouldNotStart(name, rec.Reason)}
 	}
 	return []notice.Notice{
-		notice.ModelDidNotLoad(rec.ModelID, p.smallerAlternative(ctx, rec), rec.Reason),
+		notice.ModelDidNotLoad(name, p.smallerAlternative(ctx, rec), rec.Reason),
 	}
+}
+
+// noticeModelName is how a notice names modelID: a custom model by the name
+// the person gave it in the console, as the deleted-model notice already
+// does, and every other model by its id. On real hardware the "did not
+// start" notice named a custom model "custom-qwen3-0.6b-2bd1505a", an id
+// the person never typed (waired-ai/waired#1482).
+func (p *agentInferenceProvider) noticeModelName(modelID string) string {
+	if p == nil || !catalog.IsCustomModelID(modelID) {
+		return modelID
+	}
+	for _, m := range p.catalogManifests() {
+		if m.ModelID == modelID && m.DisplayName != "" {
+			return m.DisplayName
+		}
+	}
+	return modelID
 }
 
 // showable is the predicate every other surface already applies: a

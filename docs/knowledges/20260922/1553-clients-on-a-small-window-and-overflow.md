@@ -55,6 +55,25 @@
   実際のトークン数とバイト数 ÷ 4 の比による。この計測のスタブは報告する使用量もバイト数 ÷ 4 で返したので、
   その比は確かめていない。取り置き(最大 8,192)がその差の余裕になる。
 
+### 実機での確認と、版による違い(追記 20260922)
+
+16 GB の M4 Mac mini で、40,960 トークンのカスタムモデル(Qwen3-0.6B GGUF Q4_K_M)を ollama で動かし、
+Waired のゲートウェイ越しに `claude -p` と `--continue` を送った(Claude Code 2.1.251、API キーはダミー)。
+
+- **2.1.251 は超過の 400 で要約しない。** 1 ターン目が収まり、2 ターン目で履歴が超えたとき、400 を 1 回受けた
+  時点で `Prompt is too long` を出して終わった(終了コード 1、要求はその 1 件だけ、ループなし)。スタブで測った
+  2.1.278 の自動の要約と送り直しは、この版には無い。1 ターン目そのものが超えたときの表示は
+  `Prompt is too long · this conversation is a single exchange and cannot be compacted — …`。
+- **固定の重さは設定で増える。** このコンピュータ(スキルと managed settings のフックあり)では、
+  ゲートウェイの見積もり(バイト数 ÷ 4)で最初の要求が約 21,000〜30,000 トークンだった(約 41 KB の本文を足して
+  収まり、約 78 KB を足して超えた)。上の 15,000 はツールと system だけの下限と読む。
+- **ゲートウェイ側は期待どおり。** Anthropic 形で `capability_rejected: prompt_too_long`、OpenAI 形で
+  `context_length_exceeded`。vLLM の Linux ホストでは、見積もりをすり抜けた長さ(CJK 50,000 文字、見積もり
+  37,500)でエンジン自身が返す `This model's maximum context length is …` も、両形とも同じ超過の 400 に写り、
+  `X-Waired-Local-Error: context_overflow` が付いた。
+- OpenCode 1.18.30 は、`waired link opencode` のあとで `waired/local` を `context` 40,960 / `output` 8,192、
+  名指ししない行を 200,704 / 0 と読んだ(`opencode models waired --verbose`)。
+
 ### 反映したこと(waired-ai/waired#1481)
 
 - 名前つきの行(`waired/local`、`waired/peer-<名前>`)は、200,704 未満のカスタムモデルを動かすコンピュータの
