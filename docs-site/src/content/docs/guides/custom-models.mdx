@@ -96,14 +96,18 @@ A coding agent's session is sized for 200,704 tokens. A model with a smaller
 context window still runs, and the console says so wherever you choose one.
 Waired holds each turn to the model's own window: a larger turn is answered
 `prompt is too long`. What the coding agent does then differs (measured with
-Claude Code 2.1.278 and OpenCode 1.18.30):
+Claude Code 2.1.278, Claude Code 2.1.251 and OpenCode 1.18.30):
 
-- **Claude Code** summarizes the conversation by itself (it calls this
+- **Claude Code** 2.1.278 summarizes the conversation by itself (it calls this
   compacting) and sends the turn again. When even the summary request is too
   long, it drops the oldest part of the conversation and tries again. When the
-  turn still doesn't fit after that, it stops with `Prompt is too long`. Claude
-  Code's own instructions and tool list take about 15,000 tokens of every
-  request, so a model with a much smaller window can't take even a first turn.
+  turn still doesn't fit after that, it stops with `Prompt is too long`.
+  Claude Code 2.1.251 doesn't compact: it stops with `Prompt is too long` at
+  the first turn that doesn't fit. With either, run `/compact` before a turn
+  that adds a lot, or start a new session. Claude Code's own instructions and
+  tool list take at least about 15,000 tokens of every request, and more with
+  the skills and tools you add: 21,000 to 30,000 on one test computer. A model
+  with a much smaller window can't take even a first turn.
 - **OpenCode and OpenClaw** are told a window per entry. The entries that name
   that computer (`waired/local`, `waired/peer-<name>`) carry the model's own
   window, so they summarize before reaching it. The entries that name no
