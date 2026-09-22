@@ -8,27 +8,31 @@ import (
 	"path/filepath"
 )
 
-// The GPU topology reading, kept on disk because the daemon cannot take
-// it (waired-agent#459, #1455).
+// The GPU topology reading, kept on disk for a daemon that cannot take
+// it itself (waired-agent#459, #1455).
 //
 // WHAT IT IS FOR. internal/hardware asks, per accelerator, whether its
 // memory and the operating system's RAM are one physical pool. On Linux
 // the answer is a first-class kernel fact — AMDGPU_IDS_FLAGS_FUSION,
 // read through DRM_IOCTL_AMDGPU_INFO — and it is behind a device node
-// the product cannot open: /dev/dri/renderD* is mode 0660 root:render,
-// and the unit runs as User=waired with no supplementary groups. So the
-// daemon reads "unknown" forever, which is safe but never improves.
+// that is mode 0660 root:render on Debian and Ubuntu.
 //
-// WHY PERSIST RATHER THAN GRANT THE GROUP. The answer never changes for
-// a given part, so a standing privilege would buy nothing a single read
-// cannot. `sudo waired init` is already the elevated path, already the
+// WHY IT IS STILL HERE. It was written when the unit's User=waired had
+// no supplementary groups, so the daemon read "unknown" forever, and a
+// standing group for a fact that never changes did not seem worth it.
+// The engine settled that: it runs as the same user and needs the node
+// to compute on the GPU at all, so the installer now puts the user in
+// `render` (#1535, docs/decisions/20260922/1430-linux-service-user-joins-render.md)
+// and the daemon reads the fact live. This record is the floor for a
+// host whose service user is not in the group; a live reading still wins.
+// `sudo waired init` is already the elevated path, already the
 // documented way to re-run setup, and already writes state that
 // service_linux.go's FixStateOwnership chowns back to the service user.
 // A re-setup re-takes the reading, which is also how a swapped GPU stops
 // being described by a stale one.
 //
 // SAME SHAPE AS host-memory.json, and for the same reason: a reading
-// that can only be taken under conditions the daemon cannot arrange
+// that can only be taken under conditions the daemon may not have
 // belongs on disk, taken once, with enough beside it to know when it
 // stopped applying.
 

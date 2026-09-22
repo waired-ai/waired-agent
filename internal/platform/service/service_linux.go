@@ -96,9 +96,12 @@ func (m *linuxManager) Install(cfg Config) error {
 		user = linuxServiceUser
 	}
 
-	// 1. Ensure the service user exists.
+	// 1. Ensure the service user exists, in the GPU groups this host has.
 	if err := ensureSystemUser(user, cfg.StateDir); err != nil {
 		return fmt.Errorf("ensure user %q: %w", user, err)
+	}
+	if err := ensureGPUGroups(user, groupExists, joinGroup); err != nil {
+		return err
 	}
 
 	// 2. State dir + secrets subdir, owned by the service user.
@@ -202,6 +205,8 @@ func renderSystemdUnit(cfg Config, user string) string {
 	// than by the .deb got a unit that drops into failed on a model switch.
 	fmt.Fprintf(&b, "SuccessExitStatus=%d\n", RestartRequestedExitCode)
 	fmt.Fprintf(&b, "RestartForceExitStatus=%d\n", RestartRequestedExitCode)
+	// No SupplementaryGroups=: the GPU group comes from the group
+	// database, where Install puts the user (ensureGPUGroups, #1535).
 	fmt.Fprintln(&b, "User="+user)
 	fmt.Fprintln(&b, "Group="+user)
 	fmt.Fprintln(&b, "EnvironmentFile=-"+LinuxEnvFilePath)
@@ -244,6 +249,58 @@ func ensureSystemUser(name, home string) error {
 	).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("useradd %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// linuxServiceGPUGroups are the groups the service user joins. The
+// inference engine is the daemon's child and runs as the same user, and
+// it reaches an AMD or Intel GPU through /dev/dri/renderD* (and /dev/kfd
+// for ROCm), which Debian and Ubuntu make 0660 root:render. Without the
+// group the engine cannot see the GPU and runs on the CPU (#1535). Only
+// `render`: `video` also opens cameras and the display, and computing
+// does not need it (owner decision, #1535). The .deb's postinst does the
+// same.
+var linuxServiceGPUGroups = []string{"render"}
+
+// ensureGPUGroups adds user to each of linuxServiceGPUGroups that exists
+// on this host. An absent group is skipped, not created: systemd creates
+// `render` itself. It is also why the unit names no
+// SupplementaryGroups=, which would stop the unit from starting on a
+// host without the group (exit 216/GROUP). systemd applies a User='s
+// groups from the group database, so membership is enough.
+func ensureGPUGroups(user string, exists func(group string) bool, join func(user, group string) error) error {
+	for _, g := range linuxServiceGPUGroups {
+		if !exists(g) {
+			continue
+		}
+		if err := join(user, g); err != nil {
+			return fmt.Errorf("add user %q to group %q: %w", user, g, err)
+		}
+	}
+	return nil
+}
+
+// groupExists reports whether the group database knows name.
+func groupExists(name string) bool {
+	getent, err := exec.LookPath("getent")
+	if err != nil {
+		return false
+	}
+	return exec.Command(getent, "group", name).Run() == nil
+}
+
+// joinGroup adds user to group and keeps its other groups (usermod -a).
+// usermod succeeds when the user is already a member, so a re-install
+// is harmless.
+func joinGroup(user, group string) error {
+	usermod, err := exec.LookPath("usermod")
+	if err != nil {
+		return fmt.Errorf("usermod not found: %w", err)
+	}
+	out, err := exec.Command(usermod, "-a", "-G", group, user).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("usermod -a -G %s %s: %w: %s", group, user, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

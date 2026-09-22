@@ -88,6 +88,7 @@ var declared = []lookpath{
 	{"internal/platform/servicediag/collect_linux.go", "journalctl", systemTool},
 	{"internal/platform/service/service_linux.go", "useradd", systemTool},
 	{"internal/platform/service/service_linux.go", "getent", systemTool},
+	{"internal/platform/service/service_linux.go", "usermod", systemTool},
 	{"internal/platform/service/service_linux.go", "chown", systemTool},
 	{"internal/proxy/trust/install_linux.go", "update-ca-certificates", systemTool},
 	{"internal/platform/trayhost/repair_linux.go", "apt-get", systemTool},

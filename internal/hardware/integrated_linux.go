@@ -43,16 +43,16 @@ import (
 // AMD acknowledges the gap: ROCm/rocm-systems#8476, "APUs are not
 // identifiable through amdsmi", open.
 //
-// WHO CAN READ IT. The render node is mode 0660 root:render. The daemon
-// runs as User=waired with no supplementary groups, so it cannot open
-// it, and granting it the group standing would buy a privilege for the
-// sake of a fact that never changes. Instead `sudo waired init` — which
-// is already the elevated path, and already writes state that
-// service_linux.go's FixStateOwnership chowns back — takes the reading
-// once and persists it, the way host-memory.json persists the
-// available-memory measurement. This function is still called on every
-// profile: where the node does happen to open it is the better source,
-// and where it does not the answer is UNKNOWN, never "discrete".
+// WHO CAN READ IT. The render node is mode 0660 root:render on Debian
+// and Ubuntu. The daemon runs as User=waired, which the installer puts
+// in `render` (#1535): the inference engine runs as the same user and
+// needs the node to compute on the GPU at all, so the daemon can read
+// this itself. `sudo waired init` also takes the reading once and
+// persists it, the way host-memory.json persists the available-memory
+// measurement; that is the floor for a host whose service user is not
+// in the group. This function is still called on every profile: where
+// the node opens it is the better source, and where it does not the
+// answer is UNKNOWN, never "discrete".
 
 // Constants transcribed from include/uapi/drm/amdgpu_drm.h.
 const (

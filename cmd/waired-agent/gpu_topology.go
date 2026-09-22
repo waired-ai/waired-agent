@@ -4,14 +4,15 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
-// The GPU topology reading the daemon cannot take, read back from where
-// an elevated setup left it (waired-agent#459).
+// The GPU topology reading an elevated setup took, read back for a daemon
+// that could not take it itself (waired-agent#459).
 //
-// The daemon runs as a service user with no access to /dev/dri/renderD*,
-// so its own reading of "is this accelerator's memory the system's
-// memory?" is almost always unknown on Linux. `sudo waired init` can
-// open the node, takes the reading once and writes gpu-topology.json;
-// this is the read side.
+// The daemon opens /dev/dri/renderD* itself where its service user is
+// in the `render` group, which the installer arranges (#1535). Where it
+// is not, its own reading of "is this accelerator's memory the system's
+// memory?" is unknown on Linux. `sudo waired init` can open the node,
+// takes the reading once and writes gpu-topology.json; this is the read
+// side, and a live reading still wins over it.
 //
 // Read per profiler construction rather than cached in a package
 // variable, for the reason hostMemoryMeasurement is: the same process
@@ -36,7 +37,8 @@ func persistedGPUIntegration(stateDir string) func(pciID string) (bool, bool) {
 }
 
 // persistedGPUVRAM is the same record's memory reading, for the parts
-// whose size the daemon cannot read either (waired-agent#1483).
+// whose size the daemon may not be able to read either
+// (waired-agent#1483).
 func persistedGPUVRAM(stateDir string) func(pciID string) (int, bool) {
 	return func(pciID string) (int, bool) {
 		rec, err := state.ReadGPUTopology(stateDir)

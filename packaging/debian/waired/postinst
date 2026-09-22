@@ -15,6 +15,16 @@ case "$1" in
         --gecos "Waired agent" \
         waired
     fi
+    # The inference engine runs as this user and reaches an AMD or Intel
+    # GPU through /dev/dri/renderD* (and /dev/kfd for ROCm). Debian and
+    # Ubuntu make those 0660 root:render, so without the group the engine
+    # cannot see the GPU and runs on the CPU (#1535). Outside the guards
+    # above, so an upgrade adds an existing user too; only when the group
+    # exists. Not `video`: it also opens cameras and the display, and
+    # computing does not need it (owner decision, #1535).
+    if getent group render >/dev/null; then
+      usermod -a -G render waired
+    fi
 
     install -d -m 0750 -o waired -g waired /var/lib/waired
     # Recursive, not just the top dir: a root `sudo waired init` driven

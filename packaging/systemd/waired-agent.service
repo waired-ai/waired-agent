@@ -10,6 +10,11 @@ EnvironmentFile=-/etc/waired/agent.env
 ExecStart=/usr/bin/waired-agent --state-dir /var/lib/waired
 User=waired
 Group=waired
+# No SupplementaryGroups=: the engine reaches an AMD or Intel GPU through
+# the `render` group, which postinst adds waired to where the group exists
+# (#1535), and systemd applies a User='s groups from the group database.
+# Naming a group here that the system lacks would stop the unit from
+# starting (exit 216/GROUP).
 # Restart=always (not on-failure): a management-API-driven reconfigure exits
 # cleanly via SIGTERM (exit 0), and the proxy enable/disable + preferred-model
 # flows rely on systemd bringing the agent back after that clean exit.

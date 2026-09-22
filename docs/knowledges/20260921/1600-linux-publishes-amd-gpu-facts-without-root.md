@@ -69,6 +69,8 @@ revision は載っていない（検証機の 13C0 も無い）。だから名�
 システム RAM の速度とバス幅を知りたいときはここを読むことになるが、
 これだけは root が要る。render ノードの ioctl は Debian 系で 0660
 root:render なので、デーモン（`User=waired`、補助グループ無し）からは開けない。
+**訂正（20260922）:** #1535 以後は installer がサービスユーザーを `render` に
+入れるので、デーモンも開ける（`docs/decisions/20260922/1430-linux-service-user-joins-render.md`）。
 
 ### 6. Windows には同じものが無い
 

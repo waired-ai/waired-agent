@@ -57,7 +57,8 @@ const unusedIntegratedReason = "the engine uses an integrated GPU by default onl
 
 // unreadIntelMemoryReason is the Reason an Intel card whose memory size
 // could not be read carries. On Linux the size comes from the driver's
-// query on the render node, which `sudo waired init` can open.
+// query on the render node, which the service opens through the render
+// group (#1535) and `sudo waired init` can open regardless.
 const unreadIntelMemoryReason = "its memory size could not be read, so models are not sized for it; on Linux, running `sudo waired init` reads it"
 
 // UnusedGPU is a GPU that was detected but that the host is not

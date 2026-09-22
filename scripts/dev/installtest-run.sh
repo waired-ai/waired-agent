@@ -377,6 +377,25 @@ wait_log_level() {
   return 1
 }
 
+# The engine runs as `waired` and opens an AMD or Intel GPU through the
+# render group (#1535). postinst adds the user wherever the group exists;
+# a guest without the group has nothing to assert.
+assert_render_group() {
+  local guest="$1" v
+  if ! gx "$guest" getent group render >/dev/null 2>&1; then
+    it_log "no render group in $guest; skipping the service user's GPU group check"
+    return
+  fi
+  v=$(gx "$guest" id -nG waired 2>/dev/null || true)
+  case " $v " in
+    *" render "*) ok "service user in the render group" ;;
+    *) bad "service user not in the render group (groups: $v)" ;;
+  esac
+  case " $v " in
+    *" video "*) bad "service user in the video group (#1535 keeps it out)" ;;
+  esac
+}
+
 assert_tier1() {
   local guest="$1" v
   gx "$guest" dpkg -s waired >/dev/null 2>&1 && ok "package waired installed" || bad "package waired NOT installed"
@@ -388,6 +407,7 @@ assert_tier1() {
     gx "$guest" journalctl -u waired-agent --no-pager -n 30 2>&1 | sed 's/^/    /' || true
   fi
   gx "$guest" id waired >/dev/null 2>&1 && ok "service user 'waired' exists" || bad "service user 'waired' missing"
+  assert_render_group "$guest"
   v=$(gx "$guest" stat -c '%U:%G' /var/lib/waired 2>/dev/null || true)
   [ "$v" = "waired:waired" ] && ok "state dir owned by waired:waired" || bad "state dir owner = $v (want waired:waired)"
   # postinst creates 0750; the daemon tightens the tree to 0700 at boot
@@ -747,9 +767,12 @@ assert_postinst_selfheal() {
   gx "$guest" install -d -m 0700 /var/lib/waired/secrets
   gx "$guest" sh -c 'echo tok > /var/lib/waired/secrets/access_token && chmod 0600 /var/lib/waired/secrets/access_token'
   gx "$guest" chown -R root:root /var/lib/waired
+  # And an install whose user predates #1535: an upgrade adds the group.
+  gx "$guest" gpasswd -d waired render >/dev/null 2>&1 || true
   if ! gx "$guest" dpkg-reconfigure -fnoninteractive waired >/dev/null 2>&1; then
     bad "dpkg-reconfigure waired failed"; return
   fi
+  assert_render_group "$guest"
   stray=$(gx "$guest" find /var/lib/waired ! -user waired 2>/dev/null || true)
   if [ -z "$stray" ]; then
     ok "postinst re-run reclaims root-owned state tree (self-heal)"
