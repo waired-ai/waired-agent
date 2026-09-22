@@ -52,7 +52,8 @@ the model it has. `waired/local` is offered only where this computer has an
 engine and local inference is on, and `waired/public` only where you have
 turned Public Share on. There is one `waired/peer-<name>` entry per computer
 of yours that is serving right now with a context window of at least 200,704
-tokens.
+tokens, or running a [custom model](/guides/custom-models/) whose own window
+is smaller.
 
 If the computer an entry names cannot answer, the turn fails and says so
 rather than quietly running somewhere else.
@@ -110,17 +111,28 @@ Every entry uses only a computer whose context window holds 200,704 tokens,
 and every `[1m]` entry only one that holds 1,048,576. That includes
 `waired/local` and `waired/peer-<name>`. A computer serving less, such as one
 whose VRAM cannot hold 200,704 tokens with the model it runs, answers none of
-the entries, not even `waired/local` on itself.
+the entries, not even `waired/local` on itself. The one exception is a
+computer running a custom model whose own context window is below 200,704
+tokens: it answers `waired/local` on itself and its own `waired/peer-<name>`,
+at that window.
 
 The plugin gives each entry its window as `limit.context`, taken from the
-entry's name alone: 1048576 on every `[1m]` entry and 200704 on every other
-one, including the `waired/default` entry the list falls back to when Waired
-is not running. OpenCode compacts the conversation before that window. The
+entry's name: 1048576 on every `[1m]` entry and 200704 on every other one,
+including the `waired/default` entry the list falls back to when Waired is
+not running. OpenCode compacts the conversation before that window. The
 window does not depend on which computer answers. A turn on an entry without
 `[1m]` that grows past 200,704 tokens is answered `prompt is too long` even on
 a computer that holds 1M. The list at
 `http://127.0.0.1:9473/v1/models` states the same numbers as
 `max_input_tokens`.
+
+The two entries that name a computer running a custom model below 200,704
+tokens are the exception: the plugin gives `waired/local` and
+`waired/peer-<name>` that model's window as `limit.context`, taken from the
+list's `max_input_tokens`, and a smaller output limit with it, at most 8,192
+tokens or a quarter of the window when that is less. See
+[Small context windows](/guides/custom-models/#small-context-windows) for what
+OpenCode does with them.
 
 The plugin shows the any-computer entry as `waired/default`, so a config
 written against it keeps working, and sends it as `waired`, the id Claude
@@ -136,6 +148,21 @@ not the problem:
 ```
 None of your computers that could take this turn has a context window of 200704 tokens, which the model you picked needs.
 ```
+
+`waired init`, `waired link` and `waired doctor --fix` rewrite a plugin that
+an older version of Waired wrote, and say so:
+
+```
+Updated OpenCode's Waired plugin.
+```
+
+`waired doctor` warns while the plugin is out of date:
+
+```
+⚠ opencode plugin — the plugin was written by an older version of Waired
+```
+
+Press `f` to bring it up to date.
 
 ## What it changed
 

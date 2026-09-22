@@ -44,14 +44,18 @@ The entries name a **computer**, not a model: whichever computer answers runs
 the model it has. `waired/local` is offered only where this computer has an
 engine and local inference is on, and `waired/public` only where you have
 turned Public Share on. There is one `waired/peer-<name>` entry per computer
-of yours that was serving, with a context window of at least 200,704 tokens,
-when you linked.
+of yours that was serving when you linked, with a context window of at least
+200,704 tokens or running a [custom model](/guides/custom-models/) whose own
+window is smaller.
 
 If the computer an entry names cannot answer, the turn fails and says so
 rather than quietly running somewhere else. Every entry, `waired/local` and
 `waired/peer-<name>` included, uses only a computer whose context window holds
 200,704 tokens, and every `[1m]` entry only one that holds 1,048,576; when none
-does, the turn fails and says which window it needed. The list is the one
+does, the turn fails and says which window it needed. The one exception is a
+computer running a custom model whose own context window is below 200,704
+tokens: it answers `waired/local` on itself and its own `waired/peer-<name>`,
+at that window. The list is the one
 Claude Code shows in `/model`; see
 [How a Claude Code turn is routed](/guides/claude-code/how-turns-are-routed/)
 for what each row means.
@@ -103,10 +107,15 @@ copy as they are.
 
 The plugin records a context window for each Waired entry, so OpenClaw
 compacts your conversation before the window the entry states and not
-earlier. The window comes from the entry's name alone: every `[1m]` entry
-states 1048576 tokens, and every other entry states 200704, `waired/local`
-and `waired/peer-<name>` included. Those are the windows Waired holds the
-entries to, whichever computer answers.
+earlier. The window comes from the entry's name: every `[1m]` entry states
+1048576 tokens, and every other entry states 200704, `waired/local` and
+`waired/peer-<name>` included. Those are the windows Waired holds the entries
+to, whichever computer answers. The one exception is an entry that names a
+computer running a custom model whose own window is below 200,704 tokens: it
+states that model's window, written when you link like the rest of the list.
+Sending turns through OpenClaw to such a model has not been measured; see
+[Small context windows](/guides/custom-models/#small-context-windows) for what
+was.
 
 The entries are written when you link. During first-time setup this computer
 is usually not serving yet, so the plugin starts with `waired/default` alone,
@@ -122,8 +131,8 @@ Updated OpenClaw's list of Waired models and their context windows.
 lines:
 
 ```
-! openclaw context window   the plugin was written by an older version of Waired
-! openclaw context window   the plugin's list of Waired models is out of date
+⚠ openclaw context window — the plugin was written by an older version of Waired
+⚠ openclaw context window — the plugin's list of Waired models is out of date
 ```
 
 Press `f` to bring it up to date.

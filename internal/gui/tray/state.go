@@ -2666,6 +2666,8 @@ func catalogPickTooltip(f management.CatalogFamily) string {
 				"system RAM on every reply, so replies are slower. Not recommended for this computer."
 		case hostfit.ReasonTooSlow:
 			return "It fits, but this computer would be slow with it. Not recommended here."
+		case hostfit.ReasonModelWindowShort:
+			return "It runs here, but its own context window is under the 200,704 tokens a coding agent's session is sized for, so a session overflows it on every turn. Not recommended here."
 		case hostfit.ReasonWindowExceedsMemory:
 			return "It runs and answers well, but this computer can't hold the " +
 				"200,704-token window with it, so Waired won't send coding-agent " +

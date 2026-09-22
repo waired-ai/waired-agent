@@ -15,7 +15,7 @@ func TestRenderEntry_BaseURLAndHooks(t *testing.T) {
 		`const BASE_URL = "http://127.0.0.1:9473/v1";`,
 		`SYNTHETIC_KEY = "waired-local"`,
 		`const MODELS = [{"key":"default","name":"Waired"}];`,
-		`const PLUGIN_REV = 3;`,
+		`const PLUGIN_REV = 4;`,
 		// The any-computer row and its twin are sent as the ids Claude Code
 		// sends, which carry the row's window floor; waired/default itself is
 		// the no-floor alias chat apps send (waired-agent#1395).

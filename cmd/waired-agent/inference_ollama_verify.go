@@ -174,6 +174,13 @@ type ollamaVerifyDeps struct {
 	// run (draftToRewrite). It returns at once; the pull runs in the
 	// background. nil skips the repair.
 	RestampDraft func(tag string, v catalog.Variant, draft int)
+	// HostResidentMiB reads, off the file tag resolves to, the input-layer
+	// weights llama.cpp keeps in system RAM on every load
+	// (gguf.HostResidentBytes). The spill check asks it only when the plan
+	// has no figure of its own — a build whose manifest does not carry
+	// host_resident_weight_gb, which is every custom model. nil or ok=false
+	// leaves the plan's 0.
+	HostResidentMiB func(tag string) (float64, bool)
 }
 
 // draftToRewrite reports the draft v's tag should be pulled again with,
@@ -337,14 +344,25 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// /api/ps cannot tell a spill from its own omissions, so the check
 	// abstains rather than guess.
 	if accelerated && placed {
-		moved := place.HostWeightsMiB - float64(t.HostWeightsMB)
+		// A build whose manifest does not state its input-layer weights —
+		// a custom model — was planned with none in system RAM and all of
+		// them on the device. The file says what they are. Without this the
+		// ~120 MiB embedding of a 0.6B model read as a spill on a 96 GB
+		// card with every layer offloaded (waired-ai/waired#1481).
+		hostPlanned, fromFile := float64(t.HostWeightsMB), 0.0
+		if t.HostWeightsMB <= 0 && deps.HostResidentMiB != nil {
+			if mib, ok := deps.HostResidentMiB(tag); ok && mib > 0 {
+				hostPlanned, fromFile = mib, mib
+			}
+		}
+		moved := place.HostWeightsMiB - hostPlanned
 		if t.PlannedDeviceWeightMB > 0 && place.DeviceWeightsMiB > 0 {
 			// The device side is the witness where the plan can name it:
 			// a mixture of experts whose experts spilled maps the whole
 			// file into system RAM (CPU_Mapped reads 20,294 MiB for a
 			// 35B-A3B the fit moved 2,349 MiB of), while its device
 			// buffer shrinks by exactly what left.
-			moved = float64(t.PlannedDeviceWeightMB) - place.DeviceWeightsMiB
+			moved = float64(t.PlannedDeviceWeightMB) - fromFile - place.DeviceWeightsMiB
 		}
 		moved = max(moved, 0)
 		tolerance := float64(t.PlannedLayerWeightMB)

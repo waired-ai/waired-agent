@@ -77,9 +77,11 @@ type PeerFact struct {
 	// selection fails.
 	Window1M bool
 	// ContextWindow is the input window the peer declares, 0 when it
-	// publishes none. No row states it: every Waired row is a 200k or a 1M
-	// session whatever computer answers (waired-agent#1396). It rides here
-	// for the caller that decides whether the peer can take a row at all.
+	// publishes none — or, for a peer serving a custom model below 200,704
+	// tokens, that model's own window (waired-ai/waired#1481). A row states
+	// only the second: every other Waired row is a 200k or a 1M session
+	// whatever computer answers (waired-agent#1396). It also rides here for
+	// the caller that decides whether the peer can take a row at all.
 	ContextWindow int
 }
 

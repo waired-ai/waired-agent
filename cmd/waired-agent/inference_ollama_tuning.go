@@ -714,6 +714,13 @@ func resolveTuningTarget(cfg agentconfig.InferenceConfig, manifests []catalog.Ma
 // built around sub-200k models removed (decisions 3 and 4 of
 // docs/decisions/20260916/0340). cfg stays in the signature for the
 // callers and is no longer read.
+// ollamaShortOwnWindowWarning is the warning for a model whose own context
+// window is under 200,704 tokens, served at less than that window because
+// this host's memory was not shown to hold all of it (waired-ai/waired#1481).
+const ollamaShortOwnWindowWarning = "%s serves a %d-token context window, under its own %d, because this host's memory could not be shown " +
+	"to hold the model at its own window — a coding agent's session overflows the window it serves on every turn, " +
+	"and with part of the model in system RAM, turns are slower than on a host holding it in GPU memory"
+
 func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t ollamaTuning) (reasons []string, extraWarning string) {
 	switch {
 	case t.ExpectedSpillFraction > 0:
@@ -750,6 +757,15 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 		reasons = append(reasons, fmt.Sprintf(
 			"%s is served at its own %d-token context window, under the 200,704 tokens a coding agent's session is sized for; a coding agent overflows it on every turn",
 			m.ModelID, t.ContextLength))
+	case t.ContextLength > 0 && m.ContextLength > 0 && m.ContextLength < router.CodingAgentContextFloorTokens:
+		// A model whose own window is shorter than a coding session, served
+		// shorter still because this host's memory was not shown to hold
+		// all of it. Nothing is declared below 200,704, so the arm below —
+		// "declared to the mesh" — would be false; the rows naming this
+		// computer reach it at the window it serves (CustomModelWindow,
+		// waired-ai/waired#1481).
+		extraWarning = fmt.Sprintf(ollamaShortOwnWindowWarning, m.ModelID, t.ContextLength, m.ContextLength)
+		reasons = append(reasons, extraWarning)
 	case t.ContextLength > 0:
 		// A rung this host's memory was not shown to hold (WindowFits
 		// false — the forced lowest rung, waired-agent#587). Served, and

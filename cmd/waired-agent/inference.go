@@ -21,6 +21,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/catalog/gguf"
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -2887,6 +2888,17 @@ func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVeri
 		ListProcs:    proclist.List,
 		EngineLog:    p.ollama.EngineLogTail,
 		RestampDraft: p.restampDraft,
+		HostResidentMiB: func(tag string) (float64, bool) {
+			blob, _, err := download.ModelBlobPath(p.ollamaModelsDir, tag)
+			if err != nil {
+				return 0, false
+			}
+			b, err := gguf.HostResidentBytes(blob)
+			if err != nil || b == 0 {
+				return 0, false
+			}
+			return float64(b) / (1 << 20), true
+		},
 	}
 }
 

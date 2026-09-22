@@ -26,12 +26,24 @@
 // one it would read.
 const BASE_URL = {{ .BaseURLLiteral }};
 const DISCOVERY_TIMEOUT_MS = 2000;
+// Which revision of this file's own logic wrote it. `waired doctor` and the
+// refresh after `waired link` rewrite a plugin whose revision is older than
+// the build's, so a change in what the plugin DOES reaches a user who never
+// links again. 2: a row's listed window below CONTEXT_WINDOW is taken
+// (waired-ai/waired#1481).
+const PLUGIN_REV = {{ .PluginRevLiteral }};
 
-// The window OpenCode sizes a conversation to, and compacts against. Every
-// Waired row is one of two sessions, decided by its id and nothing else: a
-// "[1m]" row is CONTEXT_WINDOW_1M, and every other row is CONTEXT_WINDOW,
-// whichever computer answers it. The gateway makes the computer that answers
-// hold at least that many tokens and holds the turn to it (waired-agent#1396).
+// The window OpenCode sizes a conversation to, and compacts against. A Waired
+// row is one of two sessions, decided by its id: a "[1m]" row is
+// CONTEXT_WINDOW_1M, and every other row is CONTEXT_WINDOW, whichever
+// computer answers it. The gateway makes the computer that answers hold at
+// least that many tokens and holds the turn to it (waired-agent#1396).
+//
+// One exception: a row naming a computer that serves a custom model whose
+// own window is below CONTEXT_WINDOW lists that window, and the gateway holds
+// the turn to it — so OpenCode is told the smaller number and compacts before
+// the gateway has to refuse a turn (waired-ai/waired#1481). A listed window at
+// or above CONTEXT_WINDOW changes nothing.
 //
 // OpenCode's config schema requires `output` beside `context`, and warns on
 // every start without it (waired-agent#1367). Nothing on this host states an
@@ -39,11 +51,27 @@ const DISCOVERY_TIMEOUT_MS = 2000;
 // absent, and OpenCode reads it as "not stated" — its own default cap applies
 // either way. Measured on OpenCode 1.18.30: the same resolved model and the
 // same max_tokens with and without it.
+//
+// A row with a window that small states an output limit too. Before it
+// compacts, OpenCode holds back an output reserve from the window: the model's
+// output limit, or 32,000 tokens when none is stated (usable = context −
+// maxOutputTokens, packages/opencode/src/session/overflow.ts at v1.18.30).
+// Against a small window that reserve is most of it — at 40,960 tokens it left
+// less than one request of OpenCode's own, and OpenCode compacted and
+// re-sent without end (measured with a stub for waired-ai/waired#1482). So a
+// small row states SMALL_ROW_OUTPUT, or a quarter of its window when that is
+// less, which is also the most OpenCode then asks the model to write.
 const CONTEXT_WINDOW = {{ .ContextWindowLiteral }};
 const CONTEXT_WINDOW_1M = {{ .ContextWindow1MLiteral }};
-function limitFor(key) {
-  const context = key.toLowerCase().includes("[1m]") ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW;
-  return { context, output: 0 };
+const SMALL_ROW_OUTPUT = 8192;
+function limitFor(key, listed) {
+  let context = key.toLowerCase().includes("[1m]") ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW;
+  let output = 0;
+  if (typeof listed === "number" && listed > 0 && listed < CONTEXT_WINDOW) {
+    context = listed;
+    output = Math.min(SMALL_ROW_OUTPUT, Math.floor(listed / 4));
+  }
+  return { context, output };
 }
 
 const FALLBACK = { default: { id: "waired", name: "Waired", limit: limitFor("default") } };
@@ -76,12 +104,12 @@ async function discover() {
     if (!m || !m.waired_route || !m.id) continue;
     const { key, wire } = rowIds(m.id);
     if (!key) continue;
-    // The window comes from the key, not from the listing's max_input_tokens,
-    // so a row reads the same whichever build of the daemon answered.
+    // The window comes from the key, and from the listing only when the
+    // listing names a smaller one (limitFor).
     models[key] = {
       id: wire,
       name: m.display_name || m.id,
-      limit: limitFor(key),
+      limit: limitFor(key, m.max_input_tokens),
     };
   }
   return Object.keys(models).length ? models : null;

@@ -336,6 +336,24 @@ func linkOneChildArgs(gatewayBaseURL, target string) []string {
 func topUpIntegrationWindows(ctx context.Context, stateDir, gatewayBaseURL string) {
 	topUpClaudeWindow(stateDir)
 	topUpOpenClawWindow(ctx, gatewayBaseURL)
+	topUpOpenCodePlugin(gatewayBaseURL)
+}
+
+// topUpOpenCodePlugin rewrites an OpenCode plugin an older build wrote, so a
+// change in what the plugin does reaches a user who never links again
+// (opencode.TopUpPlugin). Warn-only for the reason topUpOpenClawWindow gives.
+func topUpOpenCodePlugin(gatewayBaseURL string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	changed, err := opencode.TopUpPlugin(home, gatewayBaseURL)
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "Warning: couldn't update OpenCode's Waired plugin (%v)\n", err)
+	case changed:
+		fmt.Fprintln(stdout, "Updated OpenCode's Waired plugin.")
+	}
 }
 
 // topUpOpenClawWindow is topUpClaudeWindow's sibling for the OpenClaw

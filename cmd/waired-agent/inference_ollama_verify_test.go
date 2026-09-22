@@ -1084,3 +1084,49 @@ func TestApplyOllamaTuningVerification_DoesNotRepeatTheSizingWarning(t *testing.
 		t.Errorf("the sizing warning appears %d times, want 1:\n%s", n, got.Warning)
 	}
 }
+
+// A build whose manifest does not state its input-layer weights — a custom
+// model — was planned with all its weights on the device. The embedding that
+// llama.cpp keeps in system RAM on every load then read as a spill: on a
+// 96 GB card, a 0.6B custom model with every layer offloaded was reported
+// partially CPU-resident (waired-ai/waired#1481, real hardware). The file
+// states that embedding, and the check takes it off; a real spill still
+// reads as one. Record of today's behaviour.
+func TestVerifyOllamaTuning_InputLayerOfABuildWithoutAFigure(t *testing.T) {
+	_, _, hw, tn := verifyFixture()
+	// Like a custom model: no host-resident figure and no GGUF layout, so
+	// the plan names neither the embedding nor the device buffer.
+	if tn.HostWeightsMB != 0 {
+		t.Fatalf("fixture drifted: host %d", tn.HostWeightsMB)
+	}
+	weight := int64(10e9)
+	healthy := weight + int64(0.5*65536)*int64(verifyCtx)
+	const embedMiB = 700.0
+	planned := float64(weight) / (1 << 20)
+	run := func(log string, host func(string) (float64, bool)) (tuningVerdict, string) {
+		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthy, psVRAM: healthy, psCtx: verifyCtx, tagSize: weight}
+		srv := f.server(t)
+		defer srv.Close()
+		el := &fakeEngineLog{text: log}
+		return verifyOllamaTuning(context.Background(), srv.Client(), srv.URL, tn, verifyTag, hw,
+			ollamaVerifyDeps{EngineLog: el.tail, HostResidentMiB: host})
+	}
+	embedding := func(tag string) (float64, bool) {
+		if tag != verifyTag {
+			t.Errorf("read the file of %q, want %q", tag, verifyTag)
+		}
+		return embedMiB, true
+	}
+	offloaded := llamaLoadLog(verifyCtx, 66, 66, planned-embedMiB, embedMiB, "q8_0")
+
+	if v, detail := run(offloaded, nil); v != tuningSpill {
+		t.Fatalf("without the file's figure: (%v, %q); the case this test exists for no longer reproduces", v, detail)
+	}
+	if v, detail := run(offloaded, embedding); v != tuningOK || detail != "" {
+		t.Errorf("every layer offloaded, the embedding in system RAM: (%v, %q), want tuningOK", v, detail)
+	}
+	spilled := llamaLoadLog(verifyCtx, 50, 66, planned-3000, 3000, "q8_0")
+	if v, _ := run(spilled, embedding); v != tuningSpill {
+		t.Errorf("3,000 MiB in system RAM with a 700 MiB embedding: %v, want tuningSpill", v)
+	}
+}
