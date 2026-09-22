@@ -54,6 +54,11 @@ type customSnapshot struct {
 	Own       []Manifest `json:"own,omitempty"`
 	Team      []Manifest `json:"team,omitempty"`
 	Withdrawn []Manifest `json:"withdrawn,omitempty"`
+	// Unreadable is why each of the account's own models in the last
+	// fetch was dropped, by id: an entry this build does not accept. Not
+	// kept on disk; it answers "why is a model the account holds not
+	// here" for the set fetched by this process (waired-ai/waired#1480).
+	Unreadable map[string]string `json:"-"`
 }
 
 const customSnapshotVersion = 1
@@ -100,6 +105,12 @@ func NewCustomSource(path, networkID string, bundled []Manifest, logger *slog.Lo
 }
 
 func (s *CustomSource) valid(ms []Manifest, projection bool) []Manifest {
+	return s.validNoting(ms, projection, nil)
+}
+
+// validNoting is valid that also records, in dropped, why each entry was
+// dropped. A nil dropped records nothing.
+func (s *CustomSource) validNoting(ms []Manifest, projection bool, dropped map[string]string) []Manifest {
 	out := make([]Manifest, 0, len(ms))
 	for _, m := range ms {
 		var err error
@@ -110,6 +121,9 @@ func (s *CustomSource) valid(ms []Manifest, projection bool) []Manifest {
 		}
 		if err != nil {
 			s.logger.Warn("custom models: dropping an entry that does not validate", "model_id", m.ModelID, "err", err)
+			if dropped != nil && m.ModelID != "" {
+				dropped[m.ModelID] = err.Error()
+			}
 			continue
 		}
 		out = append(out, m)
@@ -152,6 +166,14 @@ func (s *CustomSource) Offerable() []Manifest { return slices.Clone(s.snap().Own
 // used when the change arrived.
 func (s *CustomSource) Withdrawn() []Manifest { return slices.Clone(s.snap().Withdrawn) }
 
+// Unreadable reports why the account's own model modelID, present in the
+// last fetch, was dropped: this build does not accept the entry. False when
+// the last fetch did not hold it at all, or held it and kept it.
+func (s *CustomSource) Unreadable(modelID string) (string, bool) {
+	why, ok := s.snap().Unreadable[modelID]
+	return why, ok
+}
+
 func containsModel(ms []Manifest, id string) bool {
 	return slices.ContainsFunc(ms, func(m Manifest) bool { return m.ModelID == id })
 }
@@ -177,7 +199,11 @@ func (s *CustomSource) Replace(set CustomModelSet, inUse func(modelID string) bo
 		NetworkID: prev.NetworkID,
 		Revision:  set.Revision,
 		FetchedAt: time.Now().UTC(),
-		Own:       s.valid(set.Own, false),
+	}
+	unreadable := map[string]string{}
+	next.Own = s.validNoting(set.Own, false, unreadable)
+	if len(unreadable) > 0 {
+		next.Unreadable = unreadable
 	}
 	for _, m := range s.valid(set.Team, true) {
 		if !containsModel(next.Own, m.ModelID) {

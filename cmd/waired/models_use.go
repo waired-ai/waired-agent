@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
@@ -258,7 +259,7 @@ func formatNotExpectedToFit(modelID string, needMB, haveMB int) string {
 // Anything else is returned to the caller unchanged: an error this build
 // has no reading of is better shown raw than paraphrased.
 //
-// All three refusals are 409, so the machine-readable code — not the
+// The refusals are all 409, so the machine-readable code — not the
 // status — is what tells them apart.
 func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 	var me *mgmtStatusError
@@ -267,8 +268,19 @@ func formatModelsUseError(mgmt, requested string, err error) (string, bool) {
 	}
 	parsed := parseMgmtError(me.StatusCode, []byte(me.Message))
 	switch {
+	case parsed.StatusCode == http.StatusNotFound && catalog.IsCustomModelID(requested):
+		// A custom id this computer does not hold is either not here yet —
+		// imported a moment ago and the list has not reached this computer
+		// — or deleted in the console (waired-ai/waired#1480).
+		return "This computer has no custom model " + requested + ". If it was imported just now, " +
+			"wait a minute for it to reach this computer and try again; if it was deleted, import it " +
+			"again in the Waired console's Custom models tab.", true
 	case parsed.StatusCode == http.StatusNotFound:
 		return "No model with that name. Run `waired models ls` to see what this computer can run.", true
+	case parsed.Code == "custom_model_wrong_engine":
+		// The daemon's sentence names the model, both engines and what to
+		// choose; nothing was recorded (waired-ai/waired#1480).
+		return parsed.Message, true
 	case parsed.Code == "model_retired":
 		// The daemon names the successor, and it is the only party that
 		// knows it. Its sentence verbatim rather than a rewrite that

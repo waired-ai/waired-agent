@@ -315,13 +315,16 @@ func TestPullModel_NoBuildForTheEngine_SaysWhatToDo(t *testing.T) {
 	for i := range m.Variants {
 		m.Variants[i].RuntimeSupport = []string{catalog.RuntimeVLLM}
 	}
-	err := noBuildForEngine(m, catalog.RuntimeOllama, []string{catalog.RuntimeVLLM})
+	_, err := pullGateProvider(t, m).PullModel(context.Background(), m.ModelID)
 	if !errors.Is(err, errUnsupportedSource) || strings.Contains(err.Error(), "cannot fetch") ||
 		!strings.Contains(err.Error(), "choose a model that has a build for ollama") {
 		t.Errorf("bundled: %v", err)
 	}
 	m.ModelID, m.DisplayName = "custom-tiny-0123abcd", "Tiny"
-	err = noBuildForEngine(m, catalog.RuntimeOllama, []string{catalog.RuntimeVLLM})
+	_, err = pullGateProvider(t, m).PullModel(context.Background(), m.ModelID)
+	if !errors.Is(err, errUnsupportedSource) {
+		t.Fatalf("custom: %v", err)
+	}
 	for _, want := range []string{"Tiny (custom-tiny-0123abcd)", "imported for vllm", "runs ollama", "Custom models tab"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("custom: %q missing %q", err, want)

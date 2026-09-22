@@ -4253,38 +4253,6 @@ type noBuildForEngineError struct{ msg string }
 func (e *noBuildForEngineError) Error() string { return e.msg }
 func (e *noBuildForEngineError) Unwrap() error { return errUnsupportedSource }
 
-// noBuildForEngine words it: the model by the name a person gave or knows it
-// by, the engine this computer runs, the one the model runs on, and what to
-// do. A custom model has exactly one engine, the one it was imported for.
-func noBuildForEngine(m catalog.Manifest, engine string, engines []string) error {
-	name := m.ModelID
-	if m.DisplayName != "" && m.DisplayName != m.ModelID {
-		name = m.DisplayName + " (" + m.ModelID + ")"
-	}
-	on := strings.Join(engines, ", ")
-	if catalog.IsCustomModelID(m.ModelID) {
-		return &noBuildForEngineError{fmt.Sprintf(
-			"%s was imported for %s, and this computer runs %s, so it can't run here — choose a model for %s, or import this one again for %s in the Waired console's Custom models tab",
-			name, on, engine, engine, engine)}
-	}
-	return &noBuildForEngineError{fmt.Sprintf(
-		"%s has no build for %s, the engine this computer runs; it runs on %s — choose a model that has a build for %s",
-		name, engine, on, engine)}
-}
-
-// variantEngines lists the engines m has a build for, in manifest order.
-func variantEngines(m catalog.Manifest) []string {
-	var out []string
-	for _, v := range m.Variants {
-		for _, r := range v.RuntimeSupport {
-			if !slices.Contains(out, r) {
-				out = append(out, r)
-			}
-		}
-	}
-	return out
-}
-
 func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
 	return p.pullModelBuild(ctx, modelOrAlias, "")
 }
@@ -4356,8 +4324,8 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 		// message used to say "requires vllm >= " with nothing after it for
 		// an ollama-only custom model on a vLLM host (found on real
 		// hardware, waired-ai/waired#1481). Say which engine runs it.
-		if engines := variantEngines(manifest); !slices.Contains(engines, engine) {
-			return management.PullJob{}, noBuildForEngine(manifest, engine, engines)
+		if msg, none := catalog.NoBuildForEngine(manifest, engine); none {
+			return management.PullJob{}, &noBuildForEngineError{msg}
 		}
 		floor := manifest.Variants[0].MinEngineVersion
 		have := engineVersion

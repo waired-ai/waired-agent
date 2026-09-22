@@ -1647,6 +1647,8 @@ func run(ctx context.Context, args []string) error {
 			setupRec = newSetupReconciler(inferenceSub.provider, infPushClient, id.DeviceID, mk.Private, logger)
 			setupRec.customModelKnown = inferenceSub.provider.knowsModel
 			setupRec.fetchCustomModels = cmSync.Kick
+			setupRec.customModelsSettled = cmSync.Settled
+			setupRec.customModelUnreadable = customModels.Unreadable
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
