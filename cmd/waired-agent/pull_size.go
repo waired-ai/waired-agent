@@ -149,8 +149,8 @@ func (p *agentInferenceProvider) sourceChangedFailure(ctx context.Context, model
 		// An imported file replaced upstream is a different model (#1473
 		// ruling 2): no update of Waired brings it back, and importing the
 		// repository again is what adds the new file (waired-ai/waired#1480).
-		return fmt.Sprintf("%s: the file behind %s on Hugging Face was replaced after this model was imported (now %s, imported %s). Import it again in the Waired console's Custom models tab to use the new file",
-			errSourceChanged, v.Source.Tag, got, v.Source.Digest)
+		return fmt.Sprintf("the file behind %s on Hugging Face was replaced after this model was imported (now %s, was %s). Import the model again in the Waired console's Custom models tab to use the new file",
+			v.Source.Tag, got, v.Source.Digest)
 	}
 	return fmt.Sprintf("%s: %s is no longer the build Waired lists (registry %s, catalog %s). Update Waired to get a catalog that knows it",
 		errSourceChanged, v.Source.Tag, got, v.Source.Digest)

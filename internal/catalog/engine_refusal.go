@@ -38,10 +38,10 @@ func NoBuildForEngine(m Manifest, engine string) (string, bool) {
 	on := strings.Join(engines, ", ")
 	if IsCustomModelID(m.ModelID) {
 		return fmt.Sprintf(
-			"%s was imported for %s, and this computer runs %s, so it can't run here — choose a model for %s, or import this one again for %s in the Waired console's Custom models tab",
+			"%s was imported for %s, but this computer runs %s — choose a model for %s, or import this one again for %s in the Waired console's Custom models tab",
 			name, on, engine, engine, engine), true
 	}
 	return fmt.Sprintf(
-		"%s has no build for %s, the engine this computer runs; it runs on %s — choose a model that has a build for %s",
+		"%s has no build for %s, the engine this computer runs; its builds are for %s — choose a model that has a build for %s",
 		name, engine, on, engine), true
 }

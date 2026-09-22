@@ -398,9 +398,9 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 		// fallback below would fetch whatever the repository holds, and the
 		// import only vouched for its top-level safetensors
 		// (waired-ai/waired#1480).
-		err := fmt.Errorf("download: %s: the repository's top level has no safetensors weights at the imported commit, so there is nothing vLLM can load", variant.Source.RepoID)
+		err := fmt.Errorf("download: %s: the repository's top level has no safetensors weights at the imported commit, so there is nothing vLLM can load — choose another model, or import one whose safetensors weights are at the repository's top level", variant.Source.RepoID)
 		if listErr != nil {
-			err = fmt.Errorf("download: %s: could not list the repository's files at the imported commit (%v); try again later", variant.Source.RepoID, listErr)
+			err = fmt.Errorf("download: %s: could not list the repository's files on Hugging Face at the imported commit (%v); try again later", variant.Source.RepoID, listErr)
 		}
 		p.failHFPull(modelID, refresh, err.Error())
 		return "", err

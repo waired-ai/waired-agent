@@ -300,7 +300,7 @@ func TestPullModel_NoBuildForTheEngine(t *testing.T) {
 	p := pullGateProvider(t, m)
 	_, err := p.PullModel(context.Background(), m.ModelID)
 	if err == nil || !errors.Is(err, errUnsupportedSource) ||
-		!strings.Contains(err.Error(), "no build for ollama") || !strings.Contains(err.Error(), "it runs on vllm") ||
+		!strings.Contains(err.Error(), "no build for ollama") || !strings.Contains(err.Error(), "its builds are for vllm") ||
 		strings.Contains(err.Error(), ">=") {
 		t.Fatalf("err = %v", err)
 	}

@@ -230,7 +230,7 @@ func TestClient_SetPreferredModel_StatusSentinels(t *testing.T) {
 // daemon recorded nothing, and its sentence says why and what to do. It
 // used to be reported as "couldn't download the model" (waired-ai/waired#1480).
 func TestClient_SetPreferredModel_RefusalCarriesTheDaemonsSentence(t *testing.T) {
-	const msg = "Tiny (custom-tiny-0123abcd) was imported for vllm, and this computer runs ollama, so it can't run here — " +
+	const msg = "Tiny (custom-tiny-0123abcd) was imported for vllm, but this computer runs ollama — " +
 		"choose a model for ollama, or import this one again for ollama in the Waired console's Custom models tab"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

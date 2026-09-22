@@ -179,11 +179,11 @@ func TestFormatModelsUseError(t *testing.T) {
 			name:   "a custom model for the other engine is reported as the daemon said it",
 			status: http.StatusConflict,
 			body: `{"error_code":"custom_model_wrong_engine","message":"Tiny (custom-tiny-0123abcd) was imported for vllm, ` +
-				`and this computer runs ollama, so it can't run here — choose a model for ollama, or import this one ` +
+				`but this computer runs ollama — choose a model for ollama, or import this one ` +
 				`again for ollama in the Waired console's Custom models tab"}`,
 			requested: "custom-tiny-0123abcd",
-			want: "Tiny (custom-tiny-0123abcd) was imported for vllm, and this computer runs ollama, so it can't " +
-				"run here — choose a model for ollama, or import this one again for ollama in the Waired console's " +
+			want: "Tiny (custom-tiny-0123abcd) was imported for vllm, but this computer runs ollama — " +
+				"choose a model for ollama, or import this one again for ollama in the Waired console's " +
 				"Custom models tab",
 			wantHandled: true,
 		},

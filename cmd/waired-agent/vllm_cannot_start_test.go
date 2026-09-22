@@ -48,10 +48,10 @@ func TestVLLMStartupDiagnosis_TheModelsOwnFailures(t *testing.T) {
 	for log, wants := range map[string][]string{
 		vllmLogArchitecture: {"['FooForCausalLM']", "choose another model"},
 		vllmLogRemoteCode:   {"its own code", "choose another model"},
-		vllmLogCapability:   {"fp8", "89", "86", "another quantization"},
+		vllmLogCapability:   {"fp8", "compute capability 8.9 or higher", "this GPU has 8.6", "another quantization"},
 		vllmLogNoWeights:    {"no safetensors weights", "waired models rm"},
 		vllmLogEstimatedLen: {"18432", "smaller model"},
-		vllmLogFreeMemory:   {"3.2 of 23.5 GiB", "close it"},
+		vllmLogFreeMemory:   {"3.2 of 23.5 GiB", "close that program"},
 	} {
 		got := vllmStartupDiagnosis(log, "127.0.0.1:9510")
 		for _, w := range wants {

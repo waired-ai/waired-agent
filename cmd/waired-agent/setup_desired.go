@@ -1223,7 +1223,7 @@ func (r *setupReconciler) parkUnknownCustomModel(modelID, key string) bool {
 			"Choose another model, or import it again in the Custom models tab"
 		if r.customModelUnreadable != nil {
 			if why, ok := r.customModelUnreadable(modelID); ok {
-				detail = "custom model " + modelID + " is in this account's list, but Waired on this computer can't read it (" +
+				detail = "custom model " + modelID + " is in this account's list, but this version of Waired can't read it (" +
 					why + "). Update Waired on this computer, then choose the model again"
 			}
 		}

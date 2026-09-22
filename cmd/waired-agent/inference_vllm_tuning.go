@@ -321,28 +321,38 @@ func vllmModelFailureHint(engineLog string) string {
 	switch {
 	case vllmArchitectureRe.MatchString(engineLog):
 		arch := vllmArchitectureRe.FindStringSubmatch(engineLog)[1]
-		return "the vLLM Waired installs does not support this model's architecture " + arch +
+		return "the vLLM version Waired installs does not support this model's architecture " + arch +
 			" — choose another model"
 	case strings.Contains(engineLog, "contains custom code which must be executed"):
-		return "this model needs to run its own code to load, which Waired never allows" +
+		return "this model needs to run its own code to load, which Waired does not allow" +
 			" — choose another model"
 	case vllmCapabilityRe.MatchString(engineLog):
 		m := vllmCapabilityRe.FindStringSubmatch(engineLog)
 		return fmt.Sprintf("this GPU is too old for the model's %s quantization"+
-			" (vLLM needs compute capability %s, this GPU has %s)"+
-			" — choose a build with another quantization, or another model", m[1], m[2], m[3])
+			" (vLLM needs compute capability %s or higher, this GPU has %s)"+
+			" — choose a build with another quantization, or another model", m[1], computeCapability(m[2]), computeCapability(m[3]))
 	case strings.Contains(engineLog, "Cannot find any model weights with"):
 		return "vLLM found no safetensors weights in the downloaded files" +
-			" — remove the model with `waired models rm` and choose it again to download it again"
+			" — remove the model with `waired models rm` and choose it again to download a fresh copy"
 	case vllmEstimatedLenRe.MatchString(engineLog):
-		return fmt.Sprintf("the KV cache holds at most %d tokens of this model on this computer, less than the window it was started with"+
+		return fmt.Sprintf("on this computer the KV cache holds at most %d tokens for this model, less than the context window it was started with"+
 			" — choose a smaller model, or raise inference.vllm_gpu_memory_utilization", vllmEngineMaxWindow(engineLog))
 	case vllmFreeOnStartupRe.MatchString(engineLog):
 		m := vllmFreeOnStartupRe.FindStringSubmatch(engineLog)
 		return fmt.Sprintf("another program is using this GPU's memory (vLLM found %s of %s GiB free when it started)"+
-			" — close it, or lower inference.vllm_gpu_memory_utilization", m[1], m[2])
+			" — close that program, or lower inference.vllm_gpu_memory_utilization", m[1], m[2])
 	}
 	return ""
+}
+
+// computeCapability writes vLLM's capability figure the way every other
+// surface writes it: "89" is 8.9 and "100" is 10.0 (vLLM prints the
+// major and minor digits run together).
+func computeCapability(digits string) string {
+	if len(digits) < 2 {
+		return digits
+	}
+	return digits[:len(digits)-1] + "." + digits[len(digits)-1:]
 }
 
 // vllmStartupHint is what the bootstrap calls with the raw engine.log
