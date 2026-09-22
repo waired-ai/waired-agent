@@ -636,6 +636,9 @@ func notRecommendedReason(v hostfit.Verdict) string {
 		// is that the request never arrives.
 		return "not preselected here: this computer can't hold the 200,704-token window " +
 			"with it, so Waired wouldn't send coding-agent requests to it"
+	case hostfit.ReasonModelWindowShort:
+		return "not preselected here: the model's own context window is under the " +
+			"200,704 tokens a coding agent's session is sized for"
 	default:
 		return "not preselected here"
 	}

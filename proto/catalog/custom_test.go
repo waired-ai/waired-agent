@@ -243,6 +243,39 @@ func TestValidateCustomManifest(t *testing.T) {
 		"mtp":                   func(m *Manifest) { m.Variants[0].MTPDraftTokens = 2 },
 		"negative tier":         func(m *Manifest) { m.Variants[0].QualityTier = -1 },
 		"default_variant":       func(m *Manifest) { m.DefaultVariant = map[string]string{RuntimeOllama: "q4_k_m"} },
+
+		// Names that look like another one (review of waired-ai/waired#1473,
+		// 2026-09-22): each renders as a bundled or teammate's name, or
+		// reorders the text around it.
+		"zero-width space in name": func(m *Manifest) { m.DisplayName = someBundled.DisplayName + "\u200b" },
+		"bidi override in name":    func(m *Manifest) { m.DisplayName = "abc\u202edef" },
+		"bidi isolate in name":     func(m *Manifest) { m.DisplayName = "abc\u2066def" },
+		"line separator in name":   func(m *Manifest) { m.DisplayName = "abc\u2028def" },
+		"private use in name":      func(m *Manifest) { m.DisplayName = "abc\ue000" },
+		"bundled name, spaces doubled": func(m *Manifest) {
+			m.DisplayName = strings.ReplaceAll(someBundledWithSpace(t, bundled).DisplayName, " ", "  ")
+		},
+		"bundled name, full-width space": func(m *Manifest) {
+			m.DisplayName = strings.ReplaceAll(someBundledWithSpace(t, bundled).DisplayName, " ", "\u3000")
+		},
+		"license too long":  func(m *Manifest) { m.License = strings.Repeat("a", 65) },
+		"license newline":   func(m *Manifest) { m.License = "mit\nx" },
+		"license non-ascii": func(m *Manifest) { m.License = "licença" },
+		"dtype flag":        func(m *Manifest) { m.Variants[0].DType = "--enforce-eager" },
+	}
+	for _, name := range []string{"カスタム\u3000モデル", "🚀 fast coder", "Qwen3 8B (mine)"} {
+		m := validCustomOllama(t)
+		m.DisplayName = name
+		if err := ValidateCustomManifest(m, bundled); err != nil {
+			t.Errorf("name %q refused: %v", name, err)
+		}
+	}
+	for _, dt := range []string{"", "auto", "bfloat16"} {
+		m := validCustomVLLM(t)
+		m.Variants[0].DType = dt
+		if err := ValidateCustomManifest(m, bundled); err != nil {
+			t.Errorf("dtype %q refused: %v", dt, err)
+		}
 	}
 	for name, mutate := range cases {
 		m := validCustomOllama(t)
@@ -265,6 +298,58 @@ func TestValidateCustomManifest(t *testing.T) {
 		if err := ValidateCustomManifest(m, bundled); err == nil {
 			t.Errorf("vllm %s: accepted", name)
 		}
+	}
+}
+
+// someBundledWithSpace is a bundled manifest whose display name has a space
+// to double or widen.
+func someBundledWithSpace(t *testing.T, bundled []Manifest) Manifest {
+	t.Helper()
+	for _, b := range bundled {
+		if strings.Contains(b.DisplayName, " ") {
+			return b
+		}
+	}
+	t.Fatal("no bundled display name has a space")
+	return Manifest{}
+}
+
+func TestCustomNameKey(t *testing.T) {
+	for _, tc := range []struct{ a, b string }{
+		{"Qwen3 8B", "qwen3  8b"},
+		{"Qwen3 8B", "QWEN3\u30008B"},
+		{"Qwen3 8B", " qwen3\t8b "},
+		{"Qwen3 8B", "qwen3\u00a08b"},
+	} {
+		if CustomNameKey(tc.a) != CustomNameKey(tc.b) {
+			t.Errorf("%q and %q compare different: %q vs %q", tc.a, tc.b, CustomNameKey(tc.a), CustomNameKey(tc.b))
+		}
+	}
+	if CustomNameKey("Qwen3 8B") == CustomNameKey("Qwen3 8") {
+		t.Error("different names compare equal")
+	}
+}
+
+// The two checks the control plane asks before it builds, so a person is
+// told the name is the problem: the same rules ValidateCustomManifest holds.
+func TestCustomDisplayNameChecks(t *testing.T) {
+	bundled := allBundled(t)
+	b := someBundledWithSpace(t, bundled)
+	for _, name := range []string{b.DisplayName, strings.ToUpper(b.ModelID), strings.ReplaceAll(b.DisplayName, " ", "\u3000"), "qwen2.5-coder-7b"} {
+		if _, taken := CustomNameTaken(name, bundled); !taken {
+			t.Errorf("%q: not reported taken", name)
+		}
+	}
+	if owner, taken := CustomNameTaken("My own model", bundled); taken {
+		t.Errorf("a free name reported taken by %s", owner)
+	}
+	for _, name := range []string{"", " x", "a\nb", "a\u200bb"} {
+		if ValidateCustomDisplayName(name) == nil {
+			t.Errorf("%q accepted", name)
+		}
+	}
+	if err := ValidateCustomDisplayName("カスタム\u3000モデル"); err != nil {
+		t.Errorf("a Japanese name refused: %v", err)
 	}
 }
 

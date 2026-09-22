@@ -52,6 +52,21 @@ const TypeUint32 = typeUint32
 // block; anything longer is a tokenizer table.
 const maxNumericArray = 4096
 
+// maxKeys and maxTensors bound the two counts at the top of a header. The
+// file states them, and the control plane reads the header of a file any
+// signed-in person names (waired-ai/waired#1476), so they are input, not
+// facts: a header claiming 2^32 tensors must be an error rather than an
+// allocation. Published builds carry a few hundred keys and at most a few
+// thousand tensors.
+const (
+	maxKeys    = 1 << 16
+	maxTensors = 1 << 16
+)
+
+// tensorPrealloc caps the tensor slice reserved up front, so the count a
+// header states never decides an allocation on its own.
+const tensorPrealloc = 4096
+
 // Tensor is one entry of the tensor table.
 type Tensor struct {
 	Name  string
@@ -215,6 +230,12 @@ func decode(r io.Reader) (Header, error) {
 	if d.err != nil {
 		return h, d.err
 	}
+	if nKV > maxKeys {
+		return Header{}, fmt.Errorf("gguf: header states %d metadata keys, more than any model has", nKV)
+	}
+	if nTensors > maxTensors {
+		return Header{}, fmt.Errorf("gguf: header states %d tensors, more than any model has", nTensors)
+	}
 	for i := uint64(0); i < nKV; i++ {
 		key := d.str()
 		vt := d.u32()
@@ -241,7 +262,7 @@ func decode(r io.Reader) (Header, error) {
 		h.Scalars[key] = v
 		h.ScalarValueAt[key] = ValueLocation{Offset: at, Type: vt}
 	}
-	h.Tensors = make([]Tensor, 0, nTensors)
+	h.Tensors = make([]Tensor, 0, min(nTensors, tensorPrealloc))
 	for i := uint64(0); i < nTensors; i++ {
 		name := d.str()
 		nDims := d.u32()

@@ -2,7 +2,9 @@ package gguf
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -134,4 +136,66 @@ func TestReadPrefix(t *testing.T) {
 	if _, err := ReadPrefix(bytes.NewReader(full[:3])); err == nil {
 		t.Error("a stream shorter than the magic was accepted")
 	}
+}
+
+// TestReadRefusesCountsNoModelHas: the counts at the top of a header are
+// whatever the file says, and the control plane reads the header of a file
+// any signed-in person names. A header that claims 2^40 tensors used to
+// reserve a slice that size before reading one — a crafted 16 KB prefix
+// could take the control plane's memory (review of waired-ai/waired#1473,
+// 2026-09-22). Both counts are now an error, for the whole header and for a
+// prefix.
+func TestReadRefusesCountsNoModelHas(t *testing.T) {
+	var b headerBuilder
+	b.text("general.architecture", "llama")
+	b.u32("llama.block_count", 28)
+	good := b.bytes()
+
+	for name, patch := range map[string]func([]byte){
+		"tensors": func(h []byte) { binary.LittleEndian.PutUint64(h[8:16], 1<<40) },
+		"keys":    func(h []byte) { binary.LittleEndian.PutUint64(h[16:24], 1<<40) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			hostile := append([]byte(nil), good...)
+			patch(hostile)
+			if _, err := Read(bytes.NewReader(hostile)); err == nil {
+				t.Error("Read accepted the count")
+			}
+			if _, err := ReadPrefix(bytes.NewReader(hostile)); err == nil {
+				t.Error("ReadPrefix accepted the count")
+			}
+		})
+	}
+
+	// The bound is not tight against real files: the largest count a
+	// published build carries is far below it.
+	var ok headerBuilder
+	ok.text("general.architecture", "llama")
+	for i := range 3000 {
+		ok.tensor(fmt.Sprintf("blk.%d.attn_q.weight", i), 12, 256, 256)
+	}
+	h, err := Read(bytes.NewReader(ok.bytes()))
+	if err != nil || len(h.Tensors) != 3000 {
+		t.Fatalf("3,000 tensors: %d, %v", len(h.Tensors), err)
+	}
+}
+
+// FuzzReadPrefix holds the reader to one property on any input: it returns,
+// with an error or a header, and never panics. The seeds are a real-shaped
+// header and its cuts; `go test -fuzz` explores from there.
+func FuzzReadPrefix(f *testing.F) {
+	var b headerBuilder
+	b.text("general.architecture", "llama")
+	b.u32("llama.block_count", 28)
+	b.i32s("llama.attention.head_count_kv", []int32{8, 8, 8, 8})
+	b.strs("tokenizer.ggml.tokens", []string{"a", "b"})
+	b.tensor("token_embd.weight", 12, 2048, 151936)
+	full := b.bytes()
+	f.Add(full)
+	f.Add(full[:40])
+	f.Add([]byte("GGUF"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = ReadPrefix(bytes.NewReader(data))
+		_, _ = Read(bytes.NewReader(data))
+	})
 }

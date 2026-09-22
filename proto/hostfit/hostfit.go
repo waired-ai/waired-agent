@@ -1078,16 +1078,23 @@ func MeetsNativeContextFloor(m catalog.Manifest) bool {
 // "claude-" prefix takes the 200k default, and only a non-"claude-" id
 // consults CLAUDE_CODE_MAX_CONTEXT_TOKENS — which is a single global
 // value shared by every such id. There is no way to express a third
-// step, so a device that serves 140k cannot be routed traffic sized to
-// it; it declares nothing and is reached by pinning instead.
+// step, so a device that serves 140k DECLARES nothing.
 //
-// The catalog agrees with that shape rather than merely tolerating it.
-// Manifest windows come in four classes — 32768, 131072, 262144 and
-// 1048576 — and NOTHING sits between 262145 and 1048575, so an
+// Declaring nothing no longer means unreachable. A pin carries the 200k
+// floor too (waired-ai/waired-agent#1395/#1396), and a custom model whose
+// own window is below 200,704 is admitted at that window through
+// InferenceState.CustomModelWindow (waired-ai/waired#1481): the request
+// reaches it, and a turn larger than its window gets the gateway's
+// overflow 400.
+//
+// The bundled catalog agrees with the two-step shape rather than merely
+// tolerating it: every bundled build reaches 200,704 (decision 3 of
+// docs/decisions/20260916/0340-catalog-reference-host-rank-and-admission.md),
+// and nothing it carries sits between 262145 and 1048575, so an
 // intermediate step would admit no model that 200k does not already
 // admit. 262144 as a step would admit strictly FEWER hosts than 200704
 // does, since the KV cache grows with the window while the model set
-// stays identical.
+// stays identical. A custom model's window can be anything.
 const (
 	// ServingWindow200k is the coding-agent window: the same 200704 the
 	// serve tuning already aims for (router.CodingAgentContextFloorTokens),
@@ -1125,6 +1132,21 @@ const ReasonWindowTooSmall = "window_too_small"
 // Distinct from ReasonInsufficientMemory, which is a refusal. A consumer that
 // hides a model on this one has misread it — see OllamaRecommendModel.
 const ReasonWindowExceedsMemory = "window_exceeds_memory"
+
+// ReasonModelWindowShort is a RECOMMENDATION reason: the model runs here
+// and this host holds the model's own context window, but that window is
+// below the 200,704 tokens a coding agent's session is sized for
+// (ServingWindow200k). Only a custom model can carry it — the bundled
+// catalog admits no build below 200,704.
+//
+// It is not ReasonWindowExceedsMemory, whose copy says the host is short
+// of memory: here more memory would change nothing, and the host was shown
+// to hold the model's whole window (waired-ai/waired#1481). Nor is it a
+// refusal: Waired sends coding-agent requests to such a model when a
+// person names it or turns on its switch (#1473 rulings 5 and 10), and a
+// turn larger than the window gets the gateway's overflow 400. A surface
+// says the window, and that a coding agent's session overflows it.
+const ReasonModelWindowShort = "model_window_short"
 
 // MeetsServingWindow reports whether the manifest's own advertised
 // window reaches the serving window. This is the manifest half of the

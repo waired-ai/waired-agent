@@ -36,6 +36,11 @@ func TestEstimateKVFromConfig(t *testing.T) {
 		{"jamba block types", `{"num_hidden_layers":8,"hidden_size":4096,"num_attention_heads":32,"num_key_value_heads":8,"layers_block_type":["mamba","attention"]}`, 0, false, ""},
 		{"sliding window without types", `{"num_hidden_layers":26,"hidden_size":2304,"num_attention_heads":8,"num_key_value_heads":4,"head_dim":256,"sliding_window":4096}`, 0, false, ""},
 		{"no layers", `{"hidden_size":4096}`, 0, false, ""},
+		// Out-of-range shapes from a crafted config.json are unknown, not an
+		// overflowed product (review of waired-ai/waired#1473, 2026-09-22).
+		{"2^40 layers", `{"num_hidden_layers":1099511627776,"hidden_size":4096,"num_attention_heads":32,"num_key_value_heads":8}`, 0, false, ""},
+		{"2^40 KV heads", `{"num_hidden_layers":32,"hidden_size":4096,"num_attention_heads":32,"num_key_value_heads":1099511627776}`, 0, false, ""},
+		{"2^40 head dimension", `{"num_hidden_layers":32,"hidden_size":4096,"num_attention_heads":32,"num_key_value_heads":8,"head_dim":1099511627776}`, 0, false, ""},
 	} {
 		got, err := EstimateKVFromConfig([]byte(tc.config))
 		if err != nil {
@@ -152,6 +157,30 @@ func TestEstimateKVFromGGUF(t *testing.T) {
 		{"short per-layer list", header("qwen35", map[string]any{
 			"block_count": u(8), "attention.head_count": u(16), "attention.key_length": u(256), "attention.value_length": u(256),
 		}, map[string][]int64{"attention.head_count_kv": {0, 4}}), 0, false, ""},
+
+		// A crafted header (review of waired-ai/waired#1473, 2026-09-22):
+		// block_count used to size an allocation, so 2^32 layers took the
+		// control plane's memory during a preview. Each out-of-range number
+		// is unknown with a reason, before any arithmetic on it.
+		{"2^32 layers", header("llama", map[string]any{
+			"block_count": u(0xFFFFFFFF), "embedding_length": u(4096),
+			"attention.head_count": u(32), "attention.head_count_kv": u(8),
+		}, nil), 0, false, ""},
+		{"2^63 layers", header("llama", map[string]any{
+			"block_count": u(1 << 63), "embedding_length": u(4096),
+			"attention.head_count": u(32), "attention.head_count_kv": u(8),
+		}, nil), 0, false, ""},
+		{"2^40 KV heads", header("llama", map[string]any{
+			"block_count": u(32), "embedding_length": u(4096),
+			"attention.head_count": u(32), "attention.head_count_kv": u(1 << 40),
+		}, nil), 0, false, ""},
+		{"2^40 KV heads in the per-layer list", header("qwen35", map[string]any{
+			"block_count": u(2), "attention.head_count": u(16), "attention.key_length": u(256), "attention.value_length": u(256),
+		}, map[string][]int64{"attention.head_count_kv": {0, 1 << 40}}), 0, false, ""},
+		{"2^40 head dimension", header("qwen3", map[string]any{
+			"block_count": u(28), "attention.head_count": u(16), "attention.head_count_kv": u(8),
+			"attention.key_length": u(1 << 40), "attention.value_length": u(128),
+		}, nil), 0, false, ""},
 	} {
 		got := EstimateKVFromGGUF(tc.h)
 		if got.Known != tc.known || got.BytesPerTokenFP16 != tc.want {

@@ -1061,7 +1061,41 @@ type ModelLoadFailure struct {
 	// time.Time for the reason given at the top of this file: the
 	// canonical JSON form has to be byte-deterministic.
 	FailedAt string `json:"failed_at,omitempty"`
+
+	// Reason says what the engine could not do: one of the LoadFailure*
+	// values. Empty is LoadFailureMemory, because every agent before the
+	// field existed recorded memory failures only (waired-ai/waired#1480).
+	// A reader that does not know a value treats the build as not loading
+	// here, which is true whatever the reason.
+	Reason string `json:"reason,omitempty"`
+
+	// EngineMaxWindow is the largest context window the engine said it
+	// could hold with this build, when it said one — vLLM names it when
+	// the KV cache is too small for the window asked ("the estimated
+	// maximum model length is N"). 0 when the engine gave no figure.
+	EngineMaxWindow int `json:"engine_max_window,omitempty"`
 }
+
+// ModelLoadFailure.Reason values (waired-ai/waired#1480). Each is a failure
+// that happens again on every attempt with the same build, engine and
+// machine, which is what makes it worth recording rather than retrying.
+const (
+	// LoadFailureMemory: the engine ran out of memory loading the build or
+	// its KV cache.
+	LoadFailureMemory = "memory"
+	// LoadFailureArchitectureUnsupported: the engine does not know the
+	// model's architecture.
+	LoadFailureArchitectureUnsupported = "architecture_unsupported"
+	// LoadFailureRemoteCodeRequired: the model needs to run its own code to
+	// load, which Waired never allows.
+	LoadFailureRemoteCodeRequired = "remote_code_required"
+	// LoadFailureQuantizationUnsupported: the build's quantization does not
+	// run on this computer's GPU.
+	LoadFailureQuantizationUnsupported = "quantization_unsupported"
+	// LoadFailureWeightsMissing: the engine found no weights it can load in
+	// the downloaded files.
+	LoadFailureWeightsMissing = "weights_missing"
+)
 
 // HostSpeed is one coding-agent turn's cost on a host, measured at
 // install time on a fixed probe model (waired-ai/waired-agent#496).

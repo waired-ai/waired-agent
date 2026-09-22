@@ -876,6 +876,18 @@ func OllamaRecommendModelFor(m catalog.Manifest, v catalog.Variant, h Host, kvTy
 // at the point of choice.
 func OllamaRecommendModelAt(m catalog.Manifest, v catalog.Variant, h Host, kvType string, window int) Verdict {
 	want := recommendationWindow(m, window)
+	// A model whose own window stops short of the coding window can only
+	// be a custom model: the bundled catalog admits none
+	// (internal/hardware.TestBundledCatalog_EveryBuildFitsTheReferenceHost).
+	// Asking whether this host holds 200,704 tokens of it answers a
+	// question the model never poses, and the "exceeds memory" it gave
+	// was false on a 96 GB GPU (waired-ai/waired#1481). So memory is
+	// judged at the model's own window, and a model that passes is still
+	// not recommended — for its window, which is ReasonModelWindowShort.
+	short := ownWindowShort(m, want)
+	if short {
+		want = m.ContextLength
+	}
 	out := Verdict{Fits: true}
 	budget := h.OllamaVRAMBudgetMB()
 	accelerated := h.HasGPU() && budget > 0 && v.EstimatedWeightGB > 0
@@ -902,17 +914,40 @@ func OllamaRecommendModelAt(m catalog.Manifest, v catalog.Variant, h Host, kvTyp
 			HaveMB: budget,
 		}
 
-	case !accelerated && !OllamaDeclaresWindowFrom(OllamaWindowRequest{
-		Manifest: m, Variant: v, Host: h, KVCacheType: kvType, ChosenWindow: want,
-	}):
+	case !accelerated && !holdsWindow(m, v, h, kvType, want, short):
 		out = Verdict{
 			Reason: ReasonWindowExceedsMemory,
 			NeedMB: OllamaEstimateMemory(v, h, kvType, want, 1).TotalMB(),
 			HaveMB: h.TotalMemoryMB(),
 		}
+
+	case short:
+		out = Verdict{Reason: ReasonModelWindowShort}
 	}
 	out.Estimate = EstimateOllamaDecode(v, h)
 	return out
+}
+
+// ownWindowShort reports whether the recommendation is about the coding
+// window and m's own window cannot reach it.
+func ownWindowShort(m catalog.Manifest, want int) bool {
+	return want == ServingWindow200k && m.ContextLength > 0 && m.ContextLength < ServingWindow200k
+}
+
+// holdsWindow is the no-accelerator window clause. At the coding window it
+// is OllamaDeclaresWindowFrom, as before. For a model whose own window is
+// short it asks the rung plan directly: the model's own window is the only
+// rung on its ladder (OllamaServedWindows), and OllamaDeclaresWindowFrom
+// answers no to any window below the coding one because nothing below it
+// is DECLARED — which is a fact about routing, not about memory.
+func holdsWindow(m catalog.Manifest, v catalog.Variant, h Host, kvType string, want int, short bool) bool {
+	if !short {
+		return OllamaDeclaresWindowFrom(OllamaWindowRequest{
+			Manifest: m, Variant: v, Host: h, KVCacheType: kvType, ChosenWindow: want,
+		})
+	}
+	plan := OllamaPlannedRungFor(m, v, h, kvType, 0)
+	return plan.Fits && plan.ContextLength >= want
 }
 
 // recommendationWindow is the window the two window clauses above are
@@ -923,7 +958,10 @@ func OllamaRecommendModelAt(m catalog.Manifest, v catalog.Variant, h Host, kvTyp
 // arm, deliberately: that is the constant the clauses carried before this
 // function existed, and a recommendation that quietly asked about a
 // smaller window on some models would be a behaviour change smuggled in
-// under a refactor.
+// under a refactor. The one model that does get asked about a smaller
+// window — a custom model whose own window is short — is asked about it
+// openly, by OllamaRecommendModelAt, and answered with a reason of its own
+// (ReasonModelWindowShort).
 func recommendationWindow(m catalog.Manifest, window int) int {
 	if window == ServingWindow1M && ReachesWindow(m, ServingWindow1M) {
 		return ServingWindow1M
@@ -1021,6 +1059,13 @@ func VLLMRecommendModelOnHostFor(
 ) Verdict {
 	if !VLLMServesContextFloorFor(m, v, gpus, kvType) {
 		return Verdict{Reason: ReasonWindowExceedsMemory}
+	}
+	// VLLMServesContextFloorFor already judges a short model at its own
+	// window (OllamaEffectiveContextFloor), so reaching here means memory
+	// holds it; what is left to say is the window itself, as the ollama
+	// arm says it.
+	if ownWindowShort(m, ServingWindow200k) {
+		return Verdict{Reason: ReasonModelWindowShort}
 	}
 	return Verdict{Fits: true}
 }
