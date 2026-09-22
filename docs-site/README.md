@@ -7,6 +7,13 @@ and published to Firebase Hosting at **https://docs.waired.ai/**.
 English is the canonical language (site root); Japanese is a mirror under
 `ja/` that falls back to English page-by-page.
 
+Which of the two a reader sees is decided in the browser, before the page is
+drawn (`src/lib/language-preference.js`, inlined by `src/components/Head.astro`):
+a language picked in the header's language picker is remembered in the
+`waired-docs-lang` cookie and wins on every URL; until the reader picks one, a
+browser that lists Japanese before English is sent from an English URL to the
+same page under `/ja/`.
+
 ## Develop
 
 ```sh
@@ -20,6 +27,7 @@ Before opening a pull request, run the same checks CI runs:
 
 ```sh
 npm run i18n:report                          # every English page has a ja twin of the same shape
+npm test                                     # the language-preference script
 npm run build
 node ../scripts/ci/docs-links-check.mjs dist  # every link and #anchor in the built site resolves
 ```

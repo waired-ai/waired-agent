@@ -95,7 +95,7 @@ func ConfirmWithLabels(title, body, acceptLabel, cancelLabel string) (confirmed,
 }
 
 func ShowAbout(version, sha string) {
-	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired", version, sha)
+	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired-agent", version, sha)
 	messageBoxW("About Waired", body, mbOk|mbIconInfo)
 }
 

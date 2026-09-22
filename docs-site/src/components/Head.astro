@@ -1,0 +1,17 @@
+---
+/**
+ * Head override — Starlight's <head> entries, plus the script that picks the
+ * language a page opens in (a Japanese browser lands on /ja/, and a choice
+ * made in the language picker is remembered). The rules are in
+ * src/lib/language-preference.js.
+ *
+ * Inlined rather than bundled: a bundled script runs after the page has
+ * been drawn, so a Japanese reader would see the English page flash before
+ * the redirect.
+ */
+import Default from '@astrojs/starlight/components/Head.astro';
+import languagePreference from '../lib/language-preference.js?raw';
+---
+
+<Default />
+<script is:inline set:html={languagePreference} />

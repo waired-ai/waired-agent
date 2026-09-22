@@ -8,6 +8,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
+    "test": "node --test src/lib/language-preference.test.mjs",
     "i18n:check": "node scripts/i18n-sync.mjs --check",
     "i18n:report": "node scripts/i18n-sync.mjs --report"
   },

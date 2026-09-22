@@ -212,7 +212,7 @@ func CopyToClipboard(text string) error {
 // native NSAlert + CGO. Falls through to stderr if osascript itself
 // is missing (impossible on a normal macOS install, but defensive).
 func ShowAbout(version, sha string) {
-	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired", version, sha)
+	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired-agent", version, sha)
 	if !runOsascriptDialog("About Waired", body, "note", []string{"OK"}, "OK") {
 		fmt.Fprintln(os.Stderr, body)
 	}

@@ -41,7 +41,7 @@ that speaks the OpenAI or Anthropic API can point at your model. See
 ### Is it open source?
 
 The client, which is everything that runs on your computers, is open source
-and readable on [GitHub](https://github.com/waired-ai/waired). The control
+and readable on [GitHub](https://github.com/waired-ai/waired-agent). The control
 plane that introduces your devices to each other is hosted for you.
 
 ## Hardware and models

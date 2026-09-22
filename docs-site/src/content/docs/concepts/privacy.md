@@ -84,7 +84,7 @@ No setting mixes the two inside one session.
 
 The model runs on hardware you already own, so there is no per-message bill
 and no subscription. The Waired client is open source, and you can read what
-runs on your computers on [GitHub](https://github.com/waired-ai/waired). The
+runs on your computers on [GitHub](https://github.com/waired-ai/waired-agent). The
 control plane that introduces your devices is the part hosted for you.
 
 ## Sharing controls
