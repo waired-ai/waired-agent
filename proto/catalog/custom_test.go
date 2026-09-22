@@ -330,6 +330,29 @@ func TestCustomNameKey(t *testing.T) {
 	}
 }
 
+// The two checks the control plane asks before it builds, so a person is
+// told the name is the problem: the same rules ValidateCustomManifest holds.
+func TestCustomDisplayNameChecks(t *testing.T) {
+	bundled := allBundled(t)
+	b := someBundledWithSpace(t, bundled)
+	for _, name := range []string{b.DisplayName, strings.ToUpper(b.ModelID), strings.ReplaceAll(b.DisplayName, " ", "\u3000"), "qwen2.5-coder-7b"} {
+		if _, taken := CustomNameTaken(name, bundled); !taken {
+			t.Errorf("%q: not reported taken", name)
+		}
+	}
+	if owner, taken := CustomNameTaken("My own model", bundled); taken {
+		t.Errorf("a free name reported taken by %s", owner)
+	}
+	for _, name := range []string{"", " x", "a\nb", "a\u200bb"} {
+		if ValidateCustomDisplayName(name) == nil {
+			t.Errorf("%q accepted", name)
+		}
+	}
+	if err := ValidateCustomDisplayName("カスタム\u3000モデル"); err != nil {
+		t.Errorf("a Japanese name refused: %v", err)
+	}
+}
+
 func TestValidateCustomProjection(t *testing.T) {
 	bundled := allBundled(t)
 	m := validCustomOllama(t)

@@ -285,6 +285,22 @@ func validCustomDisplayName(name string) error {
 	return nil
 }
 
+// ValidateCustomDisplayName checks a display name by the rules
+// ValidateCustomManifest applies, so the control plane can tell a person
+// their name is the problem before it builds anything.
+func ValidateCustomDisplayName(name string) error {
+	return validCustomDisplayName(name)
+}
+
+// CustomNameTaken reports whether name is already a bundled model's id,
+// alias or display name, or a retired name, compared as CustomNameKey
+// compares — the clash ValidateCustomManifest refuses. owner is the bundled
+// id (or "retired <name>") that holds it.
+func CustomNameTaken(name string, bundled []Manifest) (owner string, taken bool) {
+	owner, taken = bundledNames(bundled)[CustomNameKey(name)]
+	return owner, taken
+}
+
 // CustomNameKey is the form two custom-model names are compared in: without
 // case, and with every run of whitespace (any Unicode space, including the
 // full-width one) read as one ASCII space. "Qwen3 8B" and "qwen3  8b" are
@@ -324,6 +340,18 @@ var customVLLMDTypes = map[string]bool{
 // compared without case: resolution treats them as the same name to a
 // person reading a list.
 func customNameClash(m Manifest, bundled []Manifest) error {
+	taken := bundledNames(bundled)
+	for _, name := range []string{m.ModelID, m.DisplayName} {
+		if owner, ok := taken[CustomNameKey(name)]; ok {
+			return fmt.Errorf("custom model %s: %q is already a bundled or retired name (%s)", m.ModelID, name, owner)
+		}
+	}
+	return nil
+}
+
+// bundledNames maps the CustomNameKey of every bundled id, alias and display
+// name, and of every retired name, to what holds it.
+func bundledNames(bundled []Manifest) map[string]string {
 	taken := map[string]string{}
 	for _, b := range bundled {
 		taken[CustomNameKey(b.ModelID)] = b.ModelID
@@ -339,12 +367,7 @@ func customNameClash(m Manifest, bundled []Manifest) error {
 			taken[CustomNameKey(n)] = "retired " + n
 		}
 	}
-	for _, name := range []string{m.ModelID, m.DisplayName} {
-		if owner, ok := taken[CustomNameKey(name)]; ok {
-			return fmt.Errorf("custom model %s: %q is already a bundled or retired name (%s)", m.ModelID, name, owner)
-		}
-	}
-	return nil
+	return taken
 }
 
 // validateCustomSource holds a custom variant to the two shapes an import
