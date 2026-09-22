@@ -208,6 +208,14 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 			p.onLoadMemoryFailure(f)
 			return
 		}
+		// A build the engine cannot load at all fails every attempt the
+		// same way, and each attempt costs a runner start: recorded and held
+		// off like a memory failure, with its own words (waired-ai/waired#1480).
+		if kind, reason, cannot := ollamaLoadCannotStart(err); cannot {
+			p.warmFails.fail(p.warmLoadKey(tag))
+			p.onLoadCannotStart(kind, reason, err.Error())
+			return
+		}
 		fails := p.warmFails.fail(p.warmLoadKey(tag))
 		if p.logger != nil {
 			p.logger.Info("warm-up load did not complete; the first request will pay for it",

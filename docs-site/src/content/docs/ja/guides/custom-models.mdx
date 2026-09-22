@@ -82,14 +82,15 @@ Claude Codeやほかのコーディングエージェントの**Waired**と**Wai
 | **custom model … is no longer in this account's list** | コンソールで削除されたモデルについて、セットアップが表示します。 | 別のモデルを選ぶか、インポートし直してください。 |
 | **custom model … is in this account's list, but this version of Waired can't read it** | そのコンピュータのWairedが古く、モデルを読めないときに、セットアップが表示します。 | そのコンピュータのWairedを更新してから、もう一度モデルを選んでください。 |
 
-vLLMで、やり直しても直らない理由で起動しなかったモデルは、もう起動しません。Wairedは推論エンジンを止めて、**⚠ … did not start on this computer**のお知らせを表示し、`waired status`は**Waired stopped the engine because it cannot start the chosen model on this computer.**と示します。お知らせは理由を示します。
+やり直しても直らない理由で起動しなかったモデルは、もう起動しません。Wairedは推論エンジンを止めて、**⚠ … did not start on this computer**のお知らせを表示し、`waired status`は**Waired stopped the engine because it cannot start the chosen model on this computer.**と示します。お知らせは理由を示します。
 
 - **the vLLM version Waired installs does not support this model's architecture …**：別のモデルを選んでください。
 - **this model needs to run its own code to load, which Waired does not allow**：別のモデルを選んでください。
 - **this GPU is too old for the model's … quantization**：別の量子化ビルドか、別のモデルを選んでください。
 - **vLLM found no safetensors weights in the downloaded files**：`waired models rm`でモデルを削除し、もう一度選んでダウンロードし直してください。
+- **the Ollama version on this computer does not support this model's architecture …**：Wairedを更新するか、別のモデルを選んでください。
 
-モデルを選ぶと、推論エンジンはまた起動します。次の2つの理由は、`waired status`とコンソールの推論エンジンの行に表示されます。
+モデルを選ぶと、推論エンジンはまた起動します。vLLMでは、次の2つの理由が`waired status`とコンソールの推論エンジンの行に表示されます。
 
 - **on this computer the KV cache holds at most … tokens for this model, less than the context window it was started with**：小さいモデルを選ぶか、`inference.vllm_gpu_memory_utilization`を上げてください。このときは**⚠ … did not load on this computer**のお知らせも表示されます。
 - **another program is using this GPU's memory**：そのプログラムを閉じるか、`inference.vllm_gpu_memory_utilization`を下げてから、もう一度モデルを選んでください。

@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // warmEngine is a fake ollama that records the /api/generate warm-up
@@ -30,6 +33,9 @@ type warmEngine struct {
 	// failLoads answers /api/generate with a 500 and loads nothing: a
 	// model the runner will not load (waired-ai/waired-agent#1443).
 	failLoads bool
+	// failBody is the 500's body when failLoads is set; "" is the runner
+	// termination every older test assumed.
+	failBody string
 }
 
 func (e *warmEngine) setFailLoads(v bool) {
@@ -62,14 +68,17 @@ func (e *warmEngine) start(t *testing.T) (host string, port int) {
 			_ = json.Unmarshal(body, &got)
 			e.mu.Lock()
 			e.loads = append(e.loads, got)
-			fail := e.failLoads
+			fail, failBody := e.failLoads, e.failBody
 			if !fail {
 				e.resident = append(e.resident, got["model"].(string))
 			}
 			e.mu.Unlock()
 			if fail {
 				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(`{"error":"llama runner process has terminated"}`))
+				if failBody == "" {
+					failBody = `{"error":"llama runner process has terminated"}`
+				}
+				_, _ = w.Write([]byte(failBody))
 				return
 			}
 			_, _ = w.Write([]byte(`{"done":true}`))
@@ -443,5 +452,84 @@ func TestWarmServingModel_AFailedLoadObservesNothing(t *testing.T) {
 
 	if r := p.ollama.Residency(); r.Resident() {
 		t.Errorf("a failed warm-up recorded the model as resident: %+v", r)
+	}
+}
+
+// A build whose architecture the engine does not know fails every load the
+// same way, whatever the memory. The warm-up records it with its kind and
+// holds the engine off, as a memory failure is held; the words are the
+// engine's refusal, not "ran out of memory" (waired-ai/waired#1480). The
+// body is ollama v0.34.0's for llama.cpp b10760's refusal. Record of
+// today's behaviour.
+func TestWarmServingModel_AnArchitectureTheEngineDoesNotKnowStopsIt(t *testing.T) {
+	bundled, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m catalog.Manifest
+	var v catalog.Variant
+	for _, bm := range bundled {
+		for _, bv := range bm.Variants {
+			if bv.Source.Type == catalog.SourceOllama && bv.Source.Tag != "" && m.ModelID == "" {
+				m, v = bm, bv
+			}
+		}
+	}
+	if m.ModelID == "" {
+		t.Fatal("precondition: no bundled ollama build to key the record on")
+	}
+	e := &warmEngine{failBody: `{"error":"llama-server process no longer running: exit status 1 ` +
+		`error loading model: unknown model architecture: 'qwen9'"}`}
+	e.setFailLoads(true)
+	p := warmProvider(t, e, m.ModelID, v.Source.Tag)
+	p.manifests = bundled
+	if err := p.store.Update(func(s *catalog.State) {
+		ms := s.Models[m.ModelID]
+		ms.VariantID = v.VariantID
+		s.Models[m.ModelID] = ms
+		s.Active.VariantID = v.VariantID
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.warmServingModelNow(context.Background())
+
+	rec, blocked := p.engineLoadIsBlocked()
+	if !blocked {
+		t.Fatal("the refused build was not recorded against this engine")
+	}
+	if rec.Kind != signer.LoadFailureArchitectureUnsupported || !strings.Contains(rec.Reason, "architecture qwen9") ||
+		!strings.Contains(rec.Reason, "update Waired") {
+		t.Errorf("record = kind %q, reason %q", rec.Kind, rec.Reason)
+	}
+	if p.parkedBecause() != parkCauseCannotStart || !p.ollama.IsParked() {
+		t.Errorf("parked because %v (engine parked %v), want the cannot-start stop", p.parkedBecause(), p.ollama.IsParked())
+	}
+	ns := p.loadFailureNotices(context.Background())
+	if len(ns) != 1 || !strings.Contains(ns[0].Title, "did not start") || strings.Contains(ns[0].Text, "out of memory") {
+		t.Errorf("notices = %+v, want the did-not-start notice", ns)
+	}
+}
+
+// The classifier keeps a published name only when it is a plain one.
+func TestOllamaLoadCannotStart(t *testing.T) {
+	for _, tc := range []struct {
+		err      string
+		wantOK   bool
+		wantName string
+	}{
+		{"HTTP 500: error loading model: unknown model architecture: 'qwen9'", true, "architecture qwen9 —"},
+		{"HTTP 500: error loading model: unknown model architecture: 'a b\u202e'", true, "architecture —"},
+		{"HTTP 500: llama runner process has terminated", false, ""},
+		{"HTTP 500: error loading model: cudaMalloc failed: out of memory", false, ""},
+	} {
+		kind, reason, ok := ollamaLoadCannotStart(errors.New(tc.err))
+		if ok != tc.wantOK {
+			t.Errorf("%q: ok = %v", tc.err, ok)
+			continue
+		}
+		if ok && (kind != signer.LoadFailureArchitectureUnsupported || !strings.Contains(reason, tc.wantName)) {
+			t.Errorf("%q: kind %q, reason %q", tc.err, kind, reason)
+		}
 	}
 }

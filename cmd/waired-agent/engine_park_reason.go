@@ -153,6 +153,30 @@ func (p *agentInferenceProvider) parkForOutOfMemory(ctx context.Context, why str
 	}
 }
 
+// parkCannotStart holds the ollama engine off because the chosen build
+// cannot load on it at all (waired-ai/waired#1480): parkForOutOfMemory's
+// twin, with the words that are true. The operator's own stop wins here
+// too.
+func (p *agentInferenceProvider) parkCannotStart(ctx context.Context, why string) {
+	if p == nil || p.ollama == nil {
+		return
+	}
+	if p.parkedBecause() == parkCauseOperator {
+		return
+	}
+	p.noteParked(parkCauseCannotStart)
+	if err := p.ollama.Park(ctx); err != nil {
+		p.noteParked(parkCauseNone)
+		if p.logger != nil {
+			p.logger.Warn("could not stop the engine after a load it cannot do", "err", err)
+		}
+		return
+	}
+	if p.logger != nil {
+		p.logger.Warn("inference stopped: the chosen model cannot start on this computer", "why", why)
+	}
+}
+
 // resumeAfterOutOfMemory releases an engine held off for memory, and reports
 // whether it did anything.
 //

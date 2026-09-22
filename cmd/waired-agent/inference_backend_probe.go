@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -156,10 +157,24 @@ func loadOllamaModel(ctx context.Context, client *http.Client, baseURL, tag, kee
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// ollama's own words, which is how a caller tells a build the engine
+		// cannot load at all from any other failure (waired-ai/waired#1480).
+		// Bounded and cut to one line: it ends up in logs and in the record.
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		var body struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Error != "" {
+			msg, _, _ := strings.Cut(body.Error, "\n")
+			if len(msg) > 400 {
+				msg = msg[:400]
+			}
+			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		}
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	return nil
 }
 

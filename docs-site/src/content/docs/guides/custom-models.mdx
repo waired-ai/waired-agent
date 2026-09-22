@@ -134,8 +134,8 @@ Each of these messages says why, and what to do.
 | **custom model … is no longer in this account's list** | Setup shows it for a model that was deleted in the console. | Choose another model, or import it again. |
 | **custom model … is in this account's list, but this version of Waired can't read it** | Setup shows it when the Waired on that computer is too old to read the model. | Update Waired on that computer, then choose the model again. |
 
-On vLLM, a model that fails to start for a reason another try can't fix is
-not started again. Waired stops the engine and shows the notice **⚠ … did not
+A model that fails to start for a reason another try can't fix is not started
+again. Waired stops the engine and shows the notice **⚠ … did not
 start on this computer**, and `waired status` says **Waired stopped the engine
 because it cannot start the chosen model on this computer.** The notice names
 the reason:
@@ -148,8 +148,10 @@ the reason:
   another quantization, or another model.
 - **vLLM found no safetensors weights in the downloaded files**: remove the
   model with `waired models rm` and choose it again to download a fresh copy.
+- **the Ollama version on this computer does not support this model's
+  architecture …**: update Waired, or choose another model.
 
-Choosing a model starts the engine again. Two more reasons show on the
+Choosing a model starts the engine again. On vLLM, two more reasons show on the
 engine's line in `waired status` and in the console:
 
 - **on this computer the KV cache holds at most … tokens for this model, less
