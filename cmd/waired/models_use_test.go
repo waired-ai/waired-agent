@@ -127,6 +127,7 @@ func TestFormatModelsUseError(t *testing.T) {
 		status      int
 		body        string
 		want        string
+		requested   string
 		wantHandled bool
 	}{
 		{
@@ -160,6 +161,33 @@ func TestFormatModelsUseError(t *testing.T) {
 			wantHandled: true,
 		},
 		{
+			// A custom id this computer lacks has not arrived yet or was
+			// deleted; the list of bundled models is no help with either
+			// (waired-ai/waired#1480).
+			name:      "an unknown custom id says it may not have arrived, or was deleted",
+			status:    http.StatusNotFound,
+			body:      `{"error_code":"model_not_found","message":"no bundled manifest with that model_id"}`,
+			requested: "custom-tiny-0123abcd",
+			want: "This computer has no custom model custom-tiny-0123abcd. If it was imported just now, " +
+				"wait a minute for it to reach this computer and try again; if it was deleted, import it " +
+				"again in the Waired console's Custom models tab.",
+			wantHandled: true,
+		},
+		{
+			// The daemon's sentence names the model, both engines and what
+			// to choose, and nothing was recorded (waired-ai/waired#1480).
+			name:   "a custom model for the other engine is reported as the daemon said it",
+			status: http.StatusConflict,
+			body: `{"error_code":"custom_model_wrong_engine","message":"Tiny (custom-tiny-0123abcd) was imported for vllm, ` +
+				`but this computer runs ollama — choose a model for ollama, or import this one ` +
+				`again for ollama in the Waired console's Custom models tab"}`,
+			requested: "custom-tiny-0123abcd",
+			want: "Tiny (custom-tiny-0123abcd) was imported for vllm, but this computer runs ollama — " +
+				"choose a model for ollama, or import this one again for ollama in the Waired console's " +
+				"Custom models tab",
+			wantHandled: true,
+		},
+		{
 			name:        "an error this build has no reading of is left to the caller",
 			status:      http.StatusInternalServerError,
 			body:        `{"error_code":"restart_unavailable","message":"no restart mechanism wired"}`,
@@ -169,7 +197,11 @@ func TestFormatModelsUseError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := &mgmtStatusError{StatusCode: tt.status, Message: tt.body}
-			got, handled := formatModelsUseError("", "qwen3.5-4b", err)
+			requested := tt.requested
+			if requested == "" {
+				requested = "qwen3.5-4b"
+			}
+			got, handled := formatModelsUseError("", requested, err)
 			if handled != tt.wantHandled {
 				t.Fatalf("handled = %v, want %v (got %q)", handled, tt.wantHandled, got)
 			}

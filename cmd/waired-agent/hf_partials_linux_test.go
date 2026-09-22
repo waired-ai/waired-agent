@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -106,7 +107,7 @@ func hfPartialsProvider(t *testing.T) (*agentInferenceProvider, catalog.Manifest
 // interrupted attempts had left 17.8 GB.
 func TestDownloadHFWeights_LeavesNoPartialFiles(t *testing.T) {
 	p, m, v := hfPartialsProvider(t)
-	dir := p.hfLocalDir(v.Source.RepoID)
+	dir := p.hfLocalDir(m.ModelID, v)
 	// What a killed attempt of an earlier run left.
 	writeHFFile(t, dir, ".cache/huggingface/download/shard.etag.deadbeef.incomplete", 4096)
 
@@ -134,7 +135,7 @@ func TestDownloadHFWeights_LeavesNoPartialFiles(t *testing.T) {
 // WARN for every `waired models cancel`.
 func TestDownloadHFWeights_ARequestedStopRecordsNoFailure(t *testing.T) {
 	p, m, v := hfPartialsProvider(t)
-	dir := p.hfLocalDir(v.Source.RepoID)
+	dir := p.hfLocalDir(m.ModelID, v)
 	if err := p.store.Update(func(s *catalog.State) {
 		s.VLLMModels[m.ModelID] = catalog.ModelState{VariantID: v.VariantID, State: catalog.ModelStateQueued}
 	}); err != nil {
@@ -209,5 +210,60 @@ func TestDownloadHFWeights_OneDownloadPerDirectory(t *testing.T) {
 		if s != 0 {
 			t.Errorf("invocation %d started beside %d partials of another; want 0", i, s)
 		}
+	}
+}
+
+// A custom model's weights directory names its commit, so two imports of one
+// repository at different commits never share one; a bundled build keeps the
+// directory it always had (waired-ai/waired#1480).
+func TestHFLocalDir_ACustomModelNamesItsCommit(t *testing.T) {
+	p, m, v := hfPartialsProvider(t)
+	if got := filepath.Base(p.hfLocalDir(m.ModelID, v)); got != "openai__gpt-oss-20b" {
+		t.Errorf("bundled dir %q", got)
+	}
+	cv := v
+	cv.Source.Revision = "0123456789abcdef0123456789abcdef01234567"
+	a := p.hfLocalDir("custom-gpt-oss-0123abcd", cv)
+	cv.Source.Revision = "fedcba9876543210fedcba9876543210fedcba98"
+	b := p.hfLocalDir("custom-gpt-oss-89abcdef", cv)
+	if filepath.Base(a) != "openai__gpt-oss-20b@0123456789ab" || a == b || !hfDirOwnedBy(p.stateDir, a) {
+		t.Errorf("custom dirs %q and %q", a, b)
+	}
+}
+
+// A custom model is pulled narrowly or not at all: with no safetensors at the
+// top level there is nothing to fetch, and the whole-repository fallback a
+// bundled build takes would fetch whatever the repository holds
+// (waired-ai/waired#1480).
+func TestDownloadHFWeights_ACustomModelWithoutSafetensorsIsRefused(t *testing.T) {
+	p, _, v := hfPartialsProvider(t)
+	p.hfFiles = fakeHFLister{files: []download.HFRepoFile{{Name: "config.json", Size: 1}, {Name: "pytorch_model.bin", Size: 9}}}
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	v.Source.Revision = "0123456789abcdef0123456789abcdef01234567"
+	_, err := p.downloadHFWeights(context.Background(), "custom-x-0123abcd", v, download.NewHFPuller("hf-fake", runner), false, nil)
+	if err == nil || !strings.Contains(err.Error(), "no safetensors") {
+		t.Fatalf("err %v, want the no-safetensors refusal", err)
+	}
+	if n := len(runner.args); n != 0 {
+		t.Errorf("hf download ran %d times", n)
+	}
+	st, _ := p.store.Load()
+	if ms := st.VLLMModels["custom-x-0123abcd"]; ms.State != catalog.ModelStateFailed || ms.Error == "" {
+		t.Errorf("record %+v, want failed with the reason", ms)
+	}
+}
+
+// The disk is checked before a byte is fetched, as the ollama pull does
+// (waired-ai/waired#1480).
+func TestDownloadHFWeights_StopsBeforeAFullDisk(t *testing.T) {
+	p, m, v := hfPartialsProvider(t)
+	p.hfFiles = fakeHFLister{files: []download.HFRepoFile{{Name: "config.json", Size: 1}, {Name: "model.safetensors", Size: 20 << 30}}}
+	prev := freeDiskFn
+	t.Cleanup(func() { freeDiskFn = prev })
+	freeDiskFn = func(string) (int64, error) { return 5 << 30, nil }
+	runner := &fakeHFRunner{lines: []string{"done"}}
+	_, err := p.downloadHFWeights(context.Background(), m.ModelID, v, download.NewHFPuller("hf-fake", runner), false, nil)
+	if n := len(runner.args); !errors.Is(err, errDiskShort) || n != 0 {
+		t.Fatalf("err %v after %d runs, want errDiskShort before any", err, n)
 	}
 }

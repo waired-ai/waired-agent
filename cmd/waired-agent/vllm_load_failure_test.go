@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Which failed vLLM starts are "the model does not fit here"
@@ -56,7 +57,7 @@ func TestRecordVLLMLoadFailure(t *testing.T) {
 	if _, blocked := p.vllmLoadBlocked(context.Background(), m, v, shape); blocked {
 		t.Fatal("blocked before anything was recorded")
 	}
-	p.recordVLLMLoadFailure(context.Background(), m, v, shape, "CUDA out of memory", "the model did not fit")
+	p.recordVLLMLoadFailure(context.Background(), m, v, shape, "CUDA out of memory", "the model did not fit", signer.LoadFailureMemory, 0)
 
 	if _, blocked := p.vllmLoadBlocked(context.Background(), m, v, shape); !blocked {
 		t.Error("the same build in the same shape is not blocked after it failed")
@@ -107,7 +108,7 @@ func TestSwapPreferredModel_VLLMClearsTheModelsLoadFailures(t *testing.T) {
 	p := vllmSwapProvider(t)
 	m := vllmSwapManifests()[0]
 	shape := vllmLoadShape(infruntime.ModelTuning{ContextLength: 200704}, "fp8", 4)
-	p.recordVLLMLoadFailure(context.Background(), m, m.Variants[1], shape, "CUDA out of memory", "")
+	p.recordVLLMLoadFailure(context.Background(), m, m.Variants[1], shape, "CUDA out of memory", "", signer.LoadFailureMemory, 0)
 	if err := p.store.Update(func(s *catalog.State) {
 		s.VLLMModels = map[string]catalog.ModelState{
 			"hybrid": {State: catalog.ModelStateReady, VariantID: "safetensors", LocalPath: t.TempDir()},
@@ -143,7 +144,7 @@ func TestReviewOutOfMemoryPark_VLLMHoldsWhileTheRecordApplies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	p.recordVLLMLoadFailure(context.Background(), m, v, shape, "No available memory for the cache blocks", "")
+	p.recordVLLMLoadFailure(context.Background(), m, v, shape, "No available memory for the cache blocks", "", signer.LoadFailureMemory, 0)
 
 	p.reviewOutOfMemoryPark(context.Background())
 	if !p.vllmIsParked() || p.parkedBecause() != parkCauseOutOfMemory {
@@ -185,7 +186,7 @@ func TestResumeAfterOutOfMemory_VLLMDropsTheNotice(t *testing.T) {
 	p := vllmSwapProvider(t)
 	m := vllmSwapManifests()[0]
 	shape := vllmLoadShape(infruntime.ModelTuning{ContextLength: 200704}, "fp8", 16)
-	p.recordVLLMLoadFailure(context.Background(), m, m.Variants[1], shape, "CUDA out of memory", "")
+	p.recordVLLMLoadFailure(context.Background(), m, m.Variants[1], shape, "CUDA out of memory", "", signer.LoadFailureMemory, 0)
 	if ns := p.loadFailureNotices(context.Background()); len(ns) != 1 {
 		t.Fatalf("notices = %+v, want one for the start that failed", ns)
 	}

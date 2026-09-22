@@ -240,6 +240,15 @@ type VariantLoadFailure struct {
 	Reason string `json:"reason,omitempty"`
 	Detail string `json:"detail,omitempty"`
 
+	// Kind is what the engine could not do, as the control plane reads it
+	// (signer.LoadFailure*): memory, or a build this engine cannot run at
+	// all on this computer (waired-ai/waired#1480). Empty on a record
+	// written before it existed, which was always memory.
+	Kind string `json:"kind,omitempty"`
+	// EngineMaxWindow is the largest context window the engine said it
+	// could hold with this build, when it said one.
+	EngineMaxWindow int `json:"engine_max_window,omitempty"`
+
 	Context LoadContext `json:"context"`
 	Shape   LoadShape   `json:"shape"`
 

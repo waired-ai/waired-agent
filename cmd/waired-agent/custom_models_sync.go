@@ -44,8 +44,9 @@ type customModelsSync struct {
 	inUse  func(modelID string) bool
 	logger *slog.Logger
 
-	kick chan struct{}
-	seen atomic.Bool // a revision has been seen on the map
+	kick   chan struct{}
+	seen   atomic.Bool // a revision has been seen on the map
+	latest atomic.Pointer[string]
 }
 
 func newCustomModelsSync(src *catalog.CustomSource, client customModelsFetcher, deviceID string, mk ed25519.PrivateKey,
@@ -64,9 +65,22 @@ func (s *customModelsSync) NoteRevision(rev string) {
 		return
 	}
 	s.seen.Store(true)
+	s.latest.Store(&rev)
 	if rev != s.src.Revision() {
 		s.Kick()
 	}
+}
+
+// Settled reports whether the set this device holds is the one at the
+// revision the map named last: a fetch has completed since the account's
+// list last changed. A model it does not hold then is not on its way
+// (waired-ai/waired#1480).
+func (s *customModelsSync) Settled() bool {
+	if s == nil || !s.seen.Load() {
+		return false
+	}
+	rev := s.latest.Load()
+	return rev != nil && *rev == s.src.Revision()
 }
 
 // Kick asks for a fetch without waiting for it. It does nothing until a

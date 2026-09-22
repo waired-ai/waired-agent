@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -17,6 +16,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // resolveVLLMTensorParallel returns the --tensor-parallel-size for this
@@ -316,11 +316,27 @@ func (p *agentInferenceProvider) hfLister() download.HFFileLister {
 	return download.DefaultHFFileLister{}
 }
 
-// hfLocalDir is the on-disk directory the safetensors for repoID land in.
-// The repo id's "/" is flattened to "__" so the whole repo maps to a single
-// directory under hfModelsRoot without nesting or traversal risk.
-func (p *agentInferenceProvider) hfLocalDir(repoID string) string {
-	return filepath.Join(hfModelsRoot(p.stateDir), strings.ReplaceAll(repoID, "/", "__"))
+// failHFPull records a pull that stopped before it began, the way a failed
+// `hf download` is recorded below: a refresh keeps the model ready.
+func (p *agentInferenceProvider) failHFPull(modelID string, refresh bool, why string) {
+	_ = p.store.Update(func(s *catalog.State) {
+		m := s.VLLMModels[modelID]
+		if !refresh {
+			m.State = catalog.ModelStateFailed
+		}
+		m.Error = why
+		s.VLLMModels[modelID] = m
+	})
+}
+
+// hfModelsRootOrState is the directory whose filesystem the weights will land
+// on: the weights root once it exists, the state directory before the first
+// download creates it.
+func hfModelsRootOrState(stateDir string) string {
+	if dirExists(hfModelsRoot(stateDir)) {
+		return hfModelsRoot(stateDir)
+	}
+	return stateDir
 }
 
 // downloadHFWeights fetches the safetensors for variant into hfLocalDir and
@@ -333,7 +349,7 @@ func (p *agentInferenceProvider) hfLocalDir(repoID string) string {
 // nothing, because settleCancelledPull is about to drop the row, and "failed"
 // would be a wrong answer — the same rule runPullJob follows for ollama.
 func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, refresh bool, stopRequested func() bool) (string, error) {
-	localDir := p.hfLocalDir(variant.Source.RepoID)
+	localDir := p.hfLocalDir(modelID, variant)
 	// The directory is this download's until it returns, so every partial
 	// file in it now is one a killed download left: huggingface_hub never
 	// resumes them (download.SweepHFIncomplete), and they would otherwise
@@ -372,7 +388,22 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	// fetch falls back to the whole repository, exactly as it behaved
 	// before, and the row goes back to reporting nothing.
 	files, listErr := p.hfLister().ListTopLevel(ctx, variant.Source.RepoID, variant.Source.Revision)
+	custom := catalog.IsCustomModelID(modelID)
+	if custom && listErr == nil {
+		files = download.CustomHFFiles(files)
+	}
 	switch {
+	case custom && (listErr != nil || !download.HFHasSafetensors(files)):
+		// A custom model is pulled narrowly or not at all: the whole-repository
+		// fallback below would fetch whatever the repository holds, and the
+		// import only vouched for its top-level safetensors
+		// (waired-ai/waired#1480).
+		err := fmt.Errorf("download: %s: the repository's top level has no safetensors weights at the imported commit, so there is nothing vLLM can load — choose another model, or import one whose safetensors weights are at the repository's top level", variant.Source.RepoID)
+		if listErr != nil {
+			err = fmt.Errorf("download: %s: could not list the repository's files on Hugging Face at the imported commit (%v); try again later", variant.Source.RepoID, listErr)
+		}
+		p.failHFPull(modelID, refresh, err.Error())
+		return "", err
 	case listErr != nil:
 		p.logger.Warn("hf file listing unavailable; fetching the whole repository and reporting no byte progress",
 			"model", modelID, "repo", variant.Source.RepoID, "err", listErr)
@@ -390,6 +421,13 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 	default:
 		p.logger.Info("hf pull scope", "model", modelID, "repo", variant.Source.RepoID,
 			"files", len(files), "bytes", download.HFTotalBytes(files))
+	}
+	// Before a byte is fetched, as the ollama pull does (pull_size.go): a
+	// multi-GB download that ends in a full disk costs the time and leaves
+	// the disk full (waired-ai/waired#1480).
+	if short := diskShortfallAt(hfModelsRootOrState(p.stateDir), download.HFTotalBytes(files)); short != "" {
+		p.failHFPull(modelID, refresh, short)
+		return "", fmt.Errorf("%w: %s", errDiskShort, short)
 	}
 
 	watchCtx, stopWatch := context.WithCancel(ctx)
@@ -551,9 +589,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		// Two causes share the latch, and the log named only the
 		// operator's: a stop for a model that did not fit read as one
 		// someone asked for (waired-agent#1515).
-		if p.parkedBecause() == parkCauseOutOfMemory {
-			p.logger.Info("vllm bootstrap: the engine is stopped because the chosen model did not fit this computer; not starting it",
-				"state", existingState, "fix", "choose a different model")
+		if p.parkedForLoadFailure() {
+			p.logger.Info("vllm bootstrap: the engine is stopped because the chosen model did not start on this computer; not starting it",
+				"state", existingState, "cause", p.parkedBecause().String(), "fix", "choose a different model")
 			return
 		}
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
@@ -836,8 +874,11 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		return
 	case vllmAttemptsMovedOn:
 		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
-		if mem, reason := vllmStartFailedForMemory(infruntime.LastEngineLogSpawn(string(raw)), tuning.WeightsOverBudget); mem {
-			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, reason, "")
+		lastSpawn := infruntime.LastEngineLogSpawn(string(raw))
+		if mem, reason := vllmStartFailedForMemory(lastSpawn, tuning.WeightsOverBudget); mem {
+			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, reason, "", signer.LoadFailureMemory, vllmEngineMaxWindow(lastSpawn))
+		} else if kind := vllmStartFailureKind(lastSpawn); kind != "" {
+			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, vllmModelFailureHint(lastSpawn), "", kind, 0)
 		}
 		p.logger.Info("vllm bootstrap: a different model was chosen while this one was starting; starting that one instead",
 			"model", manifest.ModelID, "err", ensureErr)
@@ -880,9 +921,15 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		// off with the reason, so a restart does not repeat the same failed
 		// start (waired-agent#1515). The previous model answering in the
 		// meantime is not the choice and is not recorded against.
+		// A build this engine cannot run here at all fails every attempt
+		// the same way, and is recorded and held off the same way, with its
+		// own words (waired-ai/waired#1480).
 		if chosen {
-			if mem, reason := vllmStartFailedForMemory(infruntime.LastEngineLogSpawn(string(raw)), tuning.WeightsOverBudget); mem {
-				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, reason, hint)
+			lastSpawn := infruntime.LastEngineLogSpawn(string(raw))
+			if mem, reason := vllmStartFailedForMemory(lastSpawn, tuning.WeightsOverBudget); mem {
+				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, reason, hint, signer.LoadFailureMemory, vllmEngineMaxWindow(lastSpawn))
+			} else if kind := vllmStartFailureKind(lastSpawn); kind != "" {
+				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, hint, "", kind, 0)
 			}
 		}
 		return

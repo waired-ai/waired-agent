@@ -196,6 +196,13 @@ func TestClient_SetPreferredModel_StatusSentinels(t *testing.T) {
 			`{"error":"model_switch_unavailable","message":"management: this host cannot apply that model switch"}`,
 			ErrModelSwitchUnavailable,
 		},
+		{
+			// The code the daemon actually sends is error_code.
+			"409 model_switch_unavailable under its real key is still the weights case",
+			http.StatusConflict,
+			`{"error_code":"model_switch_unavailable","message":"management: this host cannot apply that model switch"}`,
+			ErrModelSwitchUnavailable,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -216,5 +223,28 @@ func TestClient_SetPreferredModel_StatusSentinels(t *testing.T) {
 				t.Errorf("err=%q, want no transport detail", err)
 			}
 		})
+	}
+}
+
+// A 409 that refuses the choice outright is not the weights case: the
+// daemon recorded nothing, and its sentence says why and what to do. It
+// used to be reported as "couldn't download the model" (waired-ai/waired#1480).
+func TestClient_SetPreferredModel_RefusalCarriesTheDaemonsSentence(t *testing.T) {
+	const msg = "Tiny (custom-tiny-0123abcd) was imported for vllm, but this computer runs ollama — " +
+		"choose a model for ollama, or import this one again for ollama in the Waired console's Custom models tab"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error_code":"custom_model_wrong_engine","message":"` + msg + `"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "custom-tiny-0123abcd", 0)
+	var refused *ModelSwitchRefused
+	if !errors.As(err, &refused) || errors.Is(err, ErrModelSwitchUnavailable) {
+		t.Fatalf("err = %v, want *ModelSwitchRefused", err)
+	}
+	if got := modelSwitchErrorText(err, "Tiny"); got != "Can't switch to Tiny. "+msg {
+		t.Errorf("dialog text = %q", got)
 	}
 }

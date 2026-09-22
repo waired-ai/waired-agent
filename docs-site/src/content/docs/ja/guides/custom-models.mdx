@@ -68,6 +68,33 @@ Claude Codeやほかのコーディングエージェントの**Waired**と**Wai
 
 そのようなモデルではセッションを短く保ち、エージェントの要約が頻繁になったら新しいセッションを始めてください。OpenCodeとOpenClawでは、コンピュータを名指しする項目を使ってください。コンテキストウィンドウを知っているのはその項目です。コンピュータを指定しないリクエストを200,704トークンを扱えるコンピュータに送れるときは、Wairedがそちらに送ります。
 
+## <a id="when-a-custom-model-doesnt-run"></a>カスタムモデルが動かないとき
+
+次のメッセージは、それぞれ理由と対処を示します。
+
+| メッセージ | 理由 | 対処 |
+|---|---|---|
+| **… was imported for vllm, but this computer runs ollama — …** | カスタムモデルは、インポートしたときの推論エンジンでしか動きません。`waired models use`、Wairedアプリ、ダウンロードのいずれもこれを断り、コンピュータでは何も変わりません。 | このコンピュータの推論エンジン向けのモデルを選ぶか、その推論エンジン向けにモデルをインポートし直してください。 |
+| **the file behind … on Hugging Face was replaced after this model was imported** | インポートした後で、Hugging Face上のファイルが差し替えられました。新しいファイルは別のモデルなので、コンピュータはダウンロードしません。 | モデルをインポートし直してください。新しいインポートが新しいファイルを固定します。 |
+| **the repository's top level has no safetensors weights at the imported commit** | vLLMはリポジトリの最上位にあるsafetensorsの重みを読み込みますが、そこにありません。 | 別のモデルを選ぶか、safetensorsの重みがリポジトリの最上位にあるモデルをインポートしてください。 |
+| **insufficient disk space for this model: it needs … and only … is free** | vLLMのダウンロードを始める前に、Wairedはその大きさとディスクの空きを比べます。 | 空きを作るか、小さいモデルを選んでください。 |
+| **This computer has no custom model …** | `waired models use`が、このコンピュータにないカスタムモデルを指定しました。インポートしたばかりでまだ届いていないか、削除されています。 | 1分ほど待ってからやり直すか、インポートし直してください。 |
+| **custom model … is no longer in this account's list** | コンソールで削除されたモデルについて、セットアップが表示します。 | 別のモデルを選ぶか、インポートし直してください。 |
+| **custom model … is in this account's list, but this version of Waired can't read it** | そのコンピュータのWairedが古く、モデルを読めないときに、セットアップが表示します。 | そのコンピュータのWairedを更新してから、もう一度モデルを選んでください。 |
+
+やり直しても直らない理由で起動しなかったモデルは、もう起動しません。Wairedは推論エンジンを止めて、**⚠ … did not start on this computer**のお知らせを表示し、`waired status`は**Waired stopped the engine because it cannot start the chosen model on this computer.**と示します。お知らせは理由を示します。
+
+- **the vLLM version Waired installs does not support this model's architecture …**：別のモデルを選んでください。
+- **this model needs to run its own code to load, which Waired does not allow**：別のモデルを選んでください。
+- **this GPU is too old for the model's … quantization**：別の量子化ビルドか、別のモデルを選んでください。
+- **vLLM found no safetensors weights in the downloaded files**：`waired models rm`でモデルを削除し、もう一度選んでダウンロードし直してください。
+- **the Ollama version on this computer does not support this model's architecture …**：Wairedを更新するか、別のモデルを選んでください。
+
+モデルを選ぶと、推論エンジンはまた起動します。vLLMでは、次の2つの理由が`waired status`とコンソールの推論エンジンの行に表示されます。
+
+- **on this computer the KV cache holds at most … tokens for this model, less than the context window it was started with**：小さいモデルを選ぶか、`inference.vllm_gpu_memory_utilization`を上げてください。このときは**⚠ … did not load on this computer**のお知らせも表示されます。
+- **another program is using this GPU's memory**：そのプログラムを閉じるか、`inference.vllm_gpu_memory_utilization`を下げてから、もう一度モデルを選んでください。
+
 ## モデルを削除する
 
 **Custom models**のタブから削除します。コンピュータが動かしているモデル、または動かすよう指示されているモデルは削除できません。コンソールがそのコンピュータを示すので、先にそれぞれで別のモデルを選んでください。ダウンロード済みのコンピュータには、ファイルが残ります。その領域を空けるには、モデルを削除する前に、それぞれのコンピュータで`waired models rm <モデルのid>`を実行します。

@@ -14,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/notice"
 	protocatalog "github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Custom models on the agent (waired-ai/waired#1473). The sync, the
@@ -153,4 +154,84 @@ func TestCustomModelNoticesNameWhatIsStillInUse(t *testing.T) {
 // customModelInUseBy is customModelInUse for a bare provider.
 func customModelInUseBy(p *agentInferenceProvider, id string) bool {
 	return customModelInUse(&inferenceSubsystem{provider: p}, id)
+}
+
+// A desired custom model this computer does not hold waits for the set
+// while it may still be on its way, and is refused with the reason once a
+// fetch at the map's revision has completed without it: it was deleted, or
+// this build could not read it (waired-ai/waired#1480). It used to wait for
+// good, the setup step pending with nothing to say. Record of today's
+// behaviour.
+func TestParkUnknownCustomModelRefusesOnceTheSetHasSettled(t *testing.T) {
+	const id, key = "custom-gone-0123abcd", "custom-gone-0123abcd|"
+	for _, tc := range []struct {
+		name       string
+		settled    bool
+		unreadable string
+		wantDetail string // "" = still parked, nothing refused
+	}{
+		{name: "still on its way", settled: false},
+		{name: "deleted", settled: true, wantDetail: "deleted in the Waired console"},
+		{name: "not readable here", settled: true, unreadable: "variant q4: format is not known",
+			wantDetail: "can't read it (variant q4: format is not known). Update Waired"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fetches := 0
+			r := &setupReconciler{
+				modelApplied:          map[string]bool{},
+				modelRejected:         map[string]setupModelRejection{},
+				leftoverNoted:         map[string]bool{},
+				kick:                  make(chan struct{}, 1),
+				customModelKnown:      func(string) bool { return false },
+				fetchCustomModels:     func() { fetches++ },
+				customModelsSettled:   func() bool { return tc.settled },
+				customModelUnreadable: func(string) (string, bool) { return tc.unreadable, tc.unreadable != "" },
+			}
+			if !r.parkUnknownCustomModel(id, key) {
+				t.Fatal("an unknown custom model went on to be applied")
+			}
+			rej, refused := r.modelRejected[key]
+			if tc.wantDetail == "" {
+				if refused || r.modelApplied[key] || fetches != 1 {
+					t.Errorf("refused=%v applied=%v fetches=%d; want parked with a fetch asked for", refused, r.modelApplied[key], fetches)
+				}
+				return
+			}
+			if !refused || rej.code != signer.SetupErrorModelNotFound || !strings.Contains(rej.detail, tc.wantDetail) {
+				t.Errorf("rejection = %+v, want model_not_found saying %q", rej, tc.wantDetail)
+			}
+			if !r.modelApplied[key] {
+				t.Error("the refused instruction was left live, to be refused again every pass")
+			}
+		})
+	}
+}
+
+// Settled is true only once the set held is the one at the revision the
+// map named last.
+func TestCustomModelsSyncSettled(t *testing.T) {
+	bundled, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := catalog.NewCustomSource(filepath.Join(t.TempDir(), "c.json"), "net_a", bundled, nil)
+	_, mk, _ := ed25519.GenerateKey(nil)
+	s := newCustomModelsSync(src, &fakeCustomFetcher{}, "dev_1", mk, nil, discardLogger())
+	if s.Settled() {
+		t.Error("settled before any revision was seen")
+	}
+	s.NoteRevision("r1")
+	if s.Settled() {
+		t.Error("settled before the set at r1 was fetched")
+	}
+	if _, err := src.Replace(catalog.CustomModelSet{Revision: "r1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Settled() {
+		t.Error("not settled with the set at the map's revision")
+	}
+	s.NoteRevision("r2")
+	if s.Settled() {
+		t.Error("still settled after the map named a newer revision")
+	}
 }

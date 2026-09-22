@@ -1313,6 +1313,12 @@ func modelSwitchErrorText(err error, name string) string {
 		return fmt.Sprintf("Can't switch to %s right now. This computer couldn't download the model. "+
 			"Your choice is saved and applies once downloads work again.", name)
 	}
+	// The daemon refused the choice and says why and what to do; its
+	// sentence names the model (waired-ai/waired#1480).
+	var refused *ModelSwitchRefused
+	if errors.As(err, &refused) {
+		return "Can't switch to " + name + ". " + refused.Message
+	}
 	return fmt.Sprintf("Couldn't switch the model: %v", err)
 }
 

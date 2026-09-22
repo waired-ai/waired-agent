@@ -131,6 +131,17 @@ var ErrCatalogUnsupported = errors.New("the background service doesn't expose mo
 // showing the transport error and its JSON body (waired#808).
 var ErrModelSwitchUnavailable = errors.New("this computer couldn't download the model, so the switch wasn't applied")
 
+// ModelSwitchRefused is a 409 from SetPreferredModel that is not
+// ErrModelSwitchUnavailable: the daemon refused the choice and recorded
+// nothing — a retired name, a window the model cannot reach, a custom
+// model imported for the other engine (waired-ai/waired#1480). Message is
+// the daemon's own sentence, which names the model and what to do. Every
+// 409 used to read as "couldn't download the model", which was false for
+// all three.
+type ModelSwitchRefused struct{ Message string }
+
+func (e *ModelSwitchRefused) Error() string { return e.Message }
+
 // ErrOpenCodeIntegrationUnsupported is returned by OpenCodeIntegration
 // when the daemon predates that endpoint (HTTP 404). The tray hides the
 // OpenCode menu group rather than surfacing a generic error.
@@ -390,7 +401,9 @@ func (c *Client) ModelCatalog(ctx context.Context) (*management.ModelCatalogResp
 // SetPreferredModel persists the user's choice and asks the daemon to
 // apply it: in process since waired#812, or by a supervised restart
 // when the swap layer cannot (the response's WillRestart says which).
-// 404 → ErrCatalogUnsupported, 409 → ErrModelSwitchUnavailable.
+// 404 → ErrCatalogUnsupported; 409 → ErrModelSwitchUnavailable, or
+// *ModelSwitchRefused carrying the daemon's sentence when it refused the
+// choice outright.
 //
 // window is the serving window chosen with the model (waired-ai/waired#1359):
 // hostfit.ServingWindow1M for the long one, 0 for the coding window, which
@@ -408,6 +421,14 @@ func (c *Client) SetPreferredModel(ctx context.Context, modelID string, window i
 			case http.StatusNotFound:
 				return nil, ErrCatalogUnsupported
 			case http.StatusConflict:
+				var body struct {
+					Code    string `json:"error_code"`
+					Message string `json:"message"`
+				}
+				if json.Unmarshal([]byte(hr.Body), &body) == nil && body.Code != "" &&
+					body.Code != "model_switch_unavailable" && body.Message != "" {
+					return nil, &ModelSwitchRefused{Message: body.Message}
+				}
 				return nil, ErrModelSwitchUnavailable
 			}
 		}

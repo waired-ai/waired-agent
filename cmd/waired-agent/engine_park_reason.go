@@ -39,7 +39,22 @@ const (
 	// computer was running out of memory, or a load that failed for want
 	// of it. The engine is fine; the weights did not fit here.
 	parkCauseOutOfMemory
+	// parkCauseCannotStart is a vLLM start that failed because the engine
+	// cannot run the build on this computer at all: an architecture it does
+	// not know, a quantization the GPU is too old for, weights it cannot
+	// find (waired-ai/waired#1480). Held, reviewed and released exactly as
+	// parkCauseOutOfMemory (parkedForLoadFailure); only the words differ.
+	parkCauseCannotStart
 )
+
+// parkedForLoadFailure reports a stop this product made because a load
+// failed — out of memory or unable to start — as opposed to the operator's.
+// Every rule that holds, reviews or releases such a stop reads this, so the
+// two causes behave alike and only what a surface says about them differs.
+func (p *agentInferenceProvider) parkedForLoadFailure() bool {
+	c := p.parkedBecause()
+	return c == parkCauseOutOfMemory || c == parkCauseCannotStart
+}
 
 func (c parkCause) String() string {
 	switch c {
@@ -47,6 +62,8 @@ func (c parkCause) String() string {
 		return "operator"
 	case parkCauseOutOfMemory:
 		return "out_of_memory"
+	case parkCauseCannotStart:
+		return "cannot_start"
 	default:
 		return "none"
 	}
@@ -136,6 +153,30 @@ func (p *agentInferenceProvider) parkForOutOfMemory(ctx context.Context, why str
 	}
 }
 
+// parkCannotStart holds the ollama engine off because the chosen build
+// cannot load on it at all (waired-ai/waired#1480): parkForOutOfMemory's
+// twin, with the words that are true. The operator's own stop wins here
+// too.
+func (p *agentInferenceProvider) parkCannotStart(ctx context.Context, why string) {
+	if p == nil || p.ollama == nil {
+		return
+	}
+	if p.parkedBecause() == parkCauseOperator {
+		return
+	}
+	p.noteParked(parkCauseCannotStart)
+	if err := p.ollama.Park(ctx); err != nil {
+		p.noteParked(parkCauseNone)
+		if p.logger != nil {
+			p.logger.Warn("could not stop the engine after a load it cannot do", "err", err)
+		}
+		return
+	}
+	if p.logger != nil {
+		p.logger.Warn("inference stopped: the chosen model cannot start on this computer", "why", why)
+	}
+}
+
 // resumeAfterOutOfMemory releases an engine held off for memory, and reports
 // whether it did anything.
 //
@@ -149,7 +190,7 @@ func (p *agentInferenceProvider) parkForOutOfMemory(ctx context.Context, why str
 // loadable because time passed, and retrying on a schedule is what put the
 // reference host under the same memory pressure twice (#1443, #1450).
 func (p *agentInferenceProvider) resumeAfterOutOfMemory(because string) bool {
-	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
+	if p == nil || !p.parkedForLoadFailure() {
 		return false
 	}
 	// vLLM's latch lives on the provider (engine_power.go), and its apply
@@ -199,11 +240,18 @@ func (p *agentInferenceProvider) resumeAfterOutOfMemory(because string) bool {
 // Empty for an engine the operator stopped. They know how to start it; they
 // stopped it.
 func (p *agentInferenceProvider) engineStoppedReason() string {
-	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
+	if p == nil {
 		return ""
 	}
-	return "Waired stopped the engine because this computer ran out of memory " +
-		"loading the model. Choose a different model to start it again."
+	switch p.parkedBecause() {
+	case parkCauseOutOfMemory:
+		return "Waired stopped the engine because this computer ran out of memory " +
+			"loading the model. Choose a different model to start it again."
+	case parkCauseCannotStart:
+		return "Waired stopped the engine because it cannot start the chosen model " +
+			"on this computer. Choose a different model to start it again."
+	}
+	return ""
 }
 
 // PublishedEngineStoppedCause is why this computer's engine is not running,
@@ -229,6 +277,10 @@ func (p *agentInferenceProvider) PublishedEngineStoppedCause() string {
 	case parkCauseOutOfMemory:
 		return signer.EngineStoppedCauseOutOfMemory
 	default:
+		// parkCauseCannotStart has no code of its own: the control plane
+		// has none to word it with, and "out of memory" would be false.
+		// The cause travels as runtimes[].last_error, which names it and
+		// what to do (waired-ai/waired#1480).
 		return ""
 	}
 }

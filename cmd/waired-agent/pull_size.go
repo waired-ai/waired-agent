@@ -72,10 +72,19 @@ var freeDiskFn = hardware.FreeDiskBytes
 // restart already holds part of it and may be refused while it would have
 // fitted. The message names both figures, and the fix is the same.
 func (p *agentInferenceProvider) diskShortfall(total int64) string {
-	if p == nil || total <= 0 || p.ollamaModelsDir == "" {
+	if p == nil {
 		return ""
 	}
-	free, err := freeDiskFn(p.ollamaModelsDir)
+	return diskShortfallAt(p.ollamaModelsDir, total)
+}
+
+// diskShortfallAt is diskShortfall for the filesystem holding dir: the
+// engine's model store for ollama, the weights root for vLLM.
+func diskShortfallAt(dir string, total int64) string {
+	if total <= 0 || dir == "" {
+		return ""
+	}
+	free, err := freeDiskFn(dir)
 	if err != nil {
 		return ""
 	}
@@ -136,6 +145,13 @@ func (p *agentInferenceProvider) sourceChangedFailure(ctx context.Context, model
 	}
 	p.logger.Warn("refusing to pull: the registry now serves a different build under this tag",
 		"model", modelID, "tag", v.Source.Tag, "pinned", v.Source.Digest, "registry", got)
+	if catalog.IsCustomModelID(modelID) {
+		// An imported file replaced upstream is a different model (#1473
+		// ruling 2): no update of Waired brings it back, and importing the
+		// repository again is what adds the new file (waired-ai/waired#1480).
+		return fmt.Sprintf("the file behind %s on Hugging Face was replaced after this model was imported (now %s, was %s). Import the model again in the Waired console's Custom models tab to use the new file",
+			v.Source.Tag, got, v.Source.Digest)
+	}
 	return fmt.Sprintf("%s: %s is no longer the build Waired lists (registry %s, catalog %s). Update Waired to get a catalog that knows it",
 		errSourceChanged, v.Source.Tag, got, v.Source.Digest)
 }

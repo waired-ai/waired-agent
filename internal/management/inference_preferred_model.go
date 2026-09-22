@@ -142,6 +142,23 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// A custom model runs on the one engine it was imported for, and a
+	// choice of one this computer's engine cannot run is refused before
+	// anything is recorded (waired-ai/waired#1480). The restart the
+	// fallback below schedules would not help: the engine a restart comes
+	// back on is the one committed here (chooseEngine), so it recorded the
+	// choice, took the agent down, and failed the same way after it.
+	// Only a committed engine is judged; a computer that has not started
+	// one yet has nothing to refuse against.
+	if catalog.IsCustomModelID(manifest.ModelID) {
+		if st := s.inference.Status(r.Context()); st.Active != nil && st.Active.Runtime != "" {
+			if msg, none := catalog.NoBuildForEngine(manifest, st.Active.Runtime); none {
+				writeJSON(w, http.StatusConflict, errorBody("custom_model_wrong_engine", msg))
+				return
+			}
+		}
+	}
+
 	// Source operator: every caller of this endpoint is a person at this
 	// machine — the install picker, the slow-host demotion prompt, the
 	// tray. A control-plane instruction does not arrive here; the setup

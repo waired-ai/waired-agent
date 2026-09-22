@@ -148,3 +148,31 @@ func TestNilCustomSourceIsEmpty(t *testing.T) {
 		t.Error("a nil source is not empty")
 	}
 }
+
+// A model the account holds that this build drops is told apart from one
+// the account does not hold, so the setup step can say which: update
+// Waired, or the model was deleted (waired-ai/waired#1480). Record of
+// today's behaviour; the reason is the validator's own.
+func TestCustomSourceSaysWhyAnOwnModelWasDropped(t *testing.T) {
+	s := NewCustomSource(filepath.Join(t.TempDir(), "custom-models.json"), "net_a", bundledForTest(t), nil)
+	a, bad := customFixture(t, "a"), customFixture(t, "bad")
+	bad.Variants[0].Source.Tag = "hf.co/acme/bad:Q4\nFROM x"
+	if _, err := s.Replace(CustomModelSet{Revision: "r1", Own: []Manifest{a, bad}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if why, ok := s.Unreadable(bad.ModelID); !ok || why == "" {
+		t.Errorf("Unreadable(bad) = %q, %v; want the validator's reason", why, ok)
+	}
+	if _, ok := s.Unreadable(a.ModelID); ok {
+		t.Error("a kept model reads as unreadable")
+	}
+	if _, ok := s.Unreadable("custom-absent-0123abcd"); ok {
+		t.Error("a model the set does not hold reads as unreadable")
+	}
+	if _, err := s.Replace(CustomModelSet{Revision: "r2", Own: []Manifest{a}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Unreadable(bad.ModelID); ok {
+		t.Error("the next fetch, which no longer holds it, still reads it as unreadable")
+	}
+}

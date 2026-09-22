@@ -533,3 +533,80 @@ func TestModelChoicePending_NoHookAnswers404(t *testing.T) {
 		t.Errorf("no hook: want 404, got %d", w.Code)
 	}
 }
+
+// A custom model runs on the one engine it was imported for. Choosing one
+// the committed engine cannot run is refused with the reason and what to
+// do, and nothing is recorded, applied or restarted: the restart used to
+// come back on the same engine and fail the same way (waired-ai/waired#1480).
+// A computer that has not committed an engine is not judged.
+func TestPreferredModel_CustomModelForTheOtherEngineIsRefusedBeforeAnythingIsRecorded(t *testing.T) {
+	custom := catalog.Manifest{
+		ModelID:       "custom-tiny-0123abcd",
+		DisplayName:   "Tiny",
+		Provenance:    catalog.ProvenanceCustom,
+		ContextLength: 32768,
+		Variants: []catalog.Variant{{
+			VariantID:      "custom-tiny-0123abcd-awq",
+			RuntimeSupport: []string{catalog.RuntimeVLLM},
+		}},
+	}
+	for _, tc := range []struct {
+		name     string
+		active   *ActiveSelection
+		wantCode int
+	}{
+		{"committed to the other engine", &ActiveSelection{Runtime: catalog.RuntimeOllama}, http.StatusConflict},
+		{"committed to its engine", &ActiveSelection{Runtime: catalog.RuntimeVLLM}, http.StatusAccepted},
+		{"no engine committed yet", nil, http.StatusAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefDir := t.TempDir()
+			var restarts int32
+			var swapCalls int
+			inf := &fakeInference{canned: InferenceStatus{Active: tc.active}}
+			cfg := &CatalogConfig{
+				PreferencePath: filepath.Join(prefDir, "preferred-model.json"),
+				ManifestsFn: func() ([]catalog.Manifest, error) {
+					return append(catalogFixture(), custom), nil
+				},
+				RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
+				ApplyModelSwitch: func(_ context.Context, _ string) (ModelSwitchOutcome, error) {
+					swapCalls++
+					return ModelSwitchOutcome{}, nil
+				},
+			}
+			s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
+
+			w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+				PreferredModelRequest{ModelID: custom.ModelID})
+			if w.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.wantCode, w.Body.String())
+			}
+			if tc.wantCode != http.StatusConflict {
+				return
+			}
+			var body struct {
+				Code string `json:"error_code"`
+			}
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if body.Code != "custom_model_wrong_engine" {
+				t.Errorf("error code = %q, body=%s", body.Code, w.Body.String())
+			}
+			for _, want := range []string{"Tiny (custom-tiny-0123abcd)", "imported for vllm", "runs ollama", "Custom models tab"} {
+				if !bytes.Contains(w.Body.Bytes(), []byte(want)) {
+					t.Errorf("body %s is missing %q", w.Body.String(), want)
+				}
+			}
+			if swapCalls != 0 {
+				t.Errorf("ApplyModelSwitch calls = %d, want 0", swapCalls)
+			}
+			time.Sleep(50 * time.Millisecond)
+			if n := atomic.LoadInt32(&restarts); n != 0 {
+				t.Errorf("restarts = %d, want 0", n)
+			}
+			if _, ok, _ := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json")); ok {
+				t.Error("the refused choice was recorded")
+			}
+		})
+	}
+}

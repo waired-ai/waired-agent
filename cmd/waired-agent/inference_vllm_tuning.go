@@ -24,6 +24,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/version"
 	"github.com/waired-ai/waired-agent/proto/catalog/scoring"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // computeVLLMTuning sizes --max-model-len for one (manifest, variant,
@@ -199,6 +200,13 @@ func vllmServeFlagsSupported(activeVersion string) bool {
 // the reason the loop actually gave up on. A human reading the file
 // still sees all three attempts, which is the point of keeping them.
 func vllmStartupDiagnosis(engineLog, addr string) string {
+	// The build itself, before the machine: a failure below says what this
+	// engine cannot do with the model on this computer, whatever the flags
+	// (waired-ai/waired#1480). The wording each arm reads is vLLM
+	// v0.29.0's (the pin); see vllmStartFailureKind for the files.
+	if hint := vllmModelFailureHint(engineLog); hint != "" {
+		return hint
+	}
 	switch {
 	case strings.Contains(engineLog, "unrecognized arguments"),
 		strings.Contains(engineLog, "error: unrecognized"):
@@ -247,6 +255,104 @@ func vllmStartupDiagnosis(engineLog, addr string) string {
 		return enginePortBusyDiagnosis(addr, "inference.vllm_port")
 	}
 	return ""
+}
+
+// vllmFailure markers, from vLLM v0.29.0 (the pin, internal/runtime/vllm_pins.go)
+// and the transformers it installs (waired-ai/waired#1480):
+//
+//   - vllm/model_executor/models/registry.py: "Model architectures [...]
+//     are not supported for now."
+//   - transformers, loading a config or tokenizer that ships its own code
+//     with trust_remote_code off: "... contains custom code which must be
+//     executed to correctly load the model ..."
+//   - vllm/config/vllm.py: "The quantization method X is not supported for
+//     the current GPU. Minimum capability: N. Current capability: M."
+//   - vllm/model_executor/model_loader/default_loader.py: "Cannot find any
+//     model weights with `<path>`"
+//   - vllm/v1/core/kv_cache_utils.py: "... the estimated maximum model
+//     length is N."
+//   - vllm/v1/worker/utils.py: "Free memory on device ... (X/Y GiB) on
+//     startup is less than desired GPU memory utilization ..."
+var (
+	vllmArchitectureRe  = regexp.MustCompile(`Model architectures (\[[^\]]*\]) are not supported for now`)
+	vllmCapabilityRe    = regexp.MustCompile(`The quantization method (\S+) is not supported for the current GPU\. Minimum capability: (\d+)\. Current capability: (\d+)\.`)
+	vllmEstimatedLenRe  = regexp.MustCompile(`the estimated maximum model length is (\d+)`)
+	vllmFreeOnStartupRe = regexp.MustCompile(`Free memory on device \S* ?\(([\d.]+)/([\d.]+) GiB\) on startup`)
+)
+
+// vllmStartFailureKind classifies a failed start of a build this engine
+// cannot run on this computer at all — every attempt fails the same way, so
+// it is recorded and not tried again by itself (waired-ai/waired#1480):
+// signer.LoadFailureArchitectureUnsupported, …RemoteCodeRequired,
+// …QuantizationUnsupported or …WeightsMissing. "" for anything else,
+// memory included (vllmStartFailedForMemory).
+func vllmStartFailureKind(lastSpawnLog string) string {
+	switch {
+	case vllmArchitectureRe.MatchString(lastSpawnLog):
+		return signer.LoadFailureArchitectureUnsupported
+	case strings.Contains(lastSpawnLog, "contains custom code which must be executed"):
+		return signer.LoadFailureRemoteCodeRequired
+	case vllmCapabilityRe.MatchString(lastSpawnLog):
+		return signer.LoadFailureQuantizationUnsupported
+	case strings.Contains(lastSpawnLog, "Cannot find any model weights with"):
+		return signer.LoadFailureWeightsMissing
+	}
+	return ""
+}
+
+// vllmEngineMaxWindow is the context window vLLM said this build's KV cache
+// could hold on this computer, when it said one; 0 otherwise.
+func vllmEngineMaxWindow(lastSpawnLog string) int {
+	m := vllmEstimatedLenRe.FindStringSubmatch(lastSpawnLog)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// vllmModelFailureHint is the sentence for a start that failed because of
+// the model rather than the machine's setup: what vLLM said, in the
+// reader's terms, and the one thing to do about it.
+func vllmModelFailureHint(engineLog string) string {
+	switch {
+	case vllmArchitectureRe.MatchString(engineLog):
+		arch := vllmArchitectureRe.FindStringSubmatch(engineLog)[1]
+		return "the vLLM version Waired installs does not support this model's architecture " + arch +
+			" — choose another model"
+	case strings.Contains(engineLog, "contains custom code which must be executed"):
+		return "this model needs to run its own code to load, which Waired does not allow" +
+			" — choose another model"
+	case vllmCapabilityRe.MatchString(engineLog):
+		m := vllmCapabilityRe.FindStringSubmatch(engineLog)
+		return fmt.Sprintf("this GPU is too old for the model's %s quantization"+
+			" (vLLM needs compute capability %s or higher, this GPU has %s)"+
+			" — choose a build with another quantization, or another model", m[1], computeCapability(m[2]), computeCapability(m[3]))
+	case strings.Contains(engineLog, "Cannot find any model weights with"):
+		return "vLLM found no safetensors weights in the downloaded files" +
+			" — remove the model with `waired models rm` and choose it again to download a fresh copy"
+	case vllmEstimatedLenRe.MatchString(engineLog):
+		return fmt.Sprintf("on this computer the KV cache holds at most %d tokens for this model, less than the context window it was started with"+
+			" — choose a smaller model, or raise inference.vllm_gpu_memory_utilization", vllmEngineMaxWindow(engineLog))
+	case vllmFreeOnStartupRe.MatchString(engineLog):
+		m := vllmFreeOnStartupRe.FindStringSubmatch(engineLog)
+		return fmt.Sprintf("another program is using this GPU's memory (vLLM found %s of %s GiB free when it started)"+
+			" — close that program, or lower inference.vllm_gpu_memory_utilization", m[1], m[2])
+	}
+	return ""
+}
+
+// computeCapability writes vLLM's capability figure the way every other
+// surface writes it: "89" is 8.9 and "100" is 10.0 (vLLM prints the
+// major and minor digits run together).
+func computeCapability(digits string) string {
+	if len(digits) < 2 {
+		return digits
+	}
+	return digits[:len(digits)-1] + "." + digits[len(digits)-1:]
 }
 
 // vllmStartupHint is what the bootstrap calls with the raw engine.log

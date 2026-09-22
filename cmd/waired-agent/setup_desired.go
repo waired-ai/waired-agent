@@ -491,6 +491,12 @@ type setupReconciler struct {
 	// model that is a fetch away. Nil means no custom models: nothing parks.
 	customModelKnown  func(modelID string) bool
 	fetchCustomModels func()
+	// customModelsSettled reports that a fetch has completed at the
+	// revision the map names, and customModelUnreadable why the account's
+	// model was dropped from it; together they say a parked model is not
+	// on its way, and why (waired-ai/waired#1480). Nil keeps it parked.
+	customModelsSettled   func() bool
+	customModelUnreadable func(modelID string) (string, bool)
 
 	mu      sync.Mutex
 	desired setupDesired
@@ -984,7 +990,7 @@ func (r *setupReconciler) stepDesiredModel(ctx context.Context, d setupDesired, 
 		}
 		return
 	}
-	if r.parkUnknownCustomModel(modelID) {
+	if r.parkUnknownCustomModel(modelID, key) {
 		return
 	}
 	state, _, _ := r.provider.setupModelState(modelID)
@@ -1201,9 +1207,36 @@ func (r *setupReconciler) benchmarkTargetReady(modelID string) bool {
 // device does not hold yet, and if so asks for the set and leaves the
 // instruction un-spent: the next frame, or the reconcile pass, applies it
 // once the model is here.
-func (r *setupReconciler) parkUnknownCustomModel(modelID string) bool {
+//
+// Once a fetch at the map's revision has completed and still does not
+// hold it, the model is not on its way, and waiting would leave the setup
+// step pending for good (waired-ai/waired#1480). The instruction is then
+// refused with the reason — deleted in the console, or not readable by
+// this build — spent the way any refusal is, so a retry from the console
+// asks again.
+func (r *setupReconciler) parkUnknownCustomModel(modelID, key string) bool {
 	if r.customModelKnown == nil || !catalog.IsCustomModelID(modelID) || r.customModelKnown(modelID) {
 		return false
+	}
+	if r.customModelsSettled != nil && r.customModelsSettled() {
+		detail := "custom model " + modelID + " is no longer in this account's list: it was deleted in the Waired console. " +
+			"Choose another model, or import it again in the Custom models tab"
+		if r.customModelUnreadable != nil {
+			if why, ok := r.customModelUnreadable(modelID); ok {
+				detail = "custom model " + modelID + " is in this account's list, but this version of Waired can't read it (" +
+					why + "). Update Waired on this computer, then choose the model again"
+			}
+		}
+		r.mu.Lock()
+		r.modelApplied[key] = true
+		r.modelAdmitted = key
+		r.modelRejected[key] = setupModelRejection{code: signer.SetupErrorModelNotFound, detail: detail}
+		r.mu.Unlock()
+		if r.logger != nil {
+			r.logger.Warn("setup: desired model refused", "model", modelID, "err", detail)
+		}
+		r.kickPush()
+		return true
 	}
 	if r.fetchCustomModels != nil {
 		r.fetchCustomModels()

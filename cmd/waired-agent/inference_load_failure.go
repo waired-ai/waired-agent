@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"regexp"
 	"sort"
 	"time"
 
@@ -71,27 +72,67 @@ func (p *agentInferenceProvider) loadShapeNow() catalog.LoadShape {
 // TestBenchMeasurement_RefusesToGuessTheSubject exists for on the
 // measurement side (waired-agent#784).
 func (p *agentInferenceProvider) onLoadMemoryFailure(f infruntime.LoadMemoryFailure) {
-	if p == nil || p.store == nil {
+	rec, ok := p.recordActiveLoadFailure(f.Reason, f.Detail, "", f.At)
+	if !ok {
 		return
+	}
+	// Hold the engine off (waired-agent#1464). A request arriving now would
+	// start the same load again, take minutes over it, and put the machine
+	// back under the pressure it just came out of. Held off, the gateway
+	// answers at once and peers stop choosing this host.
+	p.parkForOutOfMemory(p.backgroundCtx(), f.Reason)
+	if p.logger != nil {
+		p.logger.Warn("this computer could not load this model; it will not be loaded again automatically",
+			"model_id", rec.ModelID, "variant_id", rec.VariantID,
+			"reason", f.Reason, "engine_said", f.Detail,
+			"context_length", rec.Shape.ContextLength, "kv_cache_type", rec.Shape.KVCacheType)
+	}
+}
+
+// onLoadCannotStart records that the active build cannot load on this
+// engine at all, whatever the memory — llama.cpp does not know its
+// architecture (waired-ai/waired#1480) — and holds the engine off with the
+// reason, exactly as a memory failure is held, reviewed and released. The
+// record is keyed on the engine's version like every other, so an engine
+// update that knows the architecture releases it.
+func (p *agentInferenceProvider) onLoadCannotStart(kind, reason, detail string) {
+	rec, ok := p.recordActiveLoadFailure(reason, detail, kind, time.Now())
+	if !ok {
+		return
+	}
+	p.parkCannotStart(p.backgroundCtx(), reason)
+	if p.logger != nil {
+		p.logger.Warn("this computer's engine cannot load this model; it will not be loaded again automatically",
+			"model_id", rec.ModelID, "variant_id", rec.VariantID, "kind", kind,
+			"reason", reason, "engine_said", detail)
+	}
+}
+
+// recordActiveLoadFailure keeps the fact that the active build did not load
+// here. A failure it cannot key is not recorded at all.
+func (p *agentInferenceProvider) recordActiveLoadFailure(reason, detail, kind string, at time.Time) (catalog.VariantLoadFailure, bool) {
+	if p == nil || p.store == nil {
+		return catalog.VariantLoadFailure{}, false
 	}
 	ctx := p.backgroundCtx()
 	sha := p.activeVariantSHA()
 	modelID, variantID := p.activeModelID(), p.activeVariantID()
 	if sha == "" || modelID == "" || variantID == "" {
 		if p.logger != nil {
-			p.logger.Warn("a model load ran out of memory, but there is no build to record it against",
-				"reason", f.Reason, "model_id", modelID, "variant_id", variantID)
+			p.logger.Warn("a model load failed, but there is no build to record it against",
+				"reason", reason, "model_id", modelID, "variant_id", variantID)
 		}
-		return
+		return catalog.VariantLoadFailure{}, false
 	}
 	rec := catalog.VariantLoadFailure{
 		ModelID:   modelID,
 		VariantID: variantID,
-		Reason:    f.Reason,
-		Detail:    f.Detail,
+		Reason:    reason,
+		Detail:    detail,
+		Kind:      kind,
 		Context:   p.loadContextNow(ctx),
 		Shape:     p.loadShapeNow(),
-		FailedAt:  f.At.UTC(),
+		FailedAt:  at.UTC(),
 	}
 	if err := p.store.Update(func(s *catalog.State) {
 		if s.FailedLoads == nil {
@@ -100,22 +141,44 @@ func (p *agentInferenceProvider) onLoadMemoryFailure(f infruntime.LoadMemoryFail
 		s.FailedLoads[sha] = rec
 	}); err != nil {
 		if p.logger != nil {
-			p.logger.Warn("could not record a model load that ran out of memory",
-				"model_id", modelID, "err", err)
+			p.logger.Warn("could not record a model load that failed", "model_id", modelID, "err", err)
 		}
-		return
+		return catalog.VariantLoadFailure{}, false
 	}
-	// Hold the engine off (waired-agent#1464). A request arriving now would
-	// start the same load again, take minutes over it, and put the machine
-	// back under the pressure it just came out of. Held off, the gateway
-	// answers at once and peers stop choosing this host.
-	p.parkForOutOfMemory(ctx, f.Reason)
-	if p.logger != nil {
-		p.logger.Warn("this computer could not load this model; it will not be loaded again automatically",
-			"model_id", modelID, "variant_id", variantID,
-			"reason", f.Reason, "engine_said", f.Detail,
-			"context_length", rec.Shape.ContextLength, "kv_cache_type", rec.Shape.KVCacheType)
+	return rec, true
+}
+
+// ollamaArchitectureRe is llama.cpp's refusal of a GGUF whose architecture
+// it does not know: "unknown model architecture: '<arch>'"
+// (src/llama-model.cpp at b10760, the llama.cpp ollama v0.34.0 builds
+// against). ollama keeps the runner's line from "error loading model" on
+// (llm/status.go errorPrefixes) and returns it as the load's error, which
+// loadOllamaModel carries.
+var ollamaArchitectureRe = regexp.MustCompile(`unknown model architecture: '([^']{0,128})'`)
+
+// ollamaArchName is the architecture names this repeats back; the name is
+// read from a file someone else published.
+var ollamaArchName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+
+// ollamaLoadCannotStart reports whether a failed load is one no retry and
+// no amount of memory changes, with the kind to record and the sentence to
+// say. The import check refuses an architecture the pinned engine does not
+// know; this catches the engine this computer actually runs disagreeing.
+func ollamaLoadCannotStart(err error) (kind, reason string, ok bool) {
+	if err == nil {
+		return "", "", false
 	}
+	m := ollamaArchitectureRe.FindStringSubmatch(err.Error())
+	if m == nil {
+		return "", "", false
+	}
+	arch := ""
+	if ollamaArchName.MatchString(m[1]) {
+		arch = " " + m[1]
+	}
+	return signer.LoadFailureArchitectureUnsupported,
+		"the Ollama version on this computer does not support this model's architecture" + arch +
+			" — update Waired, or choose another model", true
 }
 
 // loadIsBlocked reports whether this host has already learned that the
@@ -271,6 +334,10 @@ func (p *agentInferenceProvider) PublishedLoadFailures() []signer.ModelLoadFailu
 			NumParallel:   f.Shape.NumParallel,
 			Backend:       f.Shape.Backend,
 			FailedAt:      f.FailedAt.UTC().Format(time.RFC3339Nano),
+			// A code, not the sentence: the control plane words it
+			// (waired-ai/waired#1480).
+			Reason:          f.Kind,
+			EngineMaxWindow: f.EngineMaxWindow,
 		})
 	}
 	if len(out) == 0 {
@@ -294,7 +361,7 @@ func (p *agentInferenceProvider) PublishedLoadFailures() []signer.ModelLoadFailu
 // waiting, and retrying on a schedule is what put the reference host under
 // the same memory pressure twice (#1443, #1450).
 func (p *agentInferenceProvider) reviewOutOfMemoryPark(context.Context) {
-	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
+	if p == nil || !p.parkedForLoadFailure() {
 		return
 	}
 	if _, blocked := p.engineLoadIsBlocked(); blocked {

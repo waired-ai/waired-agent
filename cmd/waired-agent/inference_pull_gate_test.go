@@ -300,8 +300,34 @@ func TestPullModel_NoBuildForTheEngine(t *testing.T) {
 	p := pullGateProvider(t, m)
 	_, err := p.PullModel(context.Background(), m.ModelID)
 	if err == nil || !errors.Is(err, errUnsupportedSource) ||
-		!strings.Contains(err.Error(), "no build for ollama") || !strings.Contains(err.Error(), "it runs on vllm") ||
+		!strings.Contains(err.Error(), "no build for ollama") || !strings.Contains(err.Error(), "its builds are for vllm") ||
 		strings.Contains(err.Error(), ">=") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The same refusal for a custom model names it by the name the person gave
+// it, says which engine it was imported for, and says what to do; neither
+// wording ends in the sentinel's "cannot fetch this model's files", which
+// read as a download fault (review of waired-ai/waired#1473, 2026-09-22).
+func TestPullModel_NoBuildForTheEngine_SaysWhatToDo(t *testing.T) {
+	m := pullGateManifest(false)
+	for i := range m.Variants {
+		m.Variants[i].RuntimeSupport = []string{catalog.RuntimeVLLM}
+	}
+	_, err := pullGateProvider(t, m).PullModel(context.Background(), m.ModelID)
+	if !errors.Is(err, errUnsupportedSource) || strings.Contains(err.Error(), "cannot fetch") ||
+		!strings.Contains(err.Error(), "choose a model that has a build for ollama") {
+		t.Errorf("bundled: %v", err)
+	}
+	m.ModelID, m.DisplayName = "custom-tiny-0123abcd", "Tiny"
+	_, err = pullGateProvider(t, m).PullModel(context.Background(), m.ModelID)
+	if !errors.Is(err, errUnsupportedSource) {
+		t.Fatalf("custom: %v", err)
+	}
+	for _, want := range []string{"Tiny (custom-tiny-0123abcd)", "imported for vllm", "runs ollama", "Custom models tab"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("custom: %q missing %q", err, want)
+		}
 	}
 }

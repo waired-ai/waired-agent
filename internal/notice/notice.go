@@ -254,6 +254,23 @@ func ModelDidNotLoad(model, alternative, reason string) Notice {
 	return n
 }
 
+// ModelCouldNotStart is ModelDidNotLoad for a build the engine cannot run on
+// this computer at all — an architecture it does not know, a quantization the
+// GPU is too old for, weights it cannot find (waired-ai/waired#1480). Same
+// kind and severity, so every surface treats it alike; its own words, so none
+// of them says "ran out of memory" about a model that did not. reason is the
+// engine-start hint, which already ends in what to do.
+func ModelCouldNotStart(model, reason string) Notice {
+	return Notice{
+		Kind:     KindModelDidNotLoad,
+		Severity: SeverityWarn,
+		Subject:  "model suggestion",
+		Title:    sanitise(model + " did not start on this computer"),
+		Text: sanitiseText("Waired stopped and will not start " + model +
+			" again by itself: " + reason + "."),
+	}
+}
+
 // CustomModelWithdrawn is a custom model, named by its display name, that
 // the account deleted while this computer was using it. Warn: the model
 // still answers here, but nothing will download it again, and the other

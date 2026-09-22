@@ -3404,7 +3404,7 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 	// which is pushed to the mesh, so peers stopped routing to a host that
 	// was still answering.
 	f.Parked = p.engineIsParked()
-	f.ParkedByError = p.parkedBecause() == parkCauseOutOfMemory
+	f.ParkedByError = p.parkedForLoadFailure()
 	if a := p.servingAdapter(); a != nil {
 		f.EngineState = a.Health(ctx).State
 		if fl, ok := a.(interface{ FailureLatched() bool }); ok {
@@ -4242,18 +4242,16 @@ var (
 	errUnsupportedSource = errors.New("this device cannot fetch this model's files")
 )
 
-// variantEngines lists the engines m has a build for, in manifest order.
-func variantEngines(m catalog.Manifest) []string {
-	var out []string
-	for _, v := range m.Variants {
-		for _, r := range v.RuntimeSupport {
-			if !slices.Contains(out, r) {
-				out = append(out, r)
-			}
-		}
-	}
-	return out
-}
+// noBuildForEngineError is a pull of a model that has no build for the
+// engine this computer runs. It is errUnsupportedSource to every caller that
+// asks (errors.Is) — setup still classifies it the same way — but its words
+// are its own: the sentinel's "this device cannot fetch this model's files"
+// used to end the sentence, which read as a download fault (review of
+// waired-ai/waired#1473, 2026-09-22).
+type noBuildForEngineError struct{ msg string }
+
+func (e *noBuildForEngineError) Error() string { return e.msg }
+func (e *noBuildForEngineError) Unwrap() error { return errUnsupportedSource }
 
 func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
 	return p.pullModelBuild(ctx, modelOrAlias, "")
@@ -4326,10 +4324,8 @@ func (p *agentInferenceProvider) pullModelBuild(ctx context.Context, modelOrAlia
 		// message used to say "requires vllm >= " with nothing after it for
 		// an ollama-only custom model on a vLLM host (found on real
 		// hardware, waired-ai/waired#1481). Say which engine runs it.
-		if engines := variantEngines(manifest); !slices.Contains(engines, engine) {
-			return management.PullJob{}, fmt.Errorf(
-				"model %s has no build for %s, the engine this computer runs; it runs on %s: %w",
-				manifest.ModelID, engine, strings.Join(engines, ", "), errUnsupportedSource)
+		if msg, none := catalog.NoBuildForEngine(manifest, engine); none {
+			return management.PullJob{}, &noBuildForEngineError{msg}
 		}
 		floor := manifest.Variants[0].MinEngineVersion
 		have := engineVersion
@@ -6122,7 +6118,16 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	// directory stayed, tens of GB that no record named — #641's shape on
 	// the other engine. Removed before the record for the same reason as
 	// the tag above.
-	if dir := records[catalog.RuntimeVLLM].LocalPath; dir != "" {
+	dir := records[catalog.RuntimeVLLM].LocalPath
+	if rec, ok := records[catalog.RuntimeVLLM]; ok && dir == "" {
+		// A download that never finished names no directory, and the
+		// shards it did fetch stay behind unless this finds them
+		// (waired-ai/waired#1480). CancelPull above has already stopped
+		// this model's own download, and removeHFModelDir waits for any
+		// other writer and keeps a directory another record names.
+		dir = p.derivedHFDir(modelID, rec)
+	}
+	if dir != "" {
 		if err := p.removeHFModelDir(ctx, modelID, dir); err != nil {
 			p.logger.Warn("deleting the weights failed; keeping the model record",
 				"model", modelID, "dir", dir, "err", err)
