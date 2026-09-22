@@ -305,3 +305,26 @@ func TestPullModel_NoBuildForTheEngine(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The same refusal for a custom model names it by the name the person gave
+// it, says which engine it was imported for, and says what to do; neither
+// wording ends in the sentinel's "cannot fetch this model's files", which
+// read as a download fault (review of waired-ai/waired#1473, 2026-09-22).
+func TestPullModel_NoBuildForTheEngine_SaysWhatToDo(t *testing.T) {
+	m := pullGateManifest(false)
+	for i := range m.Variants {
+		m.Variants[i].RuntimeSupport = []string{catalog.RuntimeVLLM}
+	}
+	err := noBuildForEngine(m, catalog.RuntimeOllama, []string{catalog.RuntimeVLLM})
+	if !errors.Is(err, errUnsupportedSource) || strings.Contains(err.Error(), "cannot fetch") ||
+		!strings.Contains(err.Error(), "choose a model that has a build for ollama") {
+		t.Errorf("bundled: %v", err)
+	}
+	m.ModelID, m.DisplayName = "custom-tiny-0123abcd", "Tiny"
+	err = noBuildForEngine(m, catalog.RuntimeOllama, []string{catalog.RuntimeVLLM})
+	for _, want := range []string{"Tiny (custom-tiny-0123abcd)", "imported for vllm", "runs ollama", "Custom models tab"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("custom: %q missing %q", err, want)
+		}
+	}
+}
