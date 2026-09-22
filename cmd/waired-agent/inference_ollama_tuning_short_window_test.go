@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -24,5 +26,21 @@ func TestModelDecisionReasons_ModelsOwnShortWindow(t *testing.T) {
 	if len(reasons) != 1 || !strings.Contains(reasons[0], "its own 40960-token context window") ||
 		strings.Contains(reasons[0], "declared to the mesh") {
 		t.Errorf("reasons = %v", reasons)
+	}
+}
+
+// Served below its own short window because memory was not shown to hold it
+// all: the warning says so, and never that the window is declared to the
+// mesh — nothing below 200,704 is (waired-ai/waired#1481).
+func TestModelDecisionReasons_ShortOwnWindowServedShorter(t *testing.T) {
+	m := catalog.Manifest{ModelID: "custom-tiny-0123abcd", ContextLength: 40960}
+	tn := ollamaTuning{}
+	tn.ContextLength = 16384
+	reasons, warning := modelDecisionReasons(agentconfig.InferenceConfig{}, m, tn)
+	if want := fmt.Sprintf(ollamaShortOwnWindowWarning, m.ModelID, 16384, 40960); warning != want || len(reasons) != 1 || reasons[0] != want {
+		t.Errorf("reasons %q warning %q, want %q", reasons, warning, want)
+	}
+	if strings.Contains(warning, "declared to the mesh") {
+		t.Errorf("warning claims a declaration: %q", warning)
 	}
 }

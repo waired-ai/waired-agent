@@ -653,7 +653,28 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		// The reporter has already seen the engine's OWN status above,
 		// so the dead-runner and out-of-memory classifications are
 		// untouched by the number the client is given.
-		if clientStatus, errType, reason := classifyEngineFailure(resp.StatusCode, head); clientStatus != resp.StatusCode {
+		clientStatus, errType, reason := classifyEngineFailure(resp.StatusCode, head)
+		if reason == engineContextOverflowReason {
+			// The engine's own over-window refusal, said the way the
+			// gateway says its own: 400 context_length_exceeded, and the
+			// header a relaying waired node turns into the Anthropic token
+			// its Claude Code compacts on (relayPeerContextOverflow;
+			// waired-ai/waired#1481). The engine's words stay the message.
+			rr.fail(http.StatusBadRequest, reason)
+			w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+			if hold.committed() {
+				if !hold.canReportInBand() {
+					abortHeldResponse("leg", "openai-nonstream", "reason", reason, "status", http.StatusBadRequest)
+				}
+				writeOpenAIErrorFrame(w, http.StatusBadRequest, "invalid_request_error", "context_length_exceeded", string(head))
+				return true, nil
+			}
+			w.Header().Del("Content-Length")
+			w.Header().Del("Content-Encoding")
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "context_length_exceeded", string(head))
+			return true, nil
+		}
+		if clientStatus != resp.StatusCode {
 			// The engine's headers were copied onto w a few lines up.
 			// A rewritten body must not inherit its length or its
 			// encoding; writeJSON replaces the content type.

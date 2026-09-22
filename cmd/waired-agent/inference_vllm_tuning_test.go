@@ -494,3 +494,22 @@ func TestVLLMStartupHint_DiagnosesTheAttemptTheLoopEndedOn(t *testing.T) {
 		})
 	}
 }
+
+// A model whose own window is under 200,704 — a custom model — and whose KV
+// pool holds even less is still sent coding-agent requests, at the window it
+// is served with (waired-ai/waired#1481). The warning says what is true:
+// the window, and that a session overflows it — never "Waired won't send one".
+func TestComputeVLLMTuning_ShortOwnWindowWarning(t *testing.T) {
+	m, v, hw := vllmTuningFixture()
+	m.ContextLength = 40960
+	maxLen, mt := computeVLLMTuning(m, v, hw, 1, 0.85, scoring.KVFactorF16, router.VLLMSpeculation{})
+	if maxLen != 26624 || mt.WindowFits {
+		t.Fatalf("maxLen %d fits %v, want the pool's 26624, not fitting", maxLen, mt.WindowFits)
+	}
+	if want := fmt.Sprintf(vllmShortOwnWindowWarning, 26624, 0.85, 1, 40960); mt.Warning != want {
+		t.Errorf("warning = %q\nwant      %q", mt.Warning, want)
+	}
+	if strings.Contains(mt.Warning, "won't send") {
+		t.Errorf("warning claims Waired won't send requests: %q", mt.Warning)
+	}
+}

@@ -66,13 +66,19 @@ func providerBaseURL(gatewayBaseURL string) string {
 // minus its "waired/" head, because that is what OpenClaw hands
 // resolveDynamicModel and what the picker composes its reference from.
 //
-// It carries no window. A row's window follows from its key — 1M for a "[1m]"
-// key, 200k for every other — so the plugin works it out itself, for keys it
-// was never given too (waired-agent#1396). A plugin from before carries one
-// per row, which the reader ignores.
+// A row's window follows from its key — 1M for a "[1m]" key, 200k for every
+// other — so the plugin works it out itself, for keys it was never given too
+// (waired-agent#1396). Window is the one exception: a row naming a computer
+// that serves a custom model below 200,704 tokens carries that model's own
+// window, which the gateway holds the turn to, so OpenClaw compacts before a
+// turn is refused (waired-ai/waired#1481). It is omitted otherwise, so every
+// other row is written exactly as before. OwnWindow and not Window: the
+// protoconsumer guard matches producers by field name, and proto has Window
+// fields this would read as written.
 type pluginRow struct {
-	Key  string `json:"key"`
-	Name string `json:"name,omitempty"`
+	Key       string `json:"key"`
+	Name      string `json:"name,omitempty"`
+	OwnWindow int    `json:"window,omitempty"`
 }
 
 // pluginContextWindow is CONTEXT_WINDOW in the template: the window of every
@@ -96,7 +102,11 @@ func pluginRows(rows []modelrows.Row) []pluginRow {
 			// <provider>/<model>, so a key has to be the second segment.
 			continue
 		}
-		out = append(out, pluginRow{Key: key, Name: r.DisplayName})
+		row := pluginRow{Key: key, Name: r.DisplayName}
+		if r.ContextWindow > 0 && r.ContextWindow < pluginContextWindow {
+			row.OwnWindow = r.ContextWindow
+		}
+		out = append(out, row)
 	}
 	if len(out) == 0 {
 		out = append(out, pluginRow{Key: defaultModelKey, Name: "Waired"})
@@ -109,8 +119,9 @@ func pluginRows(rows []modelrows.Row) []pluginRow {
 // refresh after a link and `waired doctor` rewrite plugins that are still
 // correct row for row but behave the old way. 2: the any-computer row is sent
 // as "waired" (waired-agent#1395). 3: every row's window follows from its key,
-// 200704 or 1048576 (waired-agent#1396).
-const pluginRevision = 3
+// 200704 or 1048576 (waired-agent#1396). 4: a row carrying a window below
+// 200704 — a custom model's own — takes it (waired-ai/waired#1481).
+const pluginRevision = 4
 
 // modelRefs is the set of picker references the adapter allowlists in
 // agents.defaults.models, derived from the same rows the plugin carries.

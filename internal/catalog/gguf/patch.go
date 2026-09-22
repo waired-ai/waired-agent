@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // ErrNotUint32 is returned when a key exists but is not stored as a UINT32,
@@ -99,6 +100,22 @@ func ArchUint32(path, suffix string) (uint32, bool, error) {
 	}
 	v, ok := h.ArchUint(suffix)
 	return uint32(v), ok, nil
+}
+
+// HostResidentBytes is the size of the input-layer tensors llama.cpp keeps in
+// system RAM on every load — token_embd and, where the model has them, the
+// per-layer token embeddings — read off the file's tensor table. The same
+// sum cmd/catalog-tool derives a bundled build's host_resident_weight_gb
+// from; the agent reads it for a build whose manifest does not carry it (a
+// custom model, waired-ai/waired#1481).
+func HostResidentBytes(path string) (uint64, error) {
+	h, err := readFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return h.TensorBytes(func(name string) bool {
+		return name == "token_embd.weight" || strings.HasPrefix(name, "per_layer_token_embd")
+	})
 }
 
 func readFile(path string) (Header, error) {

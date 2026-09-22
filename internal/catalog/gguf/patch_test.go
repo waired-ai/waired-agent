@@ -152,3 +152,30 @@ func TestSetArchUint32_AlreadyThere(t *testing.T) {
 		t.Error("the file was rewritten when the value was already correct")
 	}
 }
+
+// The input-layer weights llama.cpp keeps in system RAM, read off the tensor
+// table: token_embd and the per-layer token embeddings, nothing else — the
+// sum cmd/catalog-tool derives host_resident_weight_gb from
+// (waired-ai/waired#1481).
+func TestHostResidentBytes(t *testing.T) {
+	var b headerBuilder
+	b.text("general.architecture", "gemma3n")
+	b.tensor("token_embd.weight", 1, 64, 1000)           // f16: 2 bytes
+	b.tensor("per_layer_token_embd.weight", 1, 32, 1000) // f16
+	b.tensor("blk.0.attn_q.weight", 1, 64, 64)           // not input-layer
+	b.tensor("output.weight", 1, 64, 1000)               // the output head goes to the device
+	path := filepath.Join(t.TempDir(), "m.gguf")
+	if err := os.WriteFile(path, b.bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := HostResidentBytes(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(64*1000*2 + 32*1000*2); got != want {
+		t.Errorf("HostResidentBytes = %d, want %d", got, want)
+	}
+	if _, err := HostResidentBytes(filepath.Join(t.TempDir(), "missing.gguf")); err == nil {
+		t.Error("a missing file read as a figure")
+	}
+}

@@ -37,6 +37,8 @@ func TestNotRecommendedBecause_CoversEveryReasonTheFitRulesProduce(t *testing.T)
 		hostfit.ReasonWeightsSpill,
 		hostfit.ReasonTooSlow,
 		hostfit.ReasonWindowExceedsMemory,
+		// A custom model's own short window (waired-ai/waired#1481).
+		hostfit.ReasonModelWindowShort,
 	} {
 		var b bytes.Buffer
 		warnModelNotRecommended(&b, "qwen3.5-9b", reason)
@@ -92,6 +94,26 @@ func TestWindowExceedsMemory_SaysWhatStopsAndDoesNotSayCannotRun(t *testing.T) {
 	} {
 		if strings.Contains(got, forbidden) {
 			t.Errorf("says %q, which the ruling rules out:\n%s", forbidden, got)
+		}
+	}
+}
+
+// A custom model whose own window is short is not blamed on memory: the
+// sentence says the window, and never that this computer can't hold it or
+// that Waired won't send requests — both false for it (waired-ai/waired#1481,
+// found on real hardware as "window exceeds memory" on a 16 GB Mac).
+func TestWarnModelNotRecommended_ShortOwnWindow(t *testing.T) {
+	var b bytes.Buffer
+	warnModelNotRecommended(&b, "Tiny", hostfit.ReasonModelWindowShort)
+	got := b.String()
+	for _, want := range []string{"Tiny", "200,704", "overflows it on every turn"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"can't hold", "won't send"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("claims %q:\n%s", gone, got)
 		}
 	}
 }

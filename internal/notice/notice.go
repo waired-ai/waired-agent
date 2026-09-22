@@ -32,6 +32,7 @@ package notice
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -100,6 +101,11 @@ const (
 	// keeps serving it until another model is chosen; standing, like
 	// KindLongContextWindow, for as long as that holds.
 	KindCustomModelWithdrawn Kind = "custom_model_withdrawn"
+	// KindShortContextWindow is this computer serving a custom model whose
+	// context window is under the 200,704 tokens a coding agent's session is
+	// sized for (waired-ai/waired#1481). Standing and Info, like
+	// KindLongContextWindow: the person chose the model after being told.
+	KindShortContextWindow Kind = "short_context_window"
 )
 
 // Severity says how a surface should mark a notice, and whether a
@@ -262,6 +268,41 @@ func CustomModelWithdrawn(name string) Notice {
 			"Your other computers and your team can no longer use it."),
 		Target: sanitise(name),
 	}
+}
+
+// ShortContextWindow is the standing line for a computer serving a custom
+// model whose context window is under the 200,704 tokens a coding agent's
+// session is sized for (waired-ai/waired#1481, #1473 ruling 10: no minimum,
+// and the limit is stated). window is the window it serves.
+//
+// Like LongContextWindow, the text is the lasting cost only: what to do
+// about it (short sessions, a larger model) is in the console where the
+// model is chosen and in the docs row, not in a line a person reads every
+// day.
+func ShortContextWindow(window int) Notice {
+	return Notice{
+		Kind:     KindShortContextWindow,
+		Severity: SeverityInfo,
+		Subject:  "context window",
+		Title:    sanitise(fmt.Sprintf("Context window: %s tokens, under a coding agent's 200,704", groupThousands(window))),
+		// "overflows it on every turn" is the wording #1481 item 7 asks
+		// every surface to state, and the one the console, the CLI and the
+		// docs use.
+		Text: sanitiseText("A coding agent's session overflows it on every turn."),
+	}
+}
+
+// groupThousands writes n with comma thousands separators, the way every
+// other surface writes a token count.
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	if n < 0 {
+		return s
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // UpdateAvailable is a newer release than the one this computer runs.

@@ -36,7 +36,9 @@ const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 // tokens and holds the turn to it (waired-agent#1396).
 const CONTEXT_WINDOW = {{ .ContextWindowLiteral }};
 const CONTEXT_WINDOW_1M = {{ .ContextWindow1MLiteral }};
-// One entry per row the gateway offered: {key, name}.
+// One entry per row the gateway offered: {key, name}, and {window} on a row
+// naming a computer that serves a custom model below CONTEXT_WINDOW tokens —
+// the gateway holds that row's turn to it (waired-ai/waired#1481).
 const MODELS = {{ .ModelsLiteral }};
 
 function rowFor(key) {
@@ -60,7 +62,10 @@ function wireId(key) {
 }
 
 function windowFor(key) {
-  return key.toLowerCase().includes("[1m]") ? CONTEXT_WINDOW_1M : CONTEXT_WINDOW;
+  if (key.toLowerCase().includes("[1m]")) return CONTEXT_WINDOW_1M;
+  const row = rowFor(key);
+  if (row && typeof row.window === "number" && row.window > 0 && row.window < CONTEXT_WINDOW) return row.window;
+  return CONTEXT_WINDOW;
 }
 
 function wairedModel(key) {

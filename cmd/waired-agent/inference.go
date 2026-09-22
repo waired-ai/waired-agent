@@ -21,6 +21,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/catalog/gguf"
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -117,7 +118,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Mode = string(s.ollama.Mode())
 		tuning := s.ollama.AppliedTuning()
 		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
-		out.ServedWindow = tuning.ContextLength
+		out.ServedWindow, out.ServedModelID = tuning.ContextLength, tuning.ModelID
 		return out
 	}
 	out.Engine = s.provider.servingEngine()
@@ -129,7 +130,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		}); ok {
 			tuning := tuner.AppliedTuning()
 			out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
-			out.ServedWindow = tuning.ContextLength
+			out.ServedWindow, out.ServedModelID = tuning.ContextLength, tuning.ModelID
 		}
 		// nil in unit tests that build a bare provider; production always
 		// has one. An unknown version reports none rather than ollama's.
@@ -146,7 +147,7 @@ func (s *inferenceSubsystem) EngineProvenance() engineProvenance {
 		out.Mode = string(s.ollama.Mode())
 		tuning := s.ollama.AppliedTuning()
 		out.TuningWarning, out.TuningDegraded = tuning.Warning, tuning.Degraded
-		out.ServedWindow = tuning.ContextLength
+		out.ServedWindow, out.ServedModelID = tuning.ContextLength, tuning.ModelID
 	}
 	return out
 }
@@ -178,6 +179,9 @@ type engineProvenance struct {
 	// is a standing fact about it rather than an event
 	// (waired-ai/waired#1456). 0 when nothing has been tuned.
 	ServedWindow int
+	// ServedModelID is the model the engine was tuned for, so a surface can
+	// tell a custom model's short window from any other (waired-ai/waired#1481).
+	ServedModelID string
 }
 
 // servingFailureReason is why the engine this host serves with is not
@@ -2887,6 +2891,17 @@ func (p *agentInferenceProvider) ollamaVerifyDeps(m catalog.Manifest) ollamaVeri
 		ListProcs:    proclist.List,
 		EngineLog:    p.ollama.EngineLogTail,
 		RestampDraft: p.restampDraft,
+		HostResidentMiB: func(tag string) (float64, bool) {
+			blob, _, err := download.ModelBlobPath(p.ollamaModelsDir, tag)
+			if err != nil {
+				return 0, false
+			}
+			b, err := gguf.HostResidentBytes(blob)
+			if err != nil || b == 0 {
+				return 0, false
+			}
+			return float64(b) / (1 << 20), true
+		},
 	}
 }
 

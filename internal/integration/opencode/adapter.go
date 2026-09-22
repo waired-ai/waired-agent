@@ -131,6 +131,15 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 	default:
 		wantURL := GatewayBaseURL(opts.GatewayBaseURL) + "/v1"
 		switch {
+		case strings.Contains(string(body), "provider.waired") && strings.Contains(string(body), wantURL) &&
+			DeclaredRevision(opts.HomeDir) < PluginRevision:
+			// Right address, older logic: the refresh after a link and
+			// doctor's repair rewrite it (TopUpPlugin).
+			out = append(out, integration.AuditFinding{
+				Status:  integration.StatusWarn,
+				Subject: "opencode plugin",
+				Detail:  "the plugin was written by an older version of Waired",
+			})
 		case strings.Contains(string(body), "provider.waired") && strings.Contains(string(body), wantURL):
 			out = append(out, integration.AuditFinding{
 				Status:  integration.StatusOK,

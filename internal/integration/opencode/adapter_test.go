@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,6 +236,27 @@ func TestAudit_ReportsOKAfterApply(t *testing.T) {
 		if (f.Subject == "opencode plugin" || strings.HasPrefix(f.Subject, "opencode command ")) &&
 			f.Status != integration.StatusOK {
 			t.Errorf("expected OK for %q, got %s: %s", f.Subject, f.Status, f.Detail)
+		}
+	}
+}
+
+// A plugin an older template wrote is a warning, not OK: the refresh after a
+// link and doctor's repair rewrite it (TopUpPlugin; waired-ai/waired#1481).
+func TestAudit_WarnsOnAnOlderPlugin(t *testing.T) {
+	a := New()
+	opts := newOpts(t)
+	if err := a.Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(PluginFile(opts.HomeDir))
+	old := strings.Replace(string(body), fmt.Sprintf("const PLUGIN_REV = %d;", PluginRevision), "", 1)
+	if err := os.WriteFile(PluginFile(opts.HomeDir), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings, _ := a.Audit(context.Background(), opts)
+	for _, f := range findings {
+		if f.Subject == "opencode plugin" && f.Status != integration.StatusWarn {
+			t.Errorf("an older plugin: %s %s, want a warning", f.Status, f.Detail)
 		}
 	}
 }

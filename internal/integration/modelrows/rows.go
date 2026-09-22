@@ -44,6 +44,10 @@ type Facts struct {
 	// a 1M twin (LocalWindow1M). The row itself states 200704 whatever it is
 	// (waired-agent#1396).
 	LocalWindow int
+	// LocalCustomWindow is the window of a custom model below 200,704 tokens
+	// this computer serves (InferenceState.CustomModelWindow), 0 otherwise.
+	// The local row states it (waired-ai/waired#1481).
+	LocalCustomWindow int
 	// LocalWindow1M, PeerWindow1M and PublicWindow1M say whether this
 	// computer, one of this operator's other computers (a teammate's
 	// included), and a public machine this computer may use declare a 1M
@@ -76,15 +80,22 @@ type Row struct {
 	Window1M bool
 	// Tier1M marks the "[1m]" twin itself.
 	Tier1M bool
-	// ContextWindow is the window the row states, and it is exactly what
-	// routing guarantees for it (gateway.RequiredWindowFor): 1M for a twin,
-	// 200k for every other row, including the ones naming one computer. The
-	// computer that answers has to hold at least that, and the turn is held
-	// to it (owner decision 2026-09-16, waired-agent#1396).
+	// ContextWindow is the window the row states: 1M for a twin, 200k for
+	// every other row (owner decision 2026-09-16, waired-agent#1396) — except
+	// a row naming one computer that serves a custom model below 200,704
+	// tokens, which states that model's own window (waired-ai/waired#1481).
+	// That computer answers the row at its own window: routing admits it
+	// (router.customWindowAdmits) and the gateway holds the turn to it
+	// (guardedWindow), so a client that sizes its conversation by the row —
+	// OpenCode, OpenClaw — compacts before the gateway has to refuse a turn.
+	// The rows that name no computer keep 200k: which computer answers them
+	// is decided per turn.
 	//
-	// The rows naming one computer used to state that computer's own window
-	// and carry no floor (waired-agent#1395). Claude Code is given one number
-	// for every row, so that window never reached its session.
+	// It is what the OpenAI listing states as max_input_tokens. Routing's own
+	// floor is gateway.RequiredWindowFor, by id, and is not read from here;
+	// Claude Code is given one number for every row
+	// (CLAUDE_CODE_MAX_CONTEXT_TOKENS), so no row's window reaches its
+	// session.
 	ContextWindow int
 }
 
@@ -114,7 +125,7 @@ func Rows(f Facts) []Row {
 			if !f.LocalServes {
 				continue
 			}
-			add(Row{DirectiveModel: d, Window1M: f.LocalWindow1M, ContextWindow: hostfit.ServingWindow200k})
+			add(Row{DirectiveModel: d, Window1M: f.LocalWindow1M, ContextWindow: rowWindow(f.LocalCustomWindow)})
 		case claudecode.DirectiveModelPeer:
 			add(Row{DirectiveModel: d, Window1M: f.PeerWindow1M, ContextWindow: hostfit.ServingWindow200k})
 		case claudecode.DirectiveModelPublic:
@@ -131,9 +142,20 @@ func Rows(f Facts) []Row {
 		}
 	}
 	for _, r := range claudecode.PeerDirectiveModels(f.Peers, f.PeerLimit) {
-		add(Row{DirectiveModel: r.DirectiveModel, Window1M: r.Window1M, ContextWindow: hostfit.ServingWindow200k})
+		add(Row{DirectiveModel: r.DirectiveModel, Window1M: r.Window1M, ContextWindow: rowWindow(r.ContextWindow)})
 	}
 	return out
+}
+
+// rowWindow is the window a row naming one computer states: that computer's
+// custom model's own window when it is below 200,704, and 200,704 otherwise.
+// A computer that declares a larger window still states 200,704 — no Waired
+// row is sized by a computer's spare room (waired-agent#1396).
+func rowWindow(own int) int {
+	if own > 0 && own < hostfit.ServingWindow200k {
+		return own
+	}
+	return hostfit.ServingWindow200k
 }
 
 // FactsFromSnapshot projects a mesh snapshot into the facts above.
@@ -178,6 +200,7 @@ func FactsFromSnapshot(snap *inferencemesh.Snapshot, limit int, publicShareOn bo
 	if f.LocalServes {
 		f.LocalWindow = declaredWindow(snap.Self)
 		f.LocalWindow1M = f.LocalWindow >= hostfit.ServingWindow1M
+		f.LocalCustomWindow = customModelWindow(snap.Self)
 	}
 	peers, from := peerFacts(snap.Peers)
 	for i := range peers {

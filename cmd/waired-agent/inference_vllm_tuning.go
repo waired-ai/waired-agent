@@ -90,8 +90,19 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 	mt.ContextLength = est
 	mt.WindowFits = false
 	mt.Warning = fmt.Sprintf(vllmBelowTierWarning, est, gpuMemUtil, tp)
+	if m.ContextLength > 0 && m.ContextLength < hostfit.ServingWindow200k {
+		// A model whose own window is under 200,704 — a custom model — is
+		// sent coding-agent requests anyway, at the window it is served with
+		// (CustomModelWindow, waired-ai/waired#1481), so the tier warning's
+		// "Waired won't send one" would be false.
+		mt.Warning = fmt.Sprintf(vllmShortOwnWindowWarning, est, gpuMemUtil, tp, m.ContextLength)
+	}
 	return est, mt
 }
+
+// vllmShortOwnWindowWarning is vllmBelowTierWarning for a model whose own
+// context window is under 200,704 tokens (waired-ai/waired#1481).
+const vllmShortOwnWindowWarning = "KV cache holds a context window of %d tokens for this model at gpu-memory-utilization=%.2f, TP=%d, under the model's own %d, so a coding agent's session overflows that window on every turn — pick a smaller model or raise gpu-memory-utilization"
 
 // vllmBelowTierWarning is the ModelTuning warning for a build whose KV pool
 // holds less than the 200k session on this host. Shown as an engine notice

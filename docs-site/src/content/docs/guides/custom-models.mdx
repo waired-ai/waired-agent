@@ -25,10 +25,11 @@ that runs one, and people outside your account never can.
 
 <Steps>
 
-1. In the web console, open **Settings**, and in **Custom models** select
-   **Import a model**.
+1. In the web console, open the **Custom models** tab, beside **Devices** and
+   **Logs**, and select **Import a model**.
 2. Paste the model's name (`org/model`) or its `huggingface.co` link, choose
-   **Ollama** or **vLLM**, and select **Check this model**.
+   **Ollama** or **vLLM**, and select **Check this model**. A link to one GGUF
+   file (`…/blob/main/<file>.gguf`) picks that variant.
 3. For Ollama, a repository usually offers several variants. Choose one.
 4. The console shows what it found: the size, the context window, the license,
    the commit it will pin, and whether it fits each of your computers. Give it a
@@ -37,15 +38,18 @@ that runs one, and people outside your account never can.
 
 </Steps>
 
-An account can hold 10 custom models. Importing pins the exact files: when a
-repository later replaces a file under the same name, that is a different model,
-and importing it again adds a second entry.
+An account can hold 10 custom models. Importing pins the exact files, at the
+repository's current commit: when a repository later replaces a file under the
+same name, that is a different model, and importing it again adds a second
+entry.
 
 ### What can't be imported
 
-The check refuses a model, and says why, when:
+The check refuses a model when:
 
 - it is private, or asks people to accept terms before downloading it;
+- the link points at a branch or commit other than the repository's current
+  one;
 - it is not a text-generation model;
 - it needs to run its own code to load, or its weights exist only in a format
   that can run code when loaded;
@@ -53,6 +57,8 @@ The check refuses a model, and says why, when:
   does not support the model's architecture;
 - for vLLM, the repository has no safetensors weights, or no chat template;
 - Waired's own list already has it. Choose it from the list instead.
+
+When it refuses one, the console says why and what to do.
 
 ## Run it on a computer
 
@@ -76,8 +82,9 @@ agents let Waired choose the computer. Two switches decide whether it may choose
 one that runs this custom model:
 
 - **From your computers**: requests from your own computers.
-- **From your team**: requests from your teammates' computers. The team's owner
-  or an admin can stop a model for the whole team on the **Team** page.
+- **From your team**: requests from your teammates' computers. The **Custom
+  models** tab also lists the team's models, and there the team's owner or an
+  admin can stop one for the whole team.
 
 Both start on for a model whose context window is at least 200,704 tokens, and
 off below that. A row that names a computer (**Waired peer: *name***) always
@@ -86,14 +93,36 @@ reaches it.
 ## Small context windows
 
 A coding agent's session is sized for 200,704 tokens. A model with a smaller
-context window still runs, but a coding agent overflows it on every turn and has
-to cut down what it sends. The console says so wherever you choose such a
-model. When a request could go to a computer that holds 200,704
-tokens, Waired sends it there instead.
+context window still runs, and the console says so wherever you choose one.
+Waired holds each turn to the model's own window: a larger turn is answered
+`prompt is too long`. What the coding agent does then differs (measured with
+Claude Code 2.1.278 and OpenCode 1.18.30):
+
+- **Claude Code** summarizes the conversation by itself (it calls this
+  compacting) and sends the turn again. When even the summary request is too
+  long, it drops the oldest part of the conversation and tries again. When the
+  turn still doesn't fit after that, it stops with `Prompt is too long`. Claude
+  Code's own instructions and tool list take about 15,000 tokens of every
+  request, so a model with a much smaller window can't take even a first turn.
+- **OpenCode and OpenClaw** are told a window per entry. The entries that name
+  that computer (`waired/local`, `waired/peer-<name>`) carry the model's own
+  window, so they summarize before reaching it. The entries that name no
+  computer (`waired/default`, `waired/peer`) keep 200,704, because which
+  computer answers them is decided per turn. On the entries that name the
+  computer, OpenCode is also given a smaller output limit: at most 8,192
+  tokens, or a quarter of the window when that is less. Without it, OpenCode
+  keeps 32,000 tokens of the window for the model's output, and on a small
+  window it would summarize without end.
+
+Keep sessions short with such a model, and start a new one when the agent
+summarizes often. In OpenCode and OpenClaw, use the entry that names the
+computer: it is the one that knows the window. When a request that names no
+computer could go to one that holds 200,704 tokens, Waired sends it there
+instead.
 
 ## Delete a model
 
-Delete it from **Settings** → **Custom models**. A model that a computer runs,
+Delete it from the **Custom models** tab. A model that a computer runs,
 or has been told to run, can't be deleted: the console names those computers,
 and you choose another model on each of them first. Computers that downloaded
 it keep its files. To free that space, run `waired models rm <model id>` on

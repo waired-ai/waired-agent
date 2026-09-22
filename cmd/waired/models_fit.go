@@ -409,6 +409,8 @@ func notRecommendedBecause(reason string) string {
 		return ": it doesn't fit entirely in VRAM, and every reply pays for that"
 	case hostfit.ReasonTooSlow:
 		return ": replies would be slow"
+	case hostfit.ReasonModelWindowShort:
+		return ": its own context window is under the 200,704 tokens a coding agent's session is sized for, so a session overflows it on every turn"
 	}
 	// ReasonWindowExceedsMemory is deliberately absent: it no longer
 	// completes "isn't recommended here" at all — warnModelNotRecommended

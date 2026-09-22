@@ -12,6 +12,7 @@ import (
 
 	notices "github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // catalogDetailResp mirrors management.ModelCatalogResponse (the fields
@@ -440,6 +441,10 @@ func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 	switch {
 	case f.RecommendedPick:
 		out = "✓ fits · recommended"
+	case f.Fit != nil && f.Fit.NotRecommended && f.Fit.NotRecommendedReason == hostfit.ReasonModelWindowShort:
+		// A custom model whose own window is short: the memory holds all of
+		// it, and the window is what there is to say (waired-ai/waired#1481).
+		out = "✓ fits · not recommended (its own context window is under 200,704 tokens)"
 	case f.Fit != nil && f.Fit.NotRecommended:
 		out = "✓ fits · not recommended"
 		if f.Fit.NotRecommendedReason != "" {

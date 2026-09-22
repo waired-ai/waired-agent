@@ -59,7 +59,36 @@ func classifyEngineFailure(status int, body []byte) (clientStatus int, errType, 
 	if IsEngineRequestShapeRejection(string(body)) {
 		return http.StatusBadRequest, "invalid_request_error", "engine_request_shape"
 	}
+	if IsEngineContextOverflow(string(body)) {
+		return http.StatusBadRequest, "invalid_request_error", engineContextOverflowReason
+	}
 	return status, "upstream_error", "upstream_error"
+}
+
+// engineContextOverflowReason is classifyEngineFailure's reason for an
+// engine's own over-window refusal (IsEngineContextOverflow). It is the
+// reason the gateway's own over-window 400 records, because it is the same
+// event with a different witness.
+const engineContextOverflowReason = "context_overflow"
+
+// engineFailureMessage is what the Anthropic legs put in error.message for
+// an engine failure: the documented overflow token for an over-window
+// refusal, so Claude Code compacts and sends the turn again, and the
+// engine's own words otherwise. It also stages the header a relaying node
+// and the journal read.
+func engineFailureMessage(w http.ResponseWriter, resp *http.Response, rr *requestRec, status int, reason string, body []byte) string {
+	switch {
+	case reason == engineContextOverflowReason:
+		slog.Info("gateway: the engine refused an over-window prompt; surfacing the overflow 400 so the client compacts",
+			"model", recordedModel(rr), "engine_status", resp.StatusCode)
+		w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+		return contextOverflowToken
+	case status != resp.StatusCode:
+		slog.Warn("gateway: engine refused the request shape; surfacing 400 so the client stops retrying",
+			"model", recordedModel(rr), "engine_status", resp.StatusCode)
+		w.Header().Set(HeaderLocalError, LocalErrorEngineRequestShape)
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // handleAnthropicMessages overrides the stub in server.go. It accepts
@@ -462,13 +491,9 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		// remapped 400 would silently skip its canary.
 		reportEngineFailure(reporter, resp.StatusCode, respBody)
 		status, errType, reason := classifyEngineFailure(resp.StatusCode, respBody)
-		if status != resp.StatusCode {
-			slog.Warn("gateway: engine refused the request shape; surfacing 400 so the client stops retrying",
-				"model", recordedModel(rr), "engine_status", resp.StatusCode)
-			w.Header().Set(HeaderLocalError, LocalErrorEngineRequestShape)
-		}
+		msg := engineFailureMessage(w, resp, rr, status, reason, respBody)
 		rr.fail(status, reason)
-		writeAnthropicErrorOrAbort(w, hold, status, errType, strings.TrimSpace(string(respBody)))
+		writeAnthropicErrorOrAbort(w, hold, status, errType, msg)
 		return
 	}
 	var openaiResp OpenAIResponse
@@ -922,13 +947,14 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// status (this leg recorded nothing at all before waired-agent#29).
 		reportEngineFailure(reporter, resp.StatusCode, errBody)
 		status, errType, reason := classifyEngineFailure(resp.StatusCode, errBody)
-		if status != resp.StatusCode && !hold.committed() {
-			slog.Warn("gateway: engine refused the request shape; surfacing 400 so the client stops retrying",
-				"model", recordedModel(rr), "engine_status", resp.StatusCode)
-			w.Header().Set(HeaderLocalError, LocalErrorEngineRequestShape)
+		msg := strings.TrimSpace(string(errBody))
+		if !hold.committed() {
+			msg = engineFailureMessage(w, resp, rr, status, reason, errBody)
+		} else if reason == engineContextOverflowReason {
+			msg = contextOverflowToken
 		}
 		rr.fail(status, reason)
-		writeAnthropicErrorOrEvent(w, hold, status, errType, strings.TrimSpace(string(errBody)))
+		writeAnthropicErrorOrEvent(w, hold, status, errType, msg)
 		return
 	}
 

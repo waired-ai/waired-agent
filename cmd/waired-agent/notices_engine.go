@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/notice"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
@@ -62,6 +63,12 @@ func engineNotices(p engineProvenance, live, latchedReady, known bool) []notice.
 	// engine are two notices.
 	if p.ServedWindow == hostfit.ServingWindow1M {
 		out = append(out, notice.LongContextWindow())
+	}
+	// The other end: a custom model whose own window is under a coding
+	// agent's session, which a coding agent overflows on every turn
+	// (waired-ai/waired#1481). Only a custom model can serve below 200,704.
+	if p.ServedWindow > 0 && p.ServedWindow < hostfit.ServingWindow200k && catalog.IsCustomModelID(p.ServedModelID) {
+		out = append(out, notice.ShortContextWindow(p.ServedWindow))
 	}
 	return out
 }
