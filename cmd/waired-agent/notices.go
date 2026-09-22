@@ -6,6 +6,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/notice"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // noticeRepublish is how often a producer repeats what it wants shown.
@@ -150,6 +151,11 @@ func (p *agentInferenceProvider) loadFailureNotices(ctx context.Context) []notic
 	rec, blocked := p.engineLoadIsBlocked()
 	if !blocked {
 		return nil
+	}
+	if rec.Kind != "" && rec.Kind != signer.LoadFailureMemory {
+		// Not memory: a smaller model is not the answer, and "ran out of
+		// memory" would be false (waired-ai/waired#1480).
+		return []notice.Notice{notice.ModelCouldNotStart(rec.ModelID, rec.Reason)}
 	}
 	return []notice.Notice{
 		notice.ModelDidNotLoad(rec.ModelID, p.smallerAlternative(ctx, rec), rec.Reason),

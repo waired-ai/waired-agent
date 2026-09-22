@@ -271,6 +271,10 @@ func (p *agentInferenceProvider) PublishedLoadFailures() []signer.ModelLoadFailu
 			NumParallel:   f.Shape.NumParallel,
 			Backend:       f.Shape.Backend,
 			FailedAt:      f.FailedAt.UTC().Format(time.RFC3339Nano),
+			// A code, not the sentence: the control plane words it
+			// (waired-ai/waired#1480).
+			Reason:          f.Kind,
+			EngineMaxWindow: f.EngineMaxWindow,
 		})
 	}
 	if len(out) == 0 {
@@ -294,7 +298,7 @@ func (p *agentInferenceProvider) PublishedLoadFailures() []signer.ModelLoadFailu
 // waiting, and retrying on a schedule is what put the reference host under
 // the same memory pressure twice (#1443, #1450).
 func (p *agentInferenceProvider) reviewOutOfMemoryPark(context.Context) {
-	if p == nil || p.parkedBecause() != parkCauseOutOfMemory {
+	if p == nil || !p.parkedForLoadFailure() {
 		return
 	}
 	if _, blocked := p.engineLoadIsBlocked(); blocked {

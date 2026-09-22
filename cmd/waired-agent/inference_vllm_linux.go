@@ -16,6 +16,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // resolveVLLMTensorParallel returns the --tensor-parallel-size for this
@@ -588,9 +589,9 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		// Two causes share the latch, and the log named only the
 		// operator's: a stop for a model that did not fit read as one
 		// someone asked for (waired-agent#1515).
-		if p.parkedBecause() == parkCauseOutOfMemory {
-			p.logger.Info("vllm bootstrap: the engine is stopped because the chosen model did not fit this computer; not starting it",
-				"state", existingState, "fix", "choose a different model")
+		if p.parkedForLoadFailure() {
+			p.logger.Info("vllm bootstrap: the engine is stopped because the chosen model did not start on this computer; not starting it",
+				"state", existingState, "cause", p.parkedBecause().String(), "fix", "choose a different model")
 			return
 		}
 		p.logger.Info("vllm bootstrap: the engine is stopped by the operator; not starting it",
@@ -873,8 +874,11 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		return
 	case vllmAttemptsMovedOn:
 		raw, _ := os.ReadFile(filepath.Join(logDir, "engine.log"))
-		if mem, reason := vllmStartFailedForMemory(infruntime.LastEngineLogSpawn(string(raw)), tuning.WeightsOverBudget); mem {
-			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, reason, "")
+		lastSpawn := infruntime.LastEngineLogSpawn(string(raw))
+		if mem, reason := vllmStartFailedForMemory(lastSpawn, tuning.WeightsOverBudget); mem {
+			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, reason, "", signer.LoadFailureMemory, vllmEngineMaxWindow(lastSpawn))
+		} else if kind := vllmStartFailureKind(lastSpawn); kind != "" {
+			p.noteVLLMLoadFailure(ctx, manifest, variant, shape, vllmModelFailureHint(lastSpawn), "", kind, 0)
 		}
 		p.logger.Info("vllm bootstrap: a different model was chosen while this one was starting; starting that one instead",
 			"model", manifest.ModelID, "err", ensureErr)
@@ -917,9 +921,15 @@ func (p *agentInferenceProvider) spawnVLLM(ctx context.Context, venv infruntime.
 		// off with the reason, so a restart does not repeat the same failed
 		// start (waired-agent#1515). The previous model answering in the
 		// meantime is not the choice and is not recorded against.
+		// A build this engine cannot run here at all fails every attempt
+		// the same way, and is recorded and held off the same way, with its
+		// own words (waired-ai/waired#1480).
 		if chosen {
-			if mem, reason := vllmStartFailedForMemory(infruntime.LastEngineLogSpawn(string(raw)), tuning.WeightsOverBudget); mem {
-				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, reason, hint)
+			lastSpawn := infruntime.LastEngineLogSpawn(string(raw))
+			if mem, reason := vllmStartFailedForMemory(lastSpawn, tuning.WeightsOverBudget); mem {
+				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, reason, hint, signer.LoadFailureMemory, vllmEngineMaxWindow(lastSpawn))
+			} else if kind := vllmStartFailureKind(lastSpawn); kind != "" {
+				p.recordVLLMLoadFailure(ctx, manifest, variant, shape, hint, "", kind, 0)
 			}
 		}
 		return

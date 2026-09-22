@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // A vLLM start that failed because the model does not fit this computer is
@@ -39,6 +40,9 @@ func vllmStartFailedForMemory(lastSpawnLog string, weightsOverBudget bool) (bool
 		"torch.OutOfMemoryError",
 		"No available memory for the cache blocks",
 		"larger than the maximum number of tokens that can be stored in KV cache",
+		// vLLM v0.29.0's KV-cache shortfall, which names the window it could
+		// hold (vllm/v1/core/kv_cache_utils.py; waired-ai/waired#1480).
+		"the estimated maximum model length is",
 	} {
 		if strings.Contains(lastSpawnLog, marker) {
 			return true, marker
@@ -127,12 +131,16 @@ func (p *agentInferenceProvider) vllmLoadBlocked(ctx context.Context, m catalog.
 // recordVLLMLoadFailure keeps the fact that this build did not start here,
 // and holds the engine off with the reason.
 func (p *agentInferenceProvider) recordVLLMLoadFailure(ctx context.Context, m catalog.Manifest, v catalog.Variant,
-	shape catalog.LoadShape, reason, detail string) {
-	key, ok := p.noteVLLMLoadFailure(ctx, m, v, shape, reason, detail)
+	shape catalog.LoadShape, reason, detail string, kind string, engineMaxWindow int) {
+	key, ok := p.noteVLLMLoadFailure(ctx, m, v, shape, reason, detail, kind, engineMaxWindow)
 	if !ok {
 		return
 	}
-	p.parkVLLMForOutOfMemory(key, reason)
+	if kind == signer.LoadFailureMemory || kind == "" {
+		p.parkVLLMForOutOfMemory(key, reason)
+	} else {
+		p.parkVLLMCannotStart(key, reason)
+	}
 	if p.logger != nil {
 		p.logger.Warn("this computer could not start this model on vLLM; it will not be started again automatically",
 			"model_id", m.ModelID, "variant_id", v.VariantID, "reason", reason,
@@ -145,7 +153,7 @@ func (p *agentInferenceProvider) recordVLLMLoadFailure(ctx context.Context, m ca
 // behind, so it is not started again to answer in the meantime
 // (vllmStartable) while the model chosen now goes ahead (waired-agent#1515).
 func (p *agentInferenceProvider) noteVLLMLoadFailure(ctx context.Context, m catalog.Manifest, v catalog.Variant,
-	shape catalog.LoadShape, reason, detail string) (vllmBlockedLoad, bool) {
+	shape catalog.LoadShape, reason, detail string, kind string, engineMaxWindow int) (vllmBlockedLoad, bool) {
 	if p == nil || p.store == nil {
 		return vllmBlockedLoad{}, false
 	}
@@ -154,13 +162,15 @@ func (p *agentInferenceProvider) noteVLLMLoadFailure(ctx context.Context, m cata
 		return vllmBlockedLoad{}, false // a failure it cannot key is not recorded (see onLoadMemoryFailure)
 	}
 	rec := catalog.VariantLoadFailure{
-		ModelID:   m.ModelID,
-		VariantID: v.VariantID,
-		Reason:    reason,
-		Detail:    detail,
-		Context:   p.loadContextNow(ctx),
-		Shape:     shape,
-		FailedAt:  time.Now().UTC(),
+		ModelID:         m.ModelID,
+		VariantID:       v.VariantID,
+		Reason:          reason,
+		Detail:          detail,
+		Kind:            kind,
+		EngineMaxWindow: engineMaxWindow,
+		Context:         p.loadContextNow(ctx),
+		Shape:           shape,
+		FailedAt:        time.Now().UTC(),
 	}
 	if err := p.store.Update(func(s *catalog.State) {
 		if s.FailedLoads == nil {
@@ -188,6 +198,27 @@ func (p *agentInferenceProvider) parkVLLMForOutOfMemory(blocked vllmBlockedLoad,
 	p.setVLLMParked(true)
 	if p.logger != nil {
 		p.logger.Warn("inference stopped: the chosen model does not fit this computer's GPU memory", "why", why)
+	}
+}
+
+// parkVLLMCannotStart holds the vLLM engine off because the build in blocked
+// cannot start on this computer at all — an architecture this engine does not
+// know, a quantization this GPU is too old for, weights it cannot find
+// (waired-ai/waired#1480). Held, reviewed and released exactly as a memory
+// stop is (parkedForLoadFailure); only the words differ, so a surface never
+// says "out of memory" about a model that did not run out of anything.
+func (p *agentInferenceProvider) parkVLLMCannotStart(blocked vllmBlockedLoad, why string) {
+	if p == nil {
+		return
+	}
+	p.vllmBlocked.Store(&blocked)
+	if p.parkedBecause() == parkCauseOperator {
+		return
+	}
+	p.noteParked(parkCauseCannotStart)
+	p.setVLLMParked(true)
+	if p.logger != nil {
+		p.logger.Warn("inference stopped: the chosen model cannot start on this computer", "why", why)
 	}
 }
 

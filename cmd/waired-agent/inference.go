@@ -3404,7 +3404,7 @@ func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware
 	// which is pushed to the mesh, so peers stopped routing to a host that
 	// was still answering.
 	f.Parked = p.engineIsParked()
-	f.ParkedByError = p.parkedBecause() == parkCauseOutOfMemory
+	f.ParkedByError = p.parkedForLoadFailure()
 	if a := p.servingAdapter(); a != nil {
 		f.EngineState = a.Health(ctx).State
 		if fl, ok := a.(interface{ FailureLatched() bool }); ok {
