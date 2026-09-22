@@ -1,6 +1,6 @@
 [Unit]
 Description=Waired agent
-Documentation=https://github.com/waired-ai/waired
+Documentation=https://github.com/waired-ai/waired-agent
 After=network-online.target
 Wants=network-online.target
 

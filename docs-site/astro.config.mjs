@@ -47,14 +47,16 @@ export default defineConfig({
 			// English is the canonical/base language and sits at the site
 			// root (`/...`); Japanese is a mirror under `/ja/...`.
 			// Untranslated `ja` pages fall back to English automatically, so
-			// the Japanese tree can fill in page by page.
+			// the Japanese tree can fill in page by page. Which of the two a
+			// reader lands on (their own pick in the language picker, else
+			// the browser's language) is decided in the Head override below.
 			defaultLocale: 'root',
 			locales: {
 				root: { label: 'English', lang: 'en' },
 				ja: { label: '日本語', lang: 'ja' },
 			},
 			social: [
-				{ icon: 'github', label: 'GitHub', href: 'https://github.com/waired-ai/waired' },
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/waired-ai/waired-agent' },
 			],
 			components: {
 				// Two site-wide conventions the stock component has no slot
@@ -68,6 +70,10 @@ export default defineConfig({
 				// MobileMenuFooter override; keep the two in step.
 				SocialIcons: './src/components/SocialIcons.astro',
 				MobileMenuFooter: './src/components/MobileMenuFooter.astro',
+				// Sends a Japanese browser from an English URL to /ja/, and
+				// remembers a language picked in the picker — see
+				// src/lib/language-preference.js.
+				Head: './src/components/Head.astro',
 			},
 			// Explicit `slug` entries (not autogenerate) so order and labels
 			// are intentional and a typo'd slug fails the build. Slugs are

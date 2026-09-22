@@ -31,7 +31,7 @@ Claude Code、OpenCode、OpenClawは、それぞれコマンド1つで使えま�
 
 ### <a id="is-it-open-source"></a>オープンソースで公開されている？
 
-自分のパソコンで動くもの、つまりクライアントはオープンソースで、[GitHub](https://github.com/waired-ai/waired)で読めます。端末どうしが互いを見つけられるようにするコントロールプレーンは、こちらでホストしています。
+自分のパソコンで動くもの、つまりクライアントはオープンソースで、[GitHub](https://github.com/waired-ai/waired-agent)で読めます。端末どうしが互いを見つけられるようにするコントロールプレーンは、こちらでホストしています。
 
 ## <a id="hardware-and-models"></a>ハードウェアとモデル
 

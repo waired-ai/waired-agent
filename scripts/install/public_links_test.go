@@ -1,6 +1,7 @@
 package installscripts
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,17 +37,67 @@ func TestInstallerScriptsLinkOnlyToPublicPlaces(t *testing.T) {
 	root := repoRoot(t)
 	for _, rel := range publicInstallerScripts {
 		t.Run(rel, func(t *testing.T) {
-			b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
-			if err != nil {
-				t.Fatalf("read: %v", err)
-			}
-			for i, line := range strings.Split(string(b), "\n") {
-				if m := privateRepoURL.FindString(line); m != "" {
-					t.Errorf("%s:%d links into the private monorepo (%q): point users at "+
-						"https://docs.waired.ai/ or github.com/waired-ai/waired-agent instead\n  %s",
-						rel, i+1, m, strings.TrimSpace(line))
+			assertNoPrivateRepoLinks(t, root, rel)
+		})
+	}
+}
+
+// publicSurfaces are the other places that showed a user the private
+// monorepo's URL until the GitHub links moved to this repository: the
+// Waired app's About dialog, the service unit (`systemctl status` prints
+// its Documentation= line), the Windows installer's Add/Remove Programs
+// links, and docs.waired.ai (the header's GitHub icon and the pages). A
+// directory covers every file under it.
+var publicSurfaces = []string{
+	"internal/gui/tray/actions_darwin.go",
+	"internal/gui/tray/actions_linux.go",
+	"internal/gui/tray/dialog_windows.go",
+	"packaging/systemd",
+	"packaging/windows/waired-setup.iss",
+	"docs-site/astro.config.mjs",
+	"docs-site/src",
+}
+
+// TestPublicSurfacesLinkOnlyToPublicPlaces is the same guard for the
+// surfaces above, which carried https://github.com/waired-ai/waired as
+// "the project on GitHub" — a 404 for anyone outside the org.
+func TestPublicSurfacesLinkOnlyToPublicPlaces(t *testing.T) {
+	root := repoRoot(t)
+	for _, rel := range publicSurfaces {
+		t.Run(rel, func(t *testing.T) {
+			abs := filepath.Join(root, filepath.FromSlash(rel))
+			err := filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
+				if d.IsDir() {
+					return nil
+				}
+				fileRel, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				assertNoPrivateRepoLinks(t, root, filepath.ToSlash(fileRel))
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("walk: %v", err)
 			}
 		})
+	}
+}
+
+func assertNoPrivateRepoLinks(t *testing.T, root, rel string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for i, line := range strings.Split(string(b), "\n") {
+		if m := privateRepoURL.FindString(line); m != "" {
+			t.Errorf("%s:%d links into the private monorepo (%q): point users at "+
+				"https://docs.waired.ai/ or github.com/waired-ai/waired-agent instead\n  %s",
+				rel, i+1, m, strings.TrimSpace(line))
+		}
 	}
 }

@@ -252,7 +252,7 @@ func CopyToClipboard(text string) error {
 // the call falls back to printing on stderr (the user still has the
 // inline About menu item with the version string).
 func ShowAbout(version, sha string) {
-	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired", version, sha)
+	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired-agent", version, sha)
 	if tryDialog("--info", "About Waired", body) {
 		return
 	}
