@@ -51,7 +51,7 @@ Wairedは、リクエスト数、トークン数、所要時間、使われた�
 
 ```text
 Sharing this computer publicly: on
-Guest limit: automatic
+Public share limit: automatic
 Public sharing is turned on and off in the Waired console.
 ```
 

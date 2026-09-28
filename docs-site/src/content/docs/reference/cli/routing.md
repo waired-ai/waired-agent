@@ -31,8 +31,8 @@ Who the computer is offered to while the switch is on is set in the
 ```text
 Sharing this computer: on
 Your other computers: on
-Your team: off
-People outside your account: off
+Team share: off
+Public share: off
 Who this computer is shared with is set in the Waired console.
 ```
 
@@ -42,7 +42,7 @@ Waired app is not running. It resumes when the app starts.` The next three
 lines are what the console decided. **Your other computers** reads `not known
 yet` until the service has heard from the console. **Your team** is `off`
 unless this computer is shared with your team; see
-[Team Share](/team-share/). A `Guest limit: N at once` line appears when a
+[Team Share](/team-share/). A `Public share limit: N at once` line appears when a
 guest limit has been set. See
 [Share a computer with your other devices](/guides/sharing/).
 
@@ -151,7 +151,7 @@ The first time you enable `use`, a one-time privacy warning appears in the
 terminal that you have to read and accept.
 
 `waired public status` starts with the sharing side, `Sharing this computer
-publicly: on|off`, then `Guest limit: N at once` or `Guest limit: automatic`,
+publicly: on|off`, then `Public share limit: N at once` or `Public share limit: automatic`,
 and a reminder that public sharing is turned on and off in the web console.
 When this computer's own switch is off, it adds the line that explains why
 nothing is shared:

@@ -121,9 +121,9 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 		// that, and say where it is changed — the old wording named a
 		// command that no longer exists.
 		if share.PublicMaxClients > 0 {
-			pf(out, "Guest limit: %d at once\n", share.PublicMaxClients)
+			pf(out, "Public share limit: %d at once\n", share.PublicMaxClients)
 		} else {
-			pln(out, "Guest limit: automatic")
+			pln(out, "Public share limit: automatic")
 		}
 		// The machine's own switch outranks the console's setting, and a
 		// person looking at "off" here deserves to know which of the two

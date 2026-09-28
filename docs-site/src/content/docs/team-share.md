@@ -109,8 +109,8 @@ on.
 ```text
 Sharing this computer: on
 Your other computers: on
-Your team: on
-People outside your account: off
+Team share: on
+Public share: off
 Who this computer is shared with is set in the Waired console.
 ```
 

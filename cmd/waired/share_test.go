@@ -69,8 +69,8 @@ func TestRunShareStatus_ReportsTheWholePicture(t *testing.T) {
 	for _, want := range []string{
 		"Sharing this computer: on",
 		"Your other computers: on",
-		"People outside your account: off",
-		"Guest limit: 2 at once",
+		"Public share: off",
+		"Public share limit: 2 at once",
 		"Waired console",
 	} {
 		if !strings.Contains(buf.String(), want) {
@@ -87,8 +87,8 @@ func TestRunShareStatus_TeamRow(t *testing.T) {
 		name, body string
 		want       string // "" = no team row
 	}{
-		{"team on", `{"state":"on","desired_state":"on","mesh_share":"on","team_share":"on","public_share":"off"}`, "Your team: on"},
-		{"team off", `{"state":"on","desired_state":"on","mesh_share":"on","team_share":"off","public_share":"off"}`, "Your team: off"},
+		{"team on", `{"state":"on","desired_state":"on","mesh_share":"on","team_share":"on","public_share":"off"}`, "Team share: on"},
+		{"team off", `{"state":"on","desired_state":"on","mesh_share":"on","team_share":"off","public_share":"off"}`, "Team share: off"},
 		{"older daemon", `{"state":"on","desired_state":"on","mesh_share":"on","public_share":"off"}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,14 +103,14 @@ func TestRunShareStatus_TeamRow(t *testing.T) {
 			}
 			out := buf.String()
 			if tc.want == "" {
-				if strings.Contains(out, "Your team:") {
+				if strings.Contains(out, "Team share:") {
 					t.Errorf("a daemon that reports no team state got a team row\n---\n%s", out)
 				}
 				return
 			}
 			team := strings.Index(out, tc.want)
 			own := strings.Index(out, "Your other computers:")
-			public := strings.Index(out, "People outside your account:")
+			public := strings.Index(out, "Public share:")
 			if team < 0 || own >= team || team >= public {
 				t.Errorf("want %q between the own and public rows\n---\n%s", tc.want, out)
 			}
