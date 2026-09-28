@@ -62,19 +62,19 @@ card. It has two switches, and a third while you are in a team:
 
 - **Your other computers.** The rest of the computers on your account may
   send work here. Turning it off keeps this computer for the person sitting
-  at it, and also turns public sharing off.
-- **People outside your account.** Other Waired users may run work on this
-  computer when it has spare capacity. Off unless you turn it on. Read
+  at it, and also turns Team share and Public share off.
+- **Public share.** Other Waired users, public users, may run work on this
+  computer while it has spare room. Off unless you turn it on. Read
   [Public Share](/public-share/) first.
 
-When you are in a team, the card has a third switch, **Share with team**,
-which lends the computer to your teammates. Off unless you turn it on. Read
+When you are in a team, the card has a third switch, **Team share**, which
+lends the computer to your teammates. Off unless you turn it on. Read
 [Team Share](/team-share/) first.
 
-The switches are linked. Turning **Your other computers** off also turns public
-sharing off, because a computer you are not lending to your own machines is
-not lent to strangers either. Turning public sharing on turns **Your other
-computers** on. Team sharing is linked the same way.
+The switches are linked. Turning **Your other computers** off also turns
+Public share off, because a computer you are not lending to your own machines
+is not lent to strangers either. Turning Public share on turns **Your other
+computers** on. Team share is linked the same way.
 
 ## How much work it takes at once
 
@@ -82,15 +82,15 @@ The computer's page in the web console also sets its capacity.
 
 | Setting | What it does |
 |---|---|
-| **Max concurrent requests** | How many requests this computer serves at once. Higher lets it handle more of your computers in parallel, but each parallel slot reserves its own VRAM for the KV cache and slows every request. `0` means automatic. The console shows the recommended maximum for this computer, the number that fits in VRAM without spilling, and asks you to confirm before you go above it. |
-| **Serve main conversation** and **Serve subagents** | Which kinds of request from Claude Code and OpenCode on your other computers this computer accepts. Its own Claude Code and OpenCode are never affected. Turning **Serve main conversation** off keeps a slower computer for subagent work only. |
-| **Priority** | Which computers are chosen first when several could answer. **High** is chosen first, **Low** serves only when no higher-priority computer can, and **Middle** is the default. |
-| **Max guests** | For public sharing: how many guests may use the computer at once. `0` means automatic, which keeps one slot free for you. You can raise it up to the computer's full capacity. |
+| **Requests at once** | How many requests this computer answers at the same time. More lets it work in parallel, but each one reserves its own VRAM for the KV cache and slows every request. `0` means automatic. The console shows the figure that applies beside the field, and the recommended maximum that fits in VRAM, and asks you to confirm before you go above it. |
+| **Public share limit** | How many public users may use the computer at once. `0` means automatic: one is kept for you, and public users take up to 2. You can raise it up to what the computer takes at once. |
+| **Main conversation** and **Sub-agents** (under **Which requests** on the Sharing card) | Which kinds of request from Claude Code and OpenCode this computer takes from everyone it is shared with. Its own Claude Code and OpenCode are never affected. Turning **Main conversation** off keeps a slower computer for sub-agent work only. |
+| **Routing priority** | Which of your computers is tried first when several could answer. **High** is chosen first, **Low** serves only when no higher-priority computer can, and **Middle** is the default. |
 
 <Aside type="note" title="Your own work comes first">
 	Whatever the numbers say, the person at the computer takes priority when
-	it is busy. A guest never blocks you for long, and new guest work is
-	paused while you are using the computer.
+	it is busy. A public user never blocks you for long, and new public work
+	is paused while you are using the computer.
 </Aside>
 
 ## What quitting the app does

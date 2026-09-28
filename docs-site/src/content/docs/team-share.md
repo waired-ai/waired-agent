@@ -83,14 +83,13 @@ different one on the **Account** page.
 
 Sharing is set per computer, on the **Sharing** card of the computer's page
 in the web console. While you are in a team, the card has a third switch,
-**Share with team**, next to **Your other computers** and **People outside
-your account**.
+**Team share**, next to **Your other computers** and **Public share**.
 
 - **Only the owner of a computer can share it.** Nobody else in the team can
   turn it on for you.
-- **Stopping is immediate.** Turning **Share with team** off cuts off any
+- **Stopping is immediate.** Turning **Team share** off cuts off any
   teammate's request running on that computer at that moment.
-- **It is linked with Your other computers.** Turning **Share with team** on
+- **It is linked with Your other computers.** Turning **Team share** on
   also turns **Your other computers** on, and turning **Your other
   computers** off also turns team sharing off, because a computer you are
   not lending to your own machines is not lent to anyone else.
