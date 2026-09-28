@@ -65,7 +65,7 @@ import (
 // meaningful. scripts/dev/update-uv-sha.sh recomputes both digests, and
 // Renovate runs it on the uv PR (see renovate.json).
 // renovate: datasource=github-releases depName=astral-sh/uv
-const UVPinnedVersion = "0.12.17"
+const UVPinnedVersion = "0.12.19"
 
 // UVPinnedSHA256Linux64 is the sha256 of the linux x86_64 tarball at
 // https://github.com/astral-sh/uv/releases/download/<UVPinnedVersion>/uv-x86_64-unknown-linux-gnu.tar.gz
@@ -76,8 +76,8 @@ const UVPinnedVersion = "0.12.17"
 // ErrUVUnverifiedPin rather than download something unverified — which
 // is exactly what blocked `waired runtimes install vllm` end-to-end
 // (#557). Verified against
-// https://github.com/astral-sh/uv/releases/download/0.12.17/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
-const UVPinnedSHA256Linux64 = "fa82fd8dde8e8eefdecada6aa0889666556cfceb690d06e0c3bca49eb3070a63"
+// https://github.com/astral-sh/uv/releases/download/0.12.19/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
+const UVPinnedSHA256Linux64 = "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
 
 // UVPinnedSHA256LinuxARM64 is the sha256 of the linux aarch64 tarball at
 // https://github.com/astral-sh/uv/releases/download/<UVPinnedVersion>/uv-aarch64-unknown-linux-gnu.tar.gz
@@ -85,8 +85,8 @@ const UVPinnedSHA256Linux64 = "fa82fd8dde8e8eefdecada6aa0889666556cfceb690d06e0c
 // Same lockstep rule as UVPinnedSHA256Linux64. An arm64 host used to get
 // a uv only if one was on PATH; with PATH no longer consulted
 // (waired-ai/waired#1435) this pin is its only source. Verified against
-// https://github.com/astral-sh/uv/releases/download/0.12.17/uv-aarch64-unknown-linux-gnu.tar.gz.sha256
-const UVPinnedSHA256LinuxARM64 = "d636d1b678e9e7f367ecb22b46bd1cabbed234d6bc3b4d96365d2b507f72f86c"
+// https://github.com/astral-sh/uv/releases/download/0.12.19/uv-aarch64-unknown-linux-gnu.tar.gz.sha256
+const UVPinnedSHA256LinuxARM64 = "0804e9b164c64b6914182d5920c08551958a095986f10a3731056df701126436"
 
 // UVDownloadURLBase is the GitHub release download prefix the
 // download path uses. Centralised so tests can swap it.
