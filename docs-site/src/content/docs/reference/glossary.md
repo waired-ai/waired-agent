@@ -201,7 +201,7 @@ another page stops you.
 <a id="capacity"></a>
 **Capacity**
 : How many requests a computer serves at once, set in the web console as
-  **Max concurrent requests**. Each parallel slot reserves its own VRAM.
+  **Requests at once**. Each parallel slot reserves its own VRAM.
 
 <a id="pausing"></a>
 **Pausing**

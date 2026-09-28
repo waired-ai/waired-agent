@@ -46,11 +46,11 @@ Wairedは、チームメイトのパソコンが処理したリクエストご�
 
 ## <a id="share-a-computer-with-the-team"></a>パソコンをチームと共有する
 
-共有はパソコンごとに、Webコンソールのパソコンのページにある［Sharing］のカードで設定します。チームに入っている間は、カードの［Your other computers］と［People outside your account］の隣に、3つ目のスイッチ［Share with team］が表示されます。
+共有はパソコンごとに、Webコンソールのパソコンのページにある［Sharing］のカードで設定します。チームに入っている間は、カードの［Your other computers］と［Public share］の隣に、3つ目のスイッチ［Team share］が表示されます。
 
 - **パソコンを共有できるのは所有者だけです。** チームのほかの人が代わりにオンにすることはできません。
-- **止めるとすぐに止まります。** ［Share with team］をオフにすると、そのパソコンでその時点に実行中のチームメイトのリクエストは打ち切られます。
-- **［Your other computers］と連動しています。** ［Share with team］をオンにすると［Your other computers］もオンになり、［Your other computers］をオフにするとチームとの共有もオフになります。自分のほかのパソコンに貸していないパソコンは、ほかの誰にも貸さないからです。
+- **止めるとすぐに止まります。** ［Team share］をオフにすると、そのパソコンでその時点に実行中のチームメイトのリクエストは打ち切られます。
+- **［Your other computers］と連動しています。** ［Team share］をオンにすると［Your other computers］もオンになり、［Your other computers］をオフにするとチームとの共有もオフになります。自分のほかのパソコンに貸していないパソコンは、ほかの誰にも貸さないからです。
 - **パソコン自身のスイッチが優先されます。** `waired share off`、またはWairedアプリの［Stop sharing this computer］は、ほかのすべての提供と一緒にチームへの提供も止めます。
 
 チームのオーナーと管理者は、共有されたパソコンをチームのプールから外せます。外すと新しいチームのリクエストは届かなくなり、そのパソコンでその時点に実行中のチームメイトのリクエストは打ち切られます。所有者自身がそのパソコンを使うことには影響せず、所有者のスイッチも所有者のものです。管理者がプールから外している間はカードにそのことが表示され、プールに戻るのは管理者と所有者の両方がオンにしているときだけです。
@@ -60,8 +60,8 @@ Wairedは、チームメイトのパソコンが処理したリクエストご�
 ```text
 Sharing this computer: on
 Your other computers: on
-Your team: on
-People outside your account: off
+Team share: on
+Public share: off
 Who this computer is shared with is set in the Waired console.
 ```
 

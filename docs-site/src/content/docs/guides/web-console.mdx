@@ -44,6 +44,52 @@ The computer's name, hardware, operating system, Waired version, address, and
 when it was last seen. **Rename** it here. The name is only for your benefit,
 and changing it breaks nothing.
 
+### Model
+
+Which model this computer runs, and **Change model** to switch it. The new
+model downloads in the background, the progress appears here, and the current
+model keeps answering until the new one is ready. On a computer that runs
+vLLM, the engine then restarts to load it, and the computer doesn't answer
+until it's ready. A computer that runs no
+model of its own does not have this section.
+
+### Sharing
+
+Who this computer is offered to, as three switches: **Your other computers**,
+**Team share** (while you are in a team) and **Public share**. Beside each
+switch a badge says what is happening: **Shared**, **Not shared**, or **Off on
+the computer** while the computer's own switch is off. The switches are
+linked: turning **Your other computers** off also turns Team share and Public
+share off, and turning either of those on turns **Your other computers** on.
+See [Team Share](/team-share/) and [Public Share](/public-share/).
+
+The card shows, but cannot change, the switch the computer keeps for itself.
+While that switch is off, a banner at the top of the card reads **Sharing is
+off on this computer**, and turning it back on happens on the computer, with
+**Share this computer** in the Waired app or `waired share on`. See
+[Share a computer with your other devices](/guides/sharing/).
+
+Under **Which requests**, two more switches, **Main conversation** and
+**Sub-agents**, decide which Claude Code and OpenCode requests this computer
+takes from everyone it is shared with. Its own Claude Code and OpenCode always
+work.
+
+### Capacity
+
+**Requests at once** is how many requests this computer answers at the same
+time, and **Public share limit** how many of those public users may take. The
+figure that applies is shown beside each field. **Routing priority** decides
+which of your computers is tried first, and **Keep model in memory** how long
+the model stays loaded after the last request. For what each one does, see
+[Share a computer with your other devices](/guides/sharing/#how-much-work-it-takes-at-once).
+
+<Aside type="note" title="Concurrency costs memory">
+	Raising **Requests at once** lets more work run at once, but each
+	simultaneous request reserves its own VRAM and makes every request slower.
+	The console shows a recommended maximum for this computer and asks you to
+	confirm before going above it.
+</Aside>
+
 ### Authentication
 
 When this computer's sign-in expires, and whether expiry applies to it. You
@@ -57,55 +103,12 @@ being removed, or delete it.
 	that is still running Waired stops working until it signs in again.
 </Aside>
 
-### Model
-
-Which model this computer runs, and **Change model** to switch it. The new
-model downloads in the background, the progress appears here, and the current
-model keeps answering until the new one is ready. On a computer that runs
-vLLM, the engine then restarts to load it, and the computer doesn't answer
-until it's ready. A computer that runs no
-model of its own does not have this section.
-
-### Inference routing
-
-Whether this computer's model is being used to answer requests from your
-other computers. When routing is off, the other computers stop sending work
-here, and the computer's own use is unaffected.
-
-### Claude Code and OpenCode serving
-
-Two switches, **Serve main conversation** and **Serve subagents**, plus
-**Max concurrent requests** and **Priority**. They decide what this computer
-accepts from Claude Code and OpenCode on your other computers. Its own Claude
-Code and OpenCode always work. For what
-each one does, see [Share a computer with your other devices](/guides/sharing/#how-much-work-it-takes-at-once).
-
-<Aside type="note" title="Concurrency costs memory">
-	Raising **Max concurrent requests** lets more work run at once, but each
-	simultaneous request reserves its own VRAM and makes every request slower.
-	The console shows a recommended maximum for this computer and asks you to
-	confirm before going above it.
-</Aside>
-
-### Sharing
-
-Who this computer is offered to, as two switches, and three while you are in
-a team. **Your other computers** and **People outside your account** are
-linked: turning the first off also turns public sharing off, and turning
-public sharing on turns the first on. The third, **Share with team**, lends
-the computer to your teammates and is linked to the first the same way. See
-[Team Share](/team-share/). The card also shows, but cannot change, the switch the computer
-keeps for itself. When that switch is off, the card says so, and turning it
-back on happens on the computer, with **Share this computer** in the Waired
-app or `waired share on`. See
-[Share a computer with your other devices](/guides/sharing/).
-
 ## Public share
 
 A summary across your whole account: which of your computers are shared with
-people outside your account, and what you have been using. Stopping sharing
-here cuts off work that other people are running on that computer right now.
-See [Public Share](/public-share/).
+public users, and what you have been using. Each computer links to its sharing
+settings, and **Stop sharing** here cuts off work public users are running on
+it right now. See [Public Share](/public-share/).
 
 ## Settings
 

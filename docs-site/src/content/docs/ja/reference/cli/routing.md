@@ -24,12 +24,12 @@ waired share status
 ```text
 Sharing this computer: on
 Your other computers: on
-Your team: off
-People outside your account: off
+Team share: off
+Public share: off
 Who this computer is shared with is set in the Waired console.
 ```
 
-最初の行はこのパソコン自身のスイッチです。保存した選択と実際の状態が違うときは、2行目で説明します。たとえば`Paused because the Waired app is not running. It resumes when the app starts.`です。次の3行はコンソールが決めた内容です。［Your other computers］は、サービスがコンソールから受け取るまで`not known yet`と表示されます。［Your team］は、このパソコンをチームと共有していなければ`off`です。[チーム共有](/ja/team-share/)を参照してください。ゲストの上限を設定していると、`Guest limit: N at once`の行が表示されます。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
+最初の行はこのパソコン自身のスイッチです。保存した選択と実際の状態が違うときは、2行目で説明します。たとえば`Paused because the Waired app is not running. It resumes when the app starts.`です。次の3行はコンソールが決めた内容です。［Your other computers］は、サービスがコンソールから受け取るまで`not known yet`と表示されます。［Your team］は、このパソコンをチームと共有していなければ`off`です。[チーム共有](/ja/team-share/)を参照してください。ゲストの上限を設定していると、`Public share limit: N at once`の行が表示されます。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
 
 ## <a id="waired-worker"></a>`waired worker`
 
@@ -113,7 +113,7 @@ waired public use --main on|off --sub on|off            # メインの会話と�
 
 初めて`use`を有効にするとき、ターミナルに一度だけプライバシーの警告が表示され、読んで受け入れる必要があります。
 
-`waired public status`は共有側から始まります。`Sharing this computer publicly: on|off`、次に`Guest limit: N at once`または`Guest limit: automatic`、そして公開共有のオンとオフはWebコンソールで切り替えるという注意です。このパソコン自身のスイッチがオフのときは、何も共有されていない理由の行が加わります。
+`waired public status`は共有側から始まります。`Sharing this computer publicly: on|off`、次に`Public share limit: N at once`または`Public share limit: automatic`、そして公開共有のオンとオフはWebコンソールで切り替えるという注意です。このパソコン自身のスイッチがオフのときは、何も共有されていない理由の行が加わります。
 
 ```text
 Sharing is off on this computer, so nothing is shared. Turn it back on with `waired share on`.

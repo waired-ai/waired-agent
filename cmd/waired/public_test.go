@@ -82,7 +82,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"Sharing this computer publicly: on",
-		"Guest limit: 3 at once",
+		"Public share limit: 3 at once",
 		"Use public computers: auto",
 		"Consented: yes",
 		"Smallest model accepted:",
@@ -303,7 +303,7 @@ func TestRunPublicStatus_GuestLimitUnset(t *testing.T) {
 		t.Fatalf("runPublicStatus: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Guest limit: automatic") {
+	if !strings.Contains(out, "Public share limit: automatic") {
 		t.Errorf("unset guest limit should read as automatic\n---\n%s", out)
 	}
 	// The flag that used to set it is gone with waired#1297; the line

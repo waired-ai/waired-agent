@@ -15,7 +15,7 @@ enable Public Share. Each section states what happens, and why.
 Public Share is off by default and strictly opt-in. When you turn it on, you
 can run inference on public computers, the spare computers other Waired users
 share, and other Waired users can run work on yours. The people using your
-computer are guests. You appear to each other only under an automatically
+computer are public users. You appear to each other only under an automatically
 assigned nickname. To use public computers, you must also share one of yours.
 See [Why you must share to use](#why-you-must-share-to-use).
 
@@ -92,34 +92,35 @@ whole account.
 ## Turning it on and off
 
 Public sharing is turned on and off in the web console. The computer's page
-has a **Sharing** card with a **People outside your account** switch, and the
+has a **Sharing** card with a **Public share** switch, and the
 **Public share** tab shows usage by nickname with a per-computer **Stop
 sharing**. There is no command or menu item for it. The CLI and the Waired
 app only report it. `waired public status` prints the state:
 
 ```text
 Sharing this computer publicly: on
-Guest limit: automatic
+Public share limit: automatic
 Public sharing is turned on and off in the Waired console.
 ```
 
 The computer itself keeps one switch of its own: whether it lends itself out
 at all. `waired share off`, or **Stop sharing this computer** in the Waired
-app, stops every kind of serving at once, public guests included, and the
+app, stops every kind of serving at once, public users included, and the
 console cannot turn it back on. See
 [Share a computer with your other devices](/guides/sharing/).
 
-- **Stopping is immediate.** Turning sharing off cuts off any guest requests
-  running at that moment and cancels every guest's access to that computer.
-  You can turn it back on at any time.
-- **Max guests** is how many guests may use the computer at once, set in the
-  console. Automatic, the default, keeps one slot free for you. You can
-  raise it up to the computer's full capacity. Whatever you set, your own
-  work takes priority when the computer is busy. A guest never blocks you
-  for long, and new guest work is paused while you are using it.
-- The two console switches are linked. Turning public sharing on also turns
-  on sharing with your own other computers, and turning **Your other
-  computers** off also turns public sharing off.
+- **Stopping is immediate.** Turning sharing off cuts off any public user's
+  request running at that moment and cancels every public user's access to
+  that computer. You can turn it back on at any time.
+- **Public share limit** is how many public users may use the computer at
+  once, set on the **Capacity** card of the computer's page. Automatic, the
+  default, keeps one for you and takes up to 2. You can raise it up to what
+  the computer takes at once. Whatever you set, your own work takes priority
+  when the computer is busy. A public user never blocks you for long, and new
+  public work is paused while you are using it.
+- The two console switches are linked. Turning Public share on also turns on
+  sharing with your own other computers, and turning **Your other
+  computers** off also turns Public share off.
 
 ## Choosing when public computers are used
 
@@ -144,7 +145,7 @@ Your own computers are always preferred over public computers.
 
 - The first request to a public computer takes a few extra seconds to
   connect.
-- Owners come first. A public computer can pause taking new guest work at
+- Owners come first. A public computer can pause taking new public work at
   any moment, without notice. Your request then falls back to other
   computers or retries.
 - If an owner stops sharing while your request is running, the request fails

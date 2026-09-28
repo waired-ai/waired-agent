@@ -695,7 +695,7 @@ type MenuModel struct {
 	// can still be lending itself to nobody. Both fields are empty when
 	// the daemon predates GET /waired/v1/sharing.
 	ShareToggleAction string // labelStopSharing | labelStartSharing | ""
-	ShareStateLabel   string // "Sharing: enabled" | "disabled" | "paused" | "nobody, set in the console" | ""
+	ShareStateLabel   string // "Sharing: on" | "off" | "paused" | "nobody, set in the console" | "" — On/Off, the console's words (waired#1512)
 
 	// MeshReachableLabel is a one-line, display-only indicator of whether
 	// any mesh peer is advertising a reachable inference engine
@@ -2960,7 +2960,7 @@ func applySharing(m *MenuModel, sh *management.ShareStateResponse) {
 		// made behind a word that says the opposite (waired#1305).
 		m.ShareToggleAction = labelStartSharing
 		if sh.DesiredState == string(state.SharingOff) {
-			m.ShareStateLabel = "Sharing: disabled"
+			m.ShareStateLabel = "Sharing: off"
 		} else {
 			m.ShareStateLabel = "Sharing: paused"
 		}
@@ -2974,11 +2974,11 @@ func applySharing(m *MenuModel, sh *management.ShareStateResponse) {
 			sh.TeamShare != string(state.SharingOn) {
 			m.ShareStateLabel = "Sharing: nobody, set in the console"
 		} else {
-			m.ShareStateLabel = "Sharing: enabled"
+			m.ShareStateLabel = "Sharing: on"
 		}
 	case sh.State == string(state.SharingOff):
 		m.ShareToggleAction = labelStartSharing
-		m.ShareStateLabel = "Sharing: disabled"
+		m.ShareStateLabel = "Sharing: off"
 	}
 }
 

@@ -36,6 +36,26 @@ Wairedアプリは目の前のパソコンを操作します。Webコンソー�
 
 パソコンの名前、ハードウェア、OS、Wairedのバージョン、アドレス、最後に報告があった時刻です。［Rename］で名前を変えられます。名前は自分のためのもので、変えても何も壊れません。
 
+### <a id="model"></a>Model
+
+このパソコンが動かしているモデルと、切り替えるための［Change model］です。新しいモデルはバックグラウンドでダウンロードされ、進捗がここに表示され、新しいモデルの準備ができるまで現在のモデルが答えます。vLLMのパソコンでは、そのあと推論エンジンが新しいモデルを読み込むために再起動し、準備ができるまで答えません。自分のモデルを動かしていないパソコンにはこの節はありません。
+
+### <a id="sharing"></a>Sharing
+
+このパソコンを誰に提供するかを、3つのスイッチで決めます。［Your other computers］、チームに入っている間の［Team share］、［Public share］です。各スイッチの隣のバッジは、いま起きていることを表します。［Shared］、［Not shared］、またはパソコン自身のスイッチがオフの間は［Off on the computer］です。スイッチは連動しています。［Your other computers］をオフにするとTeam shareとPublic shareもオフになり、そのどちらかをオンにすると［Your other computers］もオンになります。[チーム共有](/ja/team-share/)と[パブリック共有](/ja/public-share/)を参照してください。
+
+カードには、パソコン自身が持つスイッチの状態も表示されますが、ここからは変えられません。そのスイッチがオフの間は、カードの上部に［Sharing is off on this computer］と表示されます。オンに戻すのはパソコン側で行います。Wairedアプリの［Share this computer］か、`waired share on`です。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
+
+［Which requests］を開くと、［Main conversation］と［Sub-agents］の2つのスイッチがあります。共有しているすべての相手から、Claude CodeとOpenCodeのどの種類のリクエストをこのパソコンが受けるかを決めます。このパソコン自身のClaude CodeとOpenCodeは常に動きます。
+
+### <a id="capacity"></a>Capacity
+
+［Requests at once］は、このパソコンが同時に応答するリクエストの件数です。［Public share limit］は、そのうちパブリックユーザーに渡す件数です。いま適用されている値が、それぞれの欄の隣に表示されます。［Routing priority］は自分のパソコンのどれを先に試すか、［Keep model in memory］は最後のリクエストのあとにモデルをメモリに残しておく時間です。それぞれの動作は[自分の別のパソコンと共有する](/ja/guides/sharing/#how-much-work-it-takes-at-once)を参照してください。
+
+<Aside type="note" title="並行処理はメモリを使います">
+	［Requests at once］を上げると同時に多くの処理を実行できますが、同時のリクエストごとにVRAMを確保するため、すべてのリクエストが遅くなります。コンソールにはこのパソコンの推奨最大値が表示され、それを超える前に確認されます。
+</Aside>
+
 ### <a id="authentication"></a>Authentication
 
 このパソコンのサインインがいつ失効するか、失効の対象かどうかです。パソコンを一時的に無効化して、削除せずに使えない状態にすることや、削除することもできます。
@@ -44,29 +64,9 @@ Wairedアプリは目の前のパソコンを操作します。Webコンソー�
 	削除は、パソコンを外側からネットワークから外します。パソコンが手元にある場合は、代わりにそのパソコンで[Wairedをアンインストール](/ja/getting-started/uninstall/)してください。両側からきれいに外れます。削除されたパソコンでWairedが動いたままだと、サインインし直すまで動かなくなります。
 </Aside>
 
-### <a id="model"></a>Model
-
-このパソコンが動かしているモデルと、切り替えるための［Change model］です。新しいモデルはバックグラウンドでダウンロードされ、進捗がここに表示され、新しいモデルの準備ができるまで現在のモデルが答えます。vLLMのパソコンでは、そのあと推論エンジンが新しいモデルを読み込むために再起動し、準備ができるまで答えません。自分のモデルを動かしていないパソコンにはこの節はありません。
-
-### <a id="inference-routing"></a>Inference routing
-
-このパソコンのモデルが、自分のほかのパソコンからのリクエストに使われているかどうかです。ルーティングをオフにすると、ほかのパソコンはここへ処理を送らなくなり、このパソコン自身の利用には影響しません。
-
-### <a id="claude-code-serving"></a>Claude Code and OpenCode serving
-
-［Serve main conversation］と［Serve subagents］の2つのスイッチと、［Max concurrent requests］、［Priority］です。自分のほかのパソコンのClaude CodeとOpenCodeから何を受けるかを決めます。このパソコン自身のClaude CodeとOpenCodeは常に動きます。それぞれの動作は[自分の別のパソコンと共有する](/ja/guides/sharing/#how-much-work-it-takes-at-once)を参照してください。
-
-<Aside type="note" title="並行処理はメモリを使います">
-	［Max concurrent requests］を上げると同時に多くの処理を実行できますが、同時のリクエストごとにVRAMを確保するため、すべてのリクエストが遅くなります。コンソールにはこのパソコンの推奨最大値が表示され、それを超える前に確認されます。
-</Aside>
-
-### <a id="sharing"></a>Sharing
-
-このパソコンを誰に提供するかを、2つのスイッチで決めます。チームに入っている間は3つになります。［Your other computers］と［People outside your account］は連動しています。前者をオフにすると公開共有もオフになり、公開共有をオンにすると前者もオンになります。3つ目の［Share with team］は、このパソコンをチームメイトに貸すスイッチで、前者と同じように連動します。[チーム共有](/ja/team-share/)を参照してください。カードには、パソコン自身が持つスイッチの状態も表示されますが、ここからは変えられません。そのスイッチがオフのときはカードにそのことが表示され、オンに戻すのはパソコン側で行います。Wairedアプリの［Share this computer］か、`waired share on`です。[自分の別のパソコンと共有する](/ja/guides/sharing/)を参照してください。
-
 ## <a id="public-share"></a>Public share
 
-アカウント全体の要約です。自分のどのパソコンをアカウント外の人と共有しているか、自分が何を使ってきたかが表示されます。ここで共有を止めると、そのパソコンでほかの人が実行中の処理は打ち切られます。[パブリック共有](/ja/public-share/)を参照してください。
+アカウント全体の要約です。自分のどのパソコンをパブリックユーザーと共有しているか、自分が何を使ってきたかが表示されます。各パソコンから共有の設定に移動できます。ここで［Stop sharing］を押すと、そのパソコンでパブリックユーザーが実行中の処理は打ち切られます。[パブリック共有](/ja/public-share/)を参照してください。
 
 ## <a id="settings"></a>Settings
 

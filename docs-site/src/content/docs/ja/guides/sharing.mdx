@@ -31,8 +31,8 @@ import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/com
 		```text
 		Sharing this computer: on
 		Your other computers: on
-		Your team: off
-		People outside your account: off
+		Team share: off
+		Public share: off
 		Who this computer is shared with is set in the Waired console.
 		```
 	</TabItem>
@@ -44,12 +44,12 @@ import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/com
 
 スイッチがオンの間、誰に提供するかは[Webコンソール](/ja/guides/web-console/)で決めます。パソコンのページを開き、［Sharing］のカードを探します。スイッチが2つあり、チームに入っている間は3つになります。
 
-- **Your other computers。** 同じアカウントのほかのパソコンから、このパソコンへ処理を送れるようにします。オフにすると、このパソコンは目の前の人専用になり、公開共有も同時にオフになります。
-- **People outside your account。** 空き容量がある間、アカウント外のWairedユーザーがこのパソコンで処理を実行できるようにします。オンにしないかぎりオフです。先に[パブリック共有](/ja/public-share/)を読んでください。
+- **Your other computers。** 同じアカウントのほかのパソコンから、このパソコンへ処理を送れるようにします。オフにすると、このパソコンは目の前の人専用になり、Team shareとPublic shareも同時にオフになります。
+- **Public share。** 空きがある間、ほかのWairedユーザー（パブリックユーザー）がこのパソコンで処理を実行できるようにします。オンにしないかぎりオフです。先に[パブリック共有](/ja/public-share/)を読んでください。
 
-チームに入っている間は、カードに3つ目のスイッチ［Share with team］が表示され、このパソコンをチームメイトに貸せます。オンにしないかぎりオフです。先に[チーム共有](/ja/team-share/)を読んでください。
+チームに入っている間は、カードに3つ目のスイッチ［Team share］が表示され、このパソコンをチームメイトに貸せます。オンにしないかぎりオフです。先に[チーム共有](/ja/team-share/)を読んでください。
 
-スイッチは連動しています。［Your other computers］をオフにすると、公開共有もオフになります。自分のマシンにも貸していないパソコンを他人に貸すことはないからです。公開共有をオンにすると、［Your other computers］もオンになります。チームとの共有も同じように連動します。
+スイッチは連動しています。［Your other computers］をオフにすると、Public shareもオフになります。自分のマシンにも貸していないパソコンを他人に貸すことはないからです。Public shareをオンにすると、［Your other computers］もオンになります。Team shareも同じように連動します。
 
 ## <a id="how-much-work-it-takes-at-once"></a>同時に受ける処理の量
 
@@ -57,13 +57,13 @@ Webコンソールのパソコンのページでは、処理能力も設定し�
 
 | 設定 | 動作 |
 |---|---|
-| **Max concurrent requests** | このパソコンが同時に処理するリクエスト数です。大きいほど多くのパソコンを並行して処理できますが、並行スロットごとにKVキャッシュ用のVRAMを確保するため、1件あたりの応答は遅くなります。`0`は自動です。コンソールには、VRAMに収まる範囲のこのパソコンの推奨最大値が表示され、それを超える値にする前に確認されます。 |
-| **Serve main conversation**と**Serve subagents** | 自分のほかのパソコンからのClaude CodeとOpenCodeのリクエストのうち、どの種類をこのパソコンが受けるかです。このパソコン自身のClaude CodeとOpenCodeには影響しません。［Serve main conversation］をオフにすると、遅いパソコンをサブエージェントの作業専用にできます。 |
-| **Priority** | 複数のパソコンが答えられるとき、どれを先に選ぶかです。［High］が最初に選ばれ、［Low］は上位のパソコンが答えられない場合にだけ使われ、既定は［Middle］です。 |
-| **Max guests** | 公開共有で、同時に何人のゲストがこのパソコンを使えるかです。`0`は自動で、自分用に1スロットを確保します。このパソコンの処理能力の上限まで上げられます。 |
+| **Requests at once** | このパソコンが同時に応答するリクエストの件数です。増やすほど並行して処理できますが、1件ごとにKVキャッシュ用のVRAMを確保するため、1件あたりの応答は遅くなります。`0`は自動です。コンソールには、いま適用されている値が欄の隣に、VRAMに収まる推奨最大値が注記に表示され、それを超える値にする前に確認されます。 |
+| **Public share limit** | パブリックユーザーが同時に何件までこのパソコンを使えるかです。`0`は自動で、自分用に1件を残し、パブリックユーザーは最大2件です。このパソコンが同時に処理できる件数まで上げられます。 |
+| **Main conversation**と**Sub-agents**（［Sharing］のカードの［Which requests］） | 共有しているすべての相手からのClaude CodeとOpenCodeのリクエストのうち、どの種類をこのパソコンが受けるかです。このパソコン自身のClaude CodeとOpenCodeには影響しません。［Main conversation］をオフにすると、遅いパソコンをサブエージェントの作業専用にできます。 |
+| **Routing priority** | 複数のパソコンが答えられるとき、どれを先に選ぶかです。［High］が最初に選ばれ、［Low］は上位のパソコンが答えられない場合にだけ使われ、既定は［Middle］です。 |
 
 <Aside type="note" title="自分の作業が優先されます">
-	数値の設定にかかわらず、パソコンが混んでいるときは目の前の人の作業が優先されます。ゲストが長く邪魔することはなく、自分が使っている間はゲストの新しい処理は待たされます。
+	数値の設定にかかわらず、パソコンが混んでいるときは目の前の人の作業が優先されます。パブリックユーザーが長く邪魔することはなく、自分が使っている間はパブリックユーザーの新しい処理は待たされます。
 </Aside>
 
 ## <a id="what-quitting-the-app-does"></a>アプリを終了するとどうなるか

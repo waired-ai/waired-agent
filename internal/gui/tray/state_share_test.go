@@ -30,8 +30,8 @@ func TestUpdate_Sharing_On(t *testing.T) {
 	if got.ShareToggleAction != "Stop sharing this computer" {
 		t.Errorf("ShareToggleAction=%q, want Stop sharing this computer", got.ShareToggleAction)
 	}
-	if got.ShareStateLabel != "Sharing: enabled" {
-		t.Errorf("ShareStateLabel=%q, want Sharing: enabled", got.ShareStateLabel)
+	if got.ShareStateLabel != "Sharing: on" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: on", got.ShareStateLabel)
 	}
 }
 
@@ -44,8 +44,8 @@ func TestUpdate_Sharing_Off(t *testing.T) {
 	if got.ShareToggleAction != "Share this computer" {
 		t.Errorf("ShareToggleAction=%q, want Share this computer", got.ShareToggleAction)
 	}
-	if got.ShareStateLabel != "Sharing: disabled" {
-		t.Errorf("ShareStateLabel=%q, want Sharing: disabled", got.ShareStateLabel)
+	if got.ShareStateLabel != "Sharing: off" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: off", got.ShareStateLabel)
 	}
 }
 
@@ -77,8 +77,8 @@ func TestUpdate_Sharing_OutOfMeshButPublic(t *testing.T) {
 		MeshShare:   string(state.MeshShareOff),
 		PublicShare: string(state.SharingOn),
 	}))
-	if got.ShareStateLabel != "Sharing: enabled" {
-		t.Errorf("ShareStateLabel=%q, want Sharing: enabled", got.ShareStateLabel)
+	if got.ShareStateLabel != "Sharing: on" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: on", got.ShareStateLabel)
 	}
 }
 
@@ -91,8 +91,8 @@ func TestUpdate_Sharing_OutOfMeshButTeam(t *testing.T) {
 		PublicShare: string(state.SharingOff),
 		TeamShare:   string(state.SharingOn),
 	}))
-	if got.ShareStateLabel != "Sharing: enabled" {
-		t.Errorf("ShareStateLabel=%q, want Sharing: enabled", got.ShareStateLabel)
+	if got.ShareStateLabel != "Sharing: on" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: on", got.ShareStateLabel)
 	}
 }
 
@@ -140,8 +140,8 @@ func TestUpdate_SharingSuspendedOverASavedOff(t *testing.T) {
 		DesiredState: string(state.SharingOff),
 		Suspended:    true,
 	}))
-	if got.ShareStateLabel != "Sharing: disabled" {
-		t.Errorf("ShareStateLabel=%q, want Sharing: disabled — the saved choice is off, not paused",
+	if got.ShareStateLabel != "Sharing: off" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: off — the saved choice is off, not paused",
 			got.ShareStateLabel)
 	}
 	if got.ShareToggleAction != "Share this computer" {
