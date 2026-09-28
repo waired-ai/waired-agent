@@ -412,4 +412,4 @@ package runtime
 // there makes the check report "not read" rather than compare.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.34.0"
+const OllamaPinnedVersion = "0.34.4"
