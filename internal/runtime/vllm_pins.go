@@ -118,7 +118,7 @@ package runtime
 // not rebuild any venv.
 //
 // renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.29.0"
+const VLLMPinnedVersion = "0.30.0"
 
 // TransformersConstraint pins the transformers wheel to a version
 // compatible with VLLMPinnedVersion. vllm 0.28.0 requires
