@@ -43,3 +43,6 @@ __pycache__/
 # Snapshots and console logs the Playwright MCP browser writes into the
 # directory it was started from
 .playwright-mcp/
+
+# Local source documents retrieved by the doc-writer skill
+/.cache/doc-writer/
