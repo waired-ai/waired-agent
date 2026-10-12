@@ -71,7 +71,7 @@ checks" then covers seven of eight. And the license check below fetches
 `make verify-cross` runs `go vet` for the Windows and macOS targets,
 because CI's test jobs run on Linux only. When you change OS-specific
 behaviour (paths, services, registry, installers), keep all three OSes in
-sync — see CLAUDE.md §"Cross-OS parity".
+sync — see AGENTS.md §"Cross-OS parity".
 
 CI also runs a license check
 (`go-licenses check --disallowed_types=forbidden,restricted`; a new
