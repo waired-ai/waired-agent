@@ -100,11 +100,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      # Pin an older Node than the runner default. firebase-tools authenticates
-      # the WIF (external_account) credential via a node-fetch STS POST to
-      # sts.googleapis.com that fails with a false "Premature close" on recent
-      # Node (22.23.x); the regression is absent on this LTS pin
-      # (nodejs/node#63989). 22.12 is also the floor Astro 7 needs.
+      # Use the current stable Node release. The preview deploy checks WIF
+      # authentication as well as the build; the former 22.12 pin worked
+      # around nodejs/node#63989 in 22.23.x.
       - uses: actions/setup-node@v7.1.0
         with:
           node-version: 26.11.1

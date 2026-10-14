@@ -260,7 +260,7 @@ foreach ($def in $definitions) {
         Set-Content -LiteralPath (Join-Path $dir 'versioninfo.json') -Value ($vi | ConvertTo-Json -Depth 6) -Encoding UTF8
         Push-Location $dir
         try {
-            & go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 -64 -o resource_windows_amd64.syso versioninfo.json 2>&1 | Out-Null
+            & go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -64 -o resource_windows_amd64.syso versioninfo.json 2>&1 | Out-Null
         } finally { Pop-Location }
         if (-not (Test-Path -LiteralPath (Join-Path $dir 'resource_windows_amd64.syso'))) {
             Write-Note "  ${axis}: could not generate the version resource; SKIPPING this axis rather than reporting a baseline under its name"
