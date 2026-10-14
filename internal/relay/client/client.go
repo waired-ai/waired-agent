@@ -188,7 +188,7 @@ func (c *Client) Run(ctx context.Context) error {
 	cancel()
 	<-writerErr
 	c.cfg.Logger.Debug("relay session closed", "url", c.cfg.URL, "err", readerErr)
-	if readerErr != nil && !errors.Is(readerErr, context.Canceled) {
+	if !errors.Is(readerErr, context.Canceled) {
 		return readerErr
 	}
 	return nil

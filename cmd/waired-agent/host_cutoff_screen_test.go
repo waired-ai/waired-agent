@@ -234,7 +234,7 @@ func TestScreenHostCutoff_TheReferenceAnchorDoesNotFire(t *testing.T) {
 	}
 	// The screen costs exactly what the calibration always cost — one
 	// request — on every host that clears it.
-	if got, want := len(eng.generateBodies()), benchSampleCount+1; got != want {
+	if got, want := len(eng.ownGenerateBodies()), benchSampleCount+1; got != want {
 		t.Fatalf("/api/generate requests = %d, want %d (one screen, then %d samples): "+
 			"a host that clears the screen must not pay for the confirming reading",
 			got, want, benchSampleCount)
@@ -264,7 +264,7 @@ func TestScreenHostCutoff_AHostFarBelowFiresWithoutTheFullDepth(t *testing.T) {
 	if v.Method != signer.BenchmarkMethodOllamaPrefillFloor {
 		t.Fatalf("method = %q, want %q", v.Method, signer.BenchmarkMethodOllamaPrefillFloor)
 	}
-	if got := len(eng.generateBodies()); got != 2 {
+	if got := len(eng.ownGenerateBodies()); got != 2 {
 		t.Fatalf("/api/generate requests = %d, want 2 (the two screen readings): "+
 			"the point of the screen is that the full-depth sample never runs", got)
 	}
@@ -332,7 +332,7 @@ func TestScreenHostCutoff_OneReadingNeverFires(t *testing.T) {
 		t.Fatalf("method = %q, want %q: one slow reading turned into a verdict",
 			v.Method, signer.BenchmarkMethodOllamaEval)
 	}
-	if got, want := len(eng.generateBodies()), benchSampleCount+2; got != want {
+	if got, want := len(eng.ownGenerateBodies()), benchSampleCount+2; got != want {
 		t.Fatalf("/api/generate requests = %d, want %d (two screen readings, then %d samples)",
 			got, want, benchSampleCount)
 	}
@@ -361,7 +361,7 @@ func TestScreenHostCutoff_ATruncatedReadingNeverFires(t *testing.T) {
 	if v.Method == signer.BenchmarkMethodOllamaPrefillFloor {
 		t.Fatalf("a 400-token reading produced a bound: %+v", v)
 	}
-	if got, want := len(eng.generateBodies()), benchSampleCount+1; got != want {
+	if got, want := len(eng.ownGenerateBodies()), benchSampleCount+1; got != want {
 		t.Fatalf("/api/generate requests = %d, want %d — the confirming reading was spent on "+
 			"a reading that could never be concluded from", got, want)
 	}
@@ -551,7 +551,7 @@ func TestScreenHostCutoff_TheFirstReadingCarriesTheModel(t *testing.T) {
 	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no verdict")
 	}
-	bodies := eng.generateBodies()
+	bodies := eng.ownGenerateBodies()
 	if len(bodies) != 2 {
 		t.Fatalf("/api/generate requests = %d, want 2", len(bodies))
 	}
@@ -592,7 +592,7 @@ func TestApplyHostCutoff_AScreenVerdictTurnsLocalInferenceOff(t *testing.T) {
 	if !p.hostSpeedTurnedInferenceOff() {
 		t.Fatal("the bound is not recorded as the reason local inference is off")
 	}
-	if got := len(eng.generateBodies()); got != 2 {
+	if got := len(eng.ownGenerateBodies()); got != 2 {
 		t.Fatalf("/api/generate requests = %d, want 2: the verdict cost two shallow readings, "+
 			"which is the whole of waired-agent#579 Stage 3", got)
 	}
@@ -629,7 +629,7 @@ func TestHostSpeed_AScreenVerdictSurvivesARestart(t *testing.T) {
 	if p.applyHostCutoff(context.Background()) {
 		t.Fatal("the download proceeded on a host below the budget")
 	}
-	requests := len(eng.generateBodies())
+	requests := len(eng.ownGenerateBodies())
 
 	next := &agentInferenceProvider{
 		ollama:       p.ollama,
@@ -653,7 +653,7 @@ func TestHostSpeed_AScreenVerdictSurvivesARestart(t *testing.T) {
 	if !next.hostSpeedTurnedInferenceOff() {
 		t.Fatal("the restarted daemon no longer knows the bound is why inference is off")
 	}
-	if now := len(eng.generateBodies()); now != requests {
+	if now := len(eng.ownGenerateBodies()); now != requests {
 		t.Fatalf("the restart re-screened (%d → %d requests): a stored bound is not Measured(), "+
 			"and hostSpeedStillApplies has to know that is not the same as \"no measurement\"",
 			requests, now)

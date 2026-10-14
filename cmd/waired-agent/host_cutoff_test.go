@@ -156,7 +156,9 @@ func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		block := e.block
 		answer := map[string]any(nil)
 		if n := len(e.answers); n > 0 {
-			answer = e.answers[min(len(e.bodies)-1, n-1)]
+			// Only stamped requests advance the measurement script.
+			// Foreign traffic remains in bodies for diagnosis.
+			answer = e.answers[min(max(len(e.own)-1, 0), n-1)]
 		}
 		e.mu.Unlock()
 		if block != nil {
@@ -188,6 +190,57 @@ func (e *hostCutoffEngine) ownGenerateBodies() []map[string]any {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]map[string]any(nil), e.own...)
+}
+
+// A request from another fixture can reach this listener when its port is
+// reused. It must neither consume a scripted measurement response nor
+// appear in the subject's request count (waired-agent#1562).
+func TestHostCutoffEngine_ForeignRequestsDoNotConsumeAnswers(t *testing.T) {
+	eng := &hostCutoffEngine{
+		stamp: newFixtureStamp(t),
+		answers: []map[string]any{
+			{"eval_count": 1},
+			{"eval_count": 2},
+		},
+	}
+	for _, tc := range []struct {
+		stamp string
+		want  int
+	}{
+		{"", 0},
+		{eng.stamp, 1},
+		{"another-fixture", 0},
+		{eng.stamp, 2},
+		{eng.stamp, 2}, // the last answer repeats
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/generate", bytes.NewBufferString(`{"prompt":"probe"}`))
+		req.Header.Set(fixtureStampHeader, tc.stamp)
+		w := httptest.NewRecorder()
+		eng.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("generate status = %d, want 200", w.Code)
+		}
+		if tc.want != 0 {
+			var got struct {
+				EvalCount int `json:"eval_count"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.EvalCount != tc.want {
+				t.Fatalf("subject response = %d, want %d: foreign traffic consumed an answer", got.EvalCount, tc.want)
+			}
+		}
+	}
+	if got := len(eng.ownGenerateBodies()); got != 3 {
+		t.Fatalf("subject requests = %d, want 3", got)
+	}
+	if got := len(eng.generateBodies()); got != 5 {
+		t.Fatalf("all requests = %d, want 5: retain foreign traffic for diagnosis", got)
+	}
+	if report := eng.foreign.report(); !strings.Contains(report, "2 unstamped request") {
+		t.Fatalf("foreign traffic report = %q, want both foreign requests", report)
+	}
 }
 
 // hostCutoffManifests is a catalog carrying the probe model under an

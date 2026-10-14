@@ -33,6 +33,8 @@ on:
 # in trusted base-repo context, so this token has write access we declare here).
 permissions:
   contents: read
+  checks: read
+  statuses: read
   pull-requests: write
 
 # One review per PR; a newer ci-completion supersedes an in-flight review.
