@@ -80,7 +80,7 @@ defaults:
 jobs:
   deploy:
     name: build + deploy (docs-site)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     # LIVE (push:main) runs in the `production` Environment so its vars
     # (prod WIF provider / SA / FIREBASE_PROJECT_ID=prod-waired) shadow the
@@ -90,7 +90,7 @@ jobs:
     environment: ${{ github.event_name == 'push' && 'production' || '' }}
     # Astro 7 requires Node >= 22.12.
     container:
-      image: node:22-trixie
+      image: node:26.11.1-trixie
     env:
       HUSKY: "0"
       # Deploy only once Firebase is provisioned (var set) AND, for PRs, only
@@ -98,16 +98,16 @@ jobs:
       # below always runs regardless.
       DEPLOY_ENABLED: ${{ vars.FIREBASE_PROJECT_ID != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # Pin an older Node than the runner default. firebase-tools authenticates
       # the WIF (external_account) credential via a node-fetch STS POST to
       # sts.googleapis.com that fails with a false "Premature close" on recent
       # Node (22.23.x); the regression is absent on this LTS pin
       # (nodejs/node#63989). 22.12 is also the floor Astro 7 needs.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22.12.0
+          node-version: 26.11.1
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
 
@@ -226,7 +226,7 @@ jobs:
 
       - name: Comment preview URL on PR
         if: env.DEPLOY_ENABLED == 'true' && github.event_name == 'pull_request' && steps.preview.outputs.url != ''
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9.0.0
         env:
           PREVIEW_URL: ${{ steps.preview.outputs.url }}
         with:

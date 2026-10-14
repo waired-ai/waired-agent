@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    # GitHub supports this hosted label; actionlint 1.7.12 does not list it yet.
+    # https://github.com/actions/runner-images#available-images
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
+    - build

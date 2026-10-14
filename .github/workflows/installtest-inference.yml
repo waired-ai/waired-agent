@@ -32,7 +32,7 @@
 # Runners: the three install/inference legs run on GH-hosted disposable VMs,
 # the same images the per-PR installtest.yml already uses for all three OSes.
 # On a PUBLIC repository the standard runners are free and unlimited, and
-# carry ubuntu-24.04 4 vCPU / 16 GB, windows-latest 4 vCPU / 16 GB, macos-14
+# carry ubuntu-26.04 4 vCPU / 16 GB, windows-latest 4 vCPU / 16 GB, macos-26
 # 3 vCPU (M1) / 7 GB —
 # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 #
@@ -128,7 +128,7 @@ jobs:
   # dry-run from claiming Windows / macOS runners it will not use.
   legs:
     name: select legs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.pick.outputs.matrix }}
@@ -151,12 +151,12 @@ jobs:
           # Same images as installtest.yml's three legs, deliberately: these
           # are the SAME harness scripts, so a per-PR green there is only
           # evidence for here if the image matches. windows-latest runs the
-          # job elevated (install.ps1's real SCM path); macos-14 is the
+          # job elevated (install.ps1's real SCM path); macos-26 is the
           # pinned Apple-Silicon image with passwordless sudo for the
           # LaunchDaemon install.
-          linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":35}'
+          linux='{"os":"linux","runs-on":"ubuntu-26.04","timeout":35}'
           windows='{"os":"windows","runs-on":"windows-latest","timeout":45}'
-          macos='{"os":"macos","runs-on":"macos-14","timeout":45}'
+          macos='{"os":"macos","runs-on":"macos-26","timeout":45}'
           # os_legs is what actually turns the OS legs off; the matrix stays
           # valid in every case (see the os_legs output comment above). This is
           # how a dispatch runs ONLY a non-matrix job -- the banner render
@@ -188,9 +188,9 @@ jobs:
       IT_ENROLL_MODE: authkey
       IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -200,7 +200,7 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       # gcloud uses the WIF credential to mint the SA id_token in the harness.
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       # Linux: in-place install (systemd is PID 1 on the disposable runner) +
       # --inference → `waired init --inference-enabled=true` installs the
@@ -270,7 +270,7 @@ jobs:
 
       - name: upload engine diagnostics
         if: (failure() || cancelled())
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: engine-diag-install-inference-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
@@ -317,9 +317,9 @@ jobs:
       IT_ENROLL_MODE: authkey
       IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -329,7 +329,7 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       # gcloud uses the WIF credential to mint the SA id_token in the harness.
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       # Linux: in-place install (systemd is PID 1 on the disposable runner),
       # engine ABSENT (--skip-ollama), then daemon-path init → executor install.
@@ -401,7 +401,7 @@ jobs:
           ls -la diag || true
       - name: upload daemon-path diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: daemon-engine-diag-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
@@ -450,9 +450,9 @@ jobs:
       IT_ENROLL_MODE: authkey
       IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -462,7 +462,7 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       # gcloud uses the WIF credential to mint the SA id_token in the harness.
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       - name: engine installed, no model chosen (linux, tier 2)
         if: matrix.os == 'linux'
@@ -519,7 +519,7 @@ jobs:
           ls -la diag || true
       - name: upload engine-only diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: engine-only-diag-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
@@ -559,9 +559,9 @@ jobs:
       # primary).
       ANTHROPIC_AUTH_TOKEN: waired-routing-sentinel-dummy-not-a-real-key
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -571,7 +571,7 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       # gcloud uses the WIF credential to mint the SA id_token in the harness.
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       # Linux-only belt-and-braces egress blackhole. It used to be Linux-only
       # because the Windows/macOS pools were reused slots; now that all three
@@ -626,7 +626,7 @@ jobs:
 
       - name: upload engine diagnostics
         if: (failure() || cancelled())
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: engine-diag-routing-${{ matrix.os }}-${{ github.run_attempt }}
           path: diag/
@@ -660,7 +660,7 @@ jobs:
     runs-on: [self-hosted, windows, x64, build]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: banner render check (real console + cp932)
         shell: pwsh
@@ -719,9 +719,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -749,7 +749,7 @@ jobs:
           ls -la diag || true
       - name: upload install diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: sac-audit-diag-${{ github.run_attempt }}
           path: diag/
@@ -758,7 +758,7 @@ jobs:
 
       - name: upload the signing surface
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           # run_attempt like every other artifact here: without it a re-run of
           # this run collides with the first attempt's upload and fails.
@@ -793,11 +793,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # The unsigned control is compiled during the run, so this lane needs a
       # toolchain for a reason sac-audit does not have.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -820,7 +820,7 @@ jobs:
 
       - name: upload install diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: sac-isg-diag-${{ github.run_attempt }}
           path: diag/
@@ -829,7 +829,7 @@ jobs:
 
       - name: upload the reputation verdict
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: sac-isg-verdict-${{ github.run_attempt }}
           path: ${{ runner.temp }}/sac-isg-verdict.txt
@@ -875,19 +875,19 @@ jobs:
     if: >-
       ${{ (github.event_name == 'schedule' && vars.GPU_RUNNER_ENABLED == 'true')
        || (github.event_name == 'workflow_dispatch' && (github.event.inputs.gpu || 'off') != 'off') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # The lane itself is capped at 90 minutes by gpu-lane-watch.sh; this is the
     # outer bound including create and teardown.
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       # `quick` is the smoke alone. Everything else runs every target, because
       # most of them had no caller at all: e2e-vllm-clamp, -fp8 and -spec
@@ -958,7 +958,7 @@ jobs:
       # two red steps for one fault, with the misleading one last.
       - name: upload logs
         if: always() && steps.watch.outcome != 'skipped'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: vllm-gpu-${{ github.run_attempt }}
           path: |
@@ -996,7 +996,7 @@ jobs:
     if: >-
       ${{ github.event_name == 'workflow_dispatch'
        && github.event.inputs.agentgrade_model != '' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     env:
       # The hardware this lane measures on, in catalog.HostClasses'
@@ -1004,14 +1004,14 @@ jobs:
       # rather than typed into the import command the summary prints.
       GPU_LANE_HOST_CLASS: nvidia-24gb-discrete
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       - name: create the L4 VM
         id: up
@@ -1083,7 +1083,7 @@ jobs:
 
       - name: upload report
         if: always() && steps.watch.outcome != 'skipped'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: agentgrade-${{ github.run_attempt }}
           path: |
@@ -1153,13 +1153,13 @@ jobs:
       always() && github.event_name == 'schedule'
       && (contains(needs.*.result, 'failure')
           || (vars.GPU_RUNNER_ENABLED == 'true' && needs.vllm-install.result == 'skipped'))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: file an issue naming the red lanes
         env:

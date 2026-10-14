@@ -65,12 +65,12 @@ defaults:
 jobs:
   radar:
     name: model-catalog radar
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     container:
-      image: golang:1.26-trixie
+      image: golang:1.27.2-trixie
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0 # full history so per-model branches push cleanly
 
@@ -90,7 +90,7 @@ jobs:
 
       - name: Install toolchain (jq, gh, node, claude CLI)
         env:
-          GH_VERSION: "2.65.0"
+          GH_VERSION: "2.102.0"
         run: |
           set -euo pipefail
           apt-get update
@@ -151,7 +151,7 @@ jobs:
       # runs unattended once a week (waired-agent#1158).
       - name: Upload artifacts (dry-run preview, or whatever a red run rendered)
         if: ${{ env.DRY_RUN == 'true' || failure() || cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           # run_attempt, not run_id: a re-run of the same run would otherwise
           # collide with the first attempt's upload.

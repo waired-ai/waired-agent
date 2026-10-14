@@ -37,10 +37,10 @@ jobs:
   require-green:
     name: require green testnet for main HEAD
     if: github.repository == 'waired-ai/waired-agent'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 100
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: testnet-require-green-remote (check-or-dispatch)
         env:

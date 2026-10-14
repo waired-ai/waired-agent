@@ -1,6 +1,6 @@
 module github.com/waired-ai/waired-agent
 
-go 1.26.8
+go 1.27.2
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
