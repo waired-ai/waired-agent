@@ -51,14 +51,13 @@ type ResidencyController interface {
 // surfaces can report what actually happened instead of asserting the
 // change is live in every case (waired-agent#908).
 //
-// The distinction is not cosmetic. The engine reads OLLAMA_KEEP_ALIVE
-// once, at spawn, and the serving path cannot carry a per-request
-// keep_alive: waired serves over ollama's OpenAI-compatible
-// /v1/chat/completions, which accepts the field and silently discards it
-// (measured against a live engine — the model came back holding the
-// spawn value, not the one sent). So a change made while nothing is
-// resident does NOT govern the next model a request loads unless
-// something re-spawns the engine.
+// The engine reads OLLAMA_KEEP_ALIVE at spawn. Waired's serving path
+// does not send a per-request keep_alive, so a change made while nothing
+// is resident needs a re-spawn to govern the next request-driven load.
+// Ollama 0.40.4 accepts that field on its OpenAI-compatible endpoint;
+// the earlier live-engine observation that it discarded it no longer
+// describes the pinned version. Waired's current application paths are
+// still native API restamping and process-environment updates.
 type ResidencyEffect string
 
 const (

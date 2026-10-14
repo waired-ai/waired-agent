@@ -327,12 +327,13 @@ const engineHoldsModelForLife = "the inference engine on this computer holds the
 // ApplyResidency changes the residency setting on the running engine
 // (#861), and reports HOW it got there (#908).
 //
-// The engine reads OLLAMA_KEEP_ALIVE once, at spawn, and there is no
-// second route: waired serves over ollama's OpenAI-compatible
-// /v1/chat/completions, which accepts a keep_alive field and silently
-// discards it (measured against a live engine — the model came back
-// holding the spawn value). So the value that governs a model loaded by
-// a REQUEST is whatever the process was spawned with, full stop.
+// The engine reads OLLAMA_KEEP_ALIVE at spawn. Waired's serving path
+// does not send a per-request keep_alive, so request-driven loads use
+// that process default. Ollama 0.40.4 does accept keep_alive on its
+// OpenAI-compatible endpoint: a direct request with 37m returned an
+// expires_at 37 minutes ahead. The earlier observation that the field
+// was discarded does not describe this version. Waired still applies
+// this setting through the native API or a new process environment.
 //
 // That leaves two cases, and they want opposite treatment:
 //
