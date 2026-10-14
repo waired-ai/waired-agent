@@ -2074,9 +2074,10 @@ type agentInferenceProvider struct {
 	// is not part of the serve TUNING: model residency
 	// (OLLAMA_KEEP_ALIVE, waired-agent#908). Without it a residency
 	// change reaches the running process by no route at all — the engine
-	// reads that variable once at spawn, and the serving path cannot
-	// carry a per-request keep_alive because waired serves over ollama's
-	// OpenAI-compatible endpoint, which discards the field.
+	// reads that variable at spawn, and waired's serving path does not
+	// send a per-request keep_alive. Ollama 0.40.4 accepts that field,
+	// but waired currently applies residency through the native API or
+	// an updated process environment.
 	engineRespawnPending atomic.Bool
 	// askReconcileFn is the seam the respawn path asks through. nil means
 	// requestEngineReconcile. It exists because the behaviour under test
