@@ -146,6 +146,16 @@
       "prBodyNotes": [
         ":warning: **uv version bump**: `UVPinnedSHA256Linux64` (x86_64) and `UVPinnedSHA256LinuxARM64` (aarch64) in `internal/runtime/uv.go` must match the new tarballs. `scripts/dev/update-uv-sha.sh` recomputes both and checks each against the release's `.sha256` sidecar, via postUpgradeTasks when self-hosted Renovate has `allowedPostUpgradeCommands` enabled; otherwise run it by hand on this branch before merge. Then run `go test -tags integration -run TestPinnedUVReleaseResolvesForEveryArch ./internal/runtime/` (or `make integration-runtime`): it resolves both real tarballs through the installer's own resolver and checks each binary is built for its machine."
       ]
+    },
+    {
+      "description": "Renovate 44 currently requires Node ^24.11.0 (https://registry.npmjs.org/renovate/latest); keep only its own runner on the newest compatible Node 24 patch.",
+      "matchDepNames": [
+        "node"
+      ],
+      "matchFileNames": [
+        ".github/workflows/renovate.yml"
+      ],
+      "allowedVersions": "/^24\\./"
     }
   ],
   "customManagers": [
