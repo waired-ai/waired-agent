@@ -78,6 +78,10 @@ CI also runs a license check
 dependency with a copyleft license fails the lint job) and a gitleaks
 secret scan (config: `.gitleaks.toml`).
 
+### Updating the gVisor dependency
+
+The gVisor module uses upstream's [generated `go` branch](https://github.com/google/gvisor/tree/go), which contains only Go sources compatible with the standard toolchain. Check its current revision with `go list -m gvisor.dev/gvisor@go`, then update with `go get gvisor.dev/gvisor@go` and run the checks above. The default branch contains Bazel inputs; selecting it with `@latest` can produce mixed-package errors during normal Go builds.
+
 ### vLLM changes need a GPU run
 
 If you change vLLM serving — the installer (`internal/runtime/vllm_*`),
