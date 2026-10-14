@@ -145,7 +145,7 @@ jobs:
         # proto module carries no license file of its own.
         run: |
           set -euo pipefail
-          go run github.com/google/go-licenses@v1.6.0 check ./... \
+          go run github.com/google/go-licenses/v2@v2.0.1 check ./... \
             --disallowed_types=forbidden,restricted \
             --ignore github.com/waired-ai/waired-agent \
             --ignore github.com/waired-ai/waired-agent/proto

@@ -15,7 +15,7 @@
 # needs sh + curl to read metadata. Image size is acceptably small
 # (~15MB) for a test image.
 
-FROM golang:1.26-trixie AS build
+FROM golang:1.27.2-trixie AS build
 # GO_BUILD_TAGS, when set to "testharness", compiles the
 # internal/testharness dispatcher + iptables ops into waired-agent for
 # use by the testnet fallback gate (see scripts/dev/testnet-fallback-

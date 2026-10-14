@@ -18,7 +18,7 @@
 set -euo pipefail
 
 OUT="${1:-dist/THIRD_PARTY_LICENSES}"
-GO_LICENSES_VERSION="v1.6.0"
+GO_LICENSES_VERSION="v2.0.1"
 MODULE="$(go list -m)"
 
 mkdir -p "$(dirname "${OUT}")"
@@ -29,7 +29,7 @@ trap 'rm -rf "${tmp}"' EXIT
 # --ignore excludes our own modules (root + nested proto): they are
 # first-party, covered by the repo LICENSE, and the local `replace`d
 # proto module has no license file of its own.
-go run "github.com/google/go-licenses@${GO_LICENSES_VERSION}" save ./... \
+go run "github.com/google/go-licenses/v2@${GO_LICENSES_VERSION}" save ./... \
   --save_path="${tmp}/licenses" \
   --ignore "${MODULE}" \
   --ignore "${MODULE}/proto"
