@@ -89,6 +89,10 @@ func runTests(m *testing.M) int {
 		filepath.Join(home, "claude-code", "managed-settings.json"))
 	defer restorePath()
 
+	// Upgrade fixtures fake the installer, so the host disk must not decide
+	// whether those fixtures reach it. Tests for refusal set their own fact.
+	vllmUpgradeFreeDiskBytes = func(string) (int64, error) { return 500 << 30, nil }
+
 	mgmtWriteBase = ""
 	off := false
 	foldCached = &off

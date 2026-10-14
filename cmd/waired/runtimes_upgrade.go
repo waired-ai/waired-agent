@@ -86,6 +86,10 @@ func runRuntimesUpgradeBody(engine, stateDir string, quiet bool) error {
 	return nil
 }
 
+// The test binary supplies its own disk-space fact; the production collector
+// is covered by internal/hardware disk-space tests.
+var vllmUpgradeFreeDiskBytes = hardware.FreeDiskBytes
+
 // runVLLMUpgrade is the vllm arm of `waired runtimes upgrade` (#843).
 //
 // It answers the same question as the ollama arm — "make the engine here
@@ -110,7 +114,7 @@ func runVLLMUpgrade(stateDir string, quiet bool) error {
 		},
 		Pins: inst.ActivePins,
 		FreeBytes: func() int64 {
-			free, err := hardware.FreeDiskBytes(baseDir)
+			free, err := vllmUpgradeFreeDiskBytes(baseDir)
 			if err != nil {
 				return 0
 			}
