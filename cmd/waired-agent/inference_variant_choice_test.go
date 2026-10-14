@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -70,7 +71,11 @@ func waitForState(t *testing.T, p *agentInferenceProvider, what string, cond fun
 // the row and Active onto it together, keeping the replaced build on disk
 // as a stored build the user can remove.
 func TestSwapPreferredBuild_StagesAnotherBuildThenSwapsOntoIt(t *testing.T) {
-	p, r, sp := variantChoiceProvider(t)
+	p, _, sp := variantChoiceProvider(t)
+	// Keep the download in flight while checking the staged row. An
+	// immediate runner can complete the swap before dispatch returns.
+	r := newBlockingRunner(t)
+	p.puller = download.NewPuller("ollama-fake", r)
 	spawnsBefore := sp.count()
 
 	downloading, err := p.SwapPreferredBuild(context.Background(), "heavy", "mtp-q4", "")
@@ -88,8 +93,9 @@ func TestSwapPreferredBuild_StagesAnotherBuildThenSwapsOntoIt(t *testing.T) {
 		t.Errorf("staged = %+v ok=%v, want the chosen build staged", sv, ok)
 	}
 
+	r.releaseAll()
 	p.waitForPulls()
-	if got := r.tagsSeen(); !slices.Contains(got, "heavy:8b-mtp") {
+	if got := r.pulledTags(); !slices.Contains(got, "heavy:8b-mtp") {
 		t.Errorf("pulled tags = %v, want heavy:8b-mtp", got)
 	}
 	st = waitForState(t, p, "the swap onto mtp-q4", func(st catalog.State) bool {

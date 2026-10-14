@@ -166,3 +166,51 @@ func TestRuntimesUninstall_VLLMRefusesWhileTheEngineRuns(t *testing.T) {
 		})
 	}
 }
+
+// The disk-space fact is independent of the machine running the fixture.
+// Record today's CLI wiring: an unreadable disk is unknown, and a known
+// shortage refuses the rebuild before the installer or lock is reached.
+func TestRuntimesUpgrade_VLLMDiskSpaceFact(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		free        int64
+		err         error
+		wantInstall bool
+	}{
+		{"enough", 500 << 30, nil, true},
+		{"shortage", 1 << 30, nil, false},
+		{"unknown", 0, nil, true},
+		{"read failed", 1 << 30, errors.New("disk stats unavailable"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousFree, previousInstall, previousLock := vllmUpgradeFreeDiskBytes, vllmInstall, vllmLock
+			t.Cleanup(func() {
+				vllmUpgradeFreeDiskBytes, vllmInstall, vllmLock = previousFree, previousInstall, previousLock
+			})
+			dir := t.TempDir()
+			seedActiveVLLMVenv(t, dir, "0.20.0")
+			var sawDisk, installed, locked bool
+			vllmUpgradeFreeDiskBytes = func(got string) (int64, error) {
+				sawDisk = true
+				if want := filepath.Join(dir, "runtimes", "vllm"); got != want {
+					t.Errorf("disk path = %q, want %q", got, want)
+				}
+				return tc.free, tc.err
+			}
+			vllmInstall = func(context.Context, string, func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
+				installed = true
+				return infruntime.InstallResult{}, nil
+			}
+			vllmLock = func(context.Context, string, func()) (func(), error) {
+				locked = true
+				return func() {}, nil
+			}
+			if err := runVLLMUpgrade(dir, true); err != nil {
+				t.Fatal(err)
+			}
+			if !sawDisk || installed != tc.wantInstall || locked != tc.wantInstall {
+				t.Fatalf("disk read=%v install=%v lock=%v, want disk read and install/lock=%v", sawDisk, installed, locked, tc.wantInstall)
+			}
+		})
+	}
+}

@@ -60,7 +60,7 @@ jobs:
       matrix:
         include:
           - os: linux
-            runs-on: ubuntu-24.04
+            runs-on: ubuntu-26.04
             timeout: 20
           - os: windows
             # GH-hosted disposable VM — the job runs ELEVATED, so
@@ -71,16 +71,16 @@ jobs:
           - os: macos
             # GH-hosted Apple-Silicon disposable VM (pinned like the
             # ubuntu leg); passwordless sudo for the LaunchDaemon install.
-            runs-on: macos-14
+            runs-on: macos-26
             timeout: 30
     env:
       # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
       IT_ENROLL_MODE: authkey
       IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -90,7 +90,7 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       # gcloud uses the WIF credential to mint the SA id_token in the harness.
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       # Linux: build the worktree deb + serve it from a signed local apt repo
       # on loopback, then run install.sh in place (systemd is PID 1 on the
@@ -280,7 +280,7 @@ jobs:
 
       - name: upload install diagnostics
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           # run_attempt, not run_id: it is what makes "Re-run failed jobs"
           # produce a second artifact instead of colliding with the first.

@@ -1,87 +1,146 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":semanticCommits"],
+  "extends": [
+    "config:recommended",
+    ":semanticCommits"
+  ],
   "timezone": "Asia/Tokyo",
   "prConcurrentLimit": 4,
   "prHourlyLimit": 2,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "rebaseWhen": "conflicted",
   "ignoreUnstable": true,
   "separateMinorPatch": true,
-  "postUpdateOptions": ["gomodTidy"],
-  "ignoreDeps": ["github.com/waired-ai/waired-agent/proto"],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "ignoreDeps": [
+    "github.com/waired-ai/waired-agent/proto"
+  ],
   "osvVulnerabilityAlerts": true,
   "gitAuthor": "Renovate Bot <bot@renovateapp.com>",
   "commitBody": "Signed-off-by: {{{gitAuthor}}}",
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": ["* * 1-7 * *"]
+    "schedule": [
+      "* * 1-7 * *"
+    ]
   },
   "packageRules": [
     {
       "description": "Major updates wait for a tick on the Dependency Dashboard, so a run never opens a batch of major-bump PRs at once",
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "dependencyDashboardApproval": true
     },
     {
-      "description": "The docs deploy pins Node 22.12.0 on purpose: firebase-tools' WIF STS call fails with a false 'Premature close' on Node 22.23.x (nodejs/node#63989; see the comment in deploy-docs.yml). Move this pin by hand after checking a preview deploy",
-      "matchManagers": ["github-actions"],
-      "matchDepNames": ["node"],
-      "matchFileNames": [".github/workflows/deploy-docs.yml", ".github/workflows/docs-preview-reap.yml"],
-      "enabled": false
-    },
-    {
-      "description": "Go modules — single grouped PR",
-      "matchManagers": ["gomod"],
+      "description": "Go modules \u2014 single grouped PR",
+      "matchManagers": [
+        "gomod"
+      ],
       "groupName": "go modules",
-      "labels": ["dependencies"]
+      "labels": [
+        "dependencies"
+      ]
     },
     {
-      "description": "GitHub Actions — single grouped PR",
-      "matchManagers": ["github-actions"],
+      "description": "GitHub Actions \u2014 single grouped PR",
+      "matchManagers": [
+        "github-actions"
+      ],
       "groupName": "github-actions",
-      "labels": ["dependencies", "ci"]
+      "labels": [
+        "dependencies",
+        "ci"
+      ]
     },
     {
-      "description": "docs-site npm — single grouped PR",
-      "matchManagers": ["npm"],
-      "matchFileNames": ["docs-site/package.json"],
+      "description": "docs-site npm \u2014 single grouped PR",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "docs-site/package.json"
+      ],
       "groupName": "docs-site npm",
-      "labels": ["dependencies", "doc"]
+      "labels": [
+        "dependencies",
+        "doc"
+      ]
     },
     {
-      "description": "Inference engine pins (ollama/uv/vllm) — own PR each (each needs its own validation), labelled inference, stable-only",
-      "matchManagers": ["custom.regex"],
-      "matchDepNames": ["ollama/ollama", "astral-sh/uv", "vllm"],
-      "labels": ["dependencies", "inference"],
+      "description": "Inference engine pins (ollama/uv/vllm) \u2014 own PR each (each needs its own validation), labelled inference, stable-only",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "ollama/ollama",
+        "astral-sh/uv",
+        "vllm"
+      ],
+      "labels": [
+        "dependencies",
+        "inference"
+      ],
       "ignoreUnstable": true
     },
     {
-      "description": "An ollama bump needs no checksum recomputed (the installer verifies against the release's own sha256sum.txt) but DOES need that file, and the asset names, to still be there — this note tells the reviewer what to run",
-      "matchManagers": ["custom.regex"],
-      "matchDepNames": ["ollama/ollama"],
-      "labels": ["dependencies", "inference", "actionable"],
+      "description": "An ollama bump needs no checksum recomputed (the installer verifies against the release's own sha256sum.txt) but DOES need that file, and the asset names, to still be there \u2014 this note tells the reviewer what to run",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "ollama/ollama"
+      ],
+      "labels": [
+        "dependencies",
+        "inference",
+        "actionable"
+      ],
       "prBodyNotes": [
-        ":mag: **ollama version bump**: no hash to update here — unlike uv, the installer fetches the release's own `sha256sum.txt` and verifies every archive against it (see `OllamaPinnedVersion`'s doc). What that assumes, and what this bump has to confirm, is that the new release still publishes that file and still names its assets the same way — `0.30.x` renamed the Linux archive from `.tgz` to `.tar.zst`, which 404s exactly one OS. Run `make integration-runtime` (or `go test -tags integration -run TestPinnedReleasePublishesEveryAssetChecksum ./internal/runtime/`) on this branch: it checks all four (goos, goarch) pairs we ship against the real release."
+        ":mag: **ollama version bump**: no hash to update here \u2014 unlike uv, the installer fetches the release's own `sha256sum.txt` and verifies every archive against it (see `OllamaPinnedVersion`'s doc). What that assumes, and what this bump has to confirm, is that the new release still publishes that file and still names its assets the same way \u2014 `0.30.x` renamed the Linux archive from `.tgz` to `.tar.zst`, which 404s exactly one OS. Run `make integration-runtime` (or `go test -tags integration -run TestPinnedReleasePublishesEveryAssetChecksum ./internal/runtime/`) on this branch: it checks all four (goos, goarch) pairs we ship against the real release."
       ]
     },
     {
       "description": "A vllm bump now rebuilds the venv on every installed host (#843), and the product emits parser names and serve flags read out of the pinned release, so the bump has to confirm they still exist",
-      "matchManagers": ["custom.regex"],
-      "matchDepNames": ["vllm"],
-      "labels": ["dependencies", "inference", "actionable"],
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "vllm"
+      ],
+      "labels": [
+        "dependencies",
+        "inference",
+        "actionable"
+      ],
       "prBodyNotes": [
         ":warning: **vllm version bump**: this is no longer only what a FRESH install gets. Since #843 every host with a venv rebuilds it on its next update (~6 GB, ~5-15 min), so a bump reaches the whole fleet. Two things to confirm against the new release before merge, because vLLM turns either into a dead engine rather than a degraded one: (1) every `--tool-call-parser` name in `cmd/waired-agent/inference_vllm_toolparser.go` is still registered (`_TOOL_PARSERS_TO_REGISTER` in `vllm/tool_parsers/__init__.py`) \u2014 an unregistered name is rejected at start-up; (2) every flag `runtime.VLLMAdapter.commandArgs` emits still exists (`vllm/engine/arg_utils.py`, `entrypoints/launchers/cli_args.py`, `entrypoints/cli/serve.py`) \u2014 an unknown flag is an argparse exit 2 and all of EnsureRunning's retries fail. `TransformersConstraint` and `VLLMVerifyImports` are pinned to this release too; bump them in the same PR after verifying on a real GPU host."
       ]
     },
     {
       "description": "uv bump also needs UVPinnedSHA256Linux64 and UVPinnedSHA256LinuxARM64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
-      "matchManagers": ["custom.regex"],
-      "matchDepNames": ["astral-sh/uv"],
-      "labels": ["dependencies", "inference", "actionable"],
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "astral-sh/uv"
+      ],
+      "labels": [
+        "dependencies",
+        "inference",
+        "actionable"
+      ],
       "postUpgradeTasks": {
-        "commands": ["bash scripts/dev/update-uv-sha.sh {{{newVersion}}}"],
-        "fileFilters": ["internal/runtime/uv.go"],
+        "commands": [
+          "bash scripts/dev/update-uv-sha.sh {{{newVersion}}}"
+        ],
+        "fileFilters": [
+          "internal/runtime/uv.go"
+        ],
         "executionMode": "update"
       },
       "prBodyNotes": [
@@ -109,7 +168,9 @@
     {
       "customType": "regex",
       "description": "Build tools run as `go run <module>@<version>` from the Makefile. They are not in go.mod, so the gomod manager cannot see them: goversioninfo sat at one version, in two hand-typed copies, with nothing tracking it (waired-agent#1209, the same shape as the ollama pin in #43)",
-      "managerFilePatterns": ["/^Makefile$/"],
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+\\s*:?=\\s*\\S+@(?<currentValue>v[\\w.+-]+)"
       ],

@@ -61,7 +61,7 @@ defaults:
 
 jobs:
   renovate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     container:
       # Plain Debian node image (not the official renovate image) pins
@@ -69,21 +69,21 @@ jobs:
       # satisfy the latest Renovate's `engines`: on Node 22, npx quietly
       # resolved the last release that still accepted 22 (42.99.0,
       # unsupported) instead of failing.
-      image: node:24-trixie
+      image: node:26.11.1-trixie
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # Renovate's gomod manager runs `go get` / `go mod tidy` (postUpdateOptions:
       # gomodTidy) to rewrite go.sum. The node image has no Go, so without this
       # step every Go update failed with `spawn go ENOENT` and Renovate raised
       # its PRs with a stale go.sum ("lock file errors").
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       # npx pulls the latest Renovate at run time, keeping the bot self-
-      # updating. Debian node:24-trixie ships git/curl/bash/coreutils,
+      # updating. Debian node:26.11.1-trixie ships git/curl/bash/coreutils,
       # which Renovate and the postUpgradeTasks
       # (scripts/dev/update-*-sha.sh) need.
       - name: Validate renovate.json

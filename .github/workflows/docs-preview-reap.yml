@@ -88,14 +88,14 @@ jobs:
       vars.FIREBASE_PROJECT_ID != '' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     # No `environment:` — repo-level dev vars, i.e. the sandbox project that
     # owns the preview channels. See the header.
     container:
-      image: node:22-trixie
+      image: node:26.11.1-trixie
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           # The default branch, never the PR's own tree. Two reasons: this job
           # holds WIF credentials, so it must not run a script version a PR
@@ -106,9 +106,9 @@ jobs:
       # Same Node pin as deploy-docs.yml: firebase-tools authenticates the WIF
       # (external_account) credential via a node-fetch STS POST that fails with
       # a false "Premature close" on recent Node (nodejs/node#63989).
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 22.12.0
+          node-version: 26.11.1
 
       - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v3
@@ -153,7 +153,7 @@ jobs:
       # the comment would be lying.
       - name: Retire the preview comment
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9.0.0
         with:
           script: |
             const marker = '<!-- docs-preview -->';

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 # Multi-stage build for cmd/waired-agent + cmd/waired (CLI). Used both
 # by the GCP testnet (NAT traversal verification) Docker-mode VMs and as
 # a binary source for the native-mode VMs (see Makefile dist-agent).
@@ -15,7 +15,7 @@
 # needs sh + curl to read metadata. Image size is acceptably small
 # (~15MB) for a test image.
 
-FROM golang:1.26-trixie AS build
+FROM golang:1.27.2-trixie AS build
 # GO_BUILD_TAGS, when set to "testharness", compiles the
 # internal/testharness dispatcher + iptables ops into waired-agent for
 # use by the testnet fallback gate (see scripts/dev/testnet-fallback-
@@ -38,7 +38,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
  && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w" -tags "${GO_BUILD_TAGS}" -o /out/waired-agent ./cmd/waired-agent
 
-FROM alpine:3.24
+FROM alpine:3.24.2
 # iptables is needed at runtime only by testharness-tagged builds (the
 # dispatcher fork-execs `iptables ... WAIRED_TESTHARNESS ...`). A
 # production image carries the binary unused; ~1 MB cost, no

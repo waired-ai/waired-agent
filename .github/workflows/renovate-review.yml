@@ -63,15 +63,15 @@ jobs:
       (github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        startsWith(github.event.workflow_run.head_branch, 'renovate/'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # Debian node image (node present for the claude CLI); mirrors renovate.yml.
     container:
-      image: node:22-trixie
+      image: node:26.11.1-trixie
     steps:
       # Checkout the default branch (workflow_run default): we run the trusted
       # scripts/prompt from main, never code modified by the PR under review.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: Guard required secret
         env:
@@ -84,7 +84,7 @@ jobs:
 
       - name: Install toolchain (jq, gh, claude CLI)
         env:
-          GH_VERSION: "2.65.0"
+          GH_VERSION: "2.102.0"
         run: |
           set -euo pipefail
           apt-get update
@@ -118,7 +118,7 @@ jobs:
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: renovate-review-${{ github.run_id }}
           path: ${{ env.OUT_DIR }}

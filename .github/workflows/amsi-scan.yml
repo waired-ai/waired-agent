@@ -64,7 +64,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # Advisory early signal: no -Strict (a detection is a warning, not a
       # failure) and -OnNoProvider skip (exit 0 when Defender's AMSI is off).

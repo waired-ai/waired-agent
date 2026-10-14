@@ -29,10 +29,10 @@ concurrency:
 jobs:
   base-is-main:
     name: PR base is main
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: base is main
         env:

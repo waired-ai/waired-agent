@@ -226,7 +226,7 @@ verify-catalog-docs:
 # from win-fileversion.sh, the text is the semver verbatim.
 GOVERSIONINFO_PROGRAMS := waired waired-agent waired-tray
 # renovate: datasource=go depName=github.com/josephspurrier/goversioninfo
-GOVERSIONINFO := github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0
+GOVERSIONINFO := github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0
 # WIN_RESOURCE_VERSION is EMPTY by default, and that is what keeps the
 # committed resources at their placeholders: with no version flags the
 # generator uses versioninfo.json verbatim. dist-windows-installer sets it to
@@ -532,7 +532,7 @@ e2e-agentgrade:
 	     -run TestAgentGrade ./internal/e2e/agentgrade/...
 
 # vLLM e2e (GPU REQUIRED): exercises the Step-2 multi-engine path —
-# venv install (uv-managed Python 3.12), HF download (the venv's hf CLI),
+# venv install (uv-managed Python), HF download (the venv's hf CLI),
 # VLLMAdapter spawn against a real GPU, and the full
 # /v1/chat/completions surface served from vllm. The smoke test uses
 # Qwen2.5-0.5B (~1 GB download, ~3 min total); the realistic pass

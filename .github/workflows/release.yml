@@ -67,12 +67,12 @@ jobs:
     # with build; publish needs both.
     name: require green testnet for the release commit
     if: github.repository == 'waired-ai/waired-agent' && github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 100
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: testnet-require-green (cross-repo dispatch at the tag if needed)
         env:
@@ -94,32 +94,32 @@ jobs:
     # Hosted runner here too — see the build job's comment for why.
     # The google/cloud-sdk container handles AR upload + gh CLI, so the
     # runner OS just needs Docker (preinstalled on GHA Linux).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     container:
       image: google/cloud-sdk:slim
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: dist/
           pattern: deb-*
           merge-multiple: true
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: dist/
           pattern: windows-*
           merge-multiple: true
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: dist/
           pattern: darwin-*
           merge-multiple: true
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: dist/
           pattern: third-party-licenses

@@ -12,7 +12,7 @@
 # completion was SERVED LOCALLY and did NOT fail open to real Anthropic.
 #
 # LINUX-ONLY, per-PR: the fail-open / routing / decision=local logic is
-# OS-agnostic Go, so a Linux leg on the cheap disposable ubuntu-24.04 runner
+# OS-agnostic Go, so a Linux leg on the cheap disposable ubuntu-26.04 runner
 # catches the regression class on EVERY gated PR without loading the
 # concurrency=1 self-hosted Windows/macOS pools. Full 3-OS routing coverage runs
 # nightly in installtest-inference.yml. `--integration` pins the withheld 350M as
@@ -85,7 +85,7 @@ jobs:
     # also withholds the id-token from fork PRs. A maintainer arms a reviewed
     # fork PR by pushing its branch to this repo. Mirrors installtest.yml.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     env:
       # Tier 2: hands-free enroll vs the real app.dev.waired.net (#339 grant).
@@ -102,9 +102,9 @@ jobs:
       # (fail fast) rather than as a transient network error (retry).
       IT_ANTHROPIC_BLACKHOLED: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -114,7 +114,7 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@v3.0.1
 
       # Belt-and-braces fail-open guard: blackhole api.anthropic.com so a
       # regression that bypasses the local gateway cannot silently succeed by
@@ -154,7 +154,7 @@ jobs:
 
       - name: upload engine diagnostics (linux)
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: routing-sentinel-diag-${{ github.run_attempt }}
           path: diag/

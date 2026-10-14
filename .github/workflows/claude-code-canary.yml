@@ -23,10 +23,10 @@ permissions:
 jobs:
   canary:
     name: Claude Code invariants
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 

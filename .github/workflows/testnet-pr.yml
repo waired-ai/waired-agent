@@ -62,7 +62,7 @@ jobs:
   gate:
     name: gate (testnet-relevant paths?)
     if: github.repository == 'waired-ai/waired-agent'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -79,7 +79,7 @@ jobs:
       # The gate script is taken from the PR head. A fork PR could edit it
       # to force run=true, but that only flips this job's output — the
       # secret-bearing require-green job independently refuses fork heads.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - name: decide (changed files vs allowlist)
         id: decide
         run: |
@@ -124,12 +124,12 @@ jobs:
     if: >-
       needs.gate.outputs.run == 'true' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 100
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - name: check-or-dispatch monorepo testnet for the PR head SHA
         env:
           # Referenced only from this same-repo-guarded job, never from

@@ -346,13 +346,13 @@ func TestEveryWindowsArchHasAResource(t *testing.T) {
 // Renovate can see it (renovate.json's customManager), but the Smart App
 // Control control-matrix script runs the same generator on a Windows host and
 // says in its own comment that it does so "so this row measures the resource
-// our build could actually ship". That claim is only true while the two
+// our build could actually ship". That claim is only true while the
 // versions agree.
 func TestGeneratorPinIsTheSameEverywhere(t *testing.T) {
 	root := repoRoot(t)
 	re := regexp.MustCompile(`github\.com/josephspurrier/goversioninfo/cmd/goversioninfo@(v[\w.\-+]+)`)
 	pins := map[string]string{}
-	for _, rel := range []string{makefileRel, sacMatrixRel} {
+	for _, rel := range []string{makefileRel, sacMatrixRel, "scripts/dev/installtest-windows.ps1"} {
 		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
@@ -363,7 +363,9 @@ func TestGeneratorPinIsTheSameEverywhere(t *testing.T) {
 		}
 		pins[rel] = m[1]
 	}
-	if pins[makefileRel] != pins[sacMatrixRel] {
-		t.Errorf("goversioninfo pinned at %s in %s but %s in %s", pins[makefileRel], makefileRel, pins[sacMatrixRel], sacMatrixRel)
+	for rel, pin := range pins {
+		if pin != pins[makefileRel] {
+			t.Errorf("goversioninfo pinned at %s in %s but %s in %s", pins[makefileRel], makefileRel, pin, rel)
+		}
 	}
 }
