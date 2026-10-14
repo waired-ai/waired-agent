@@ -104,48 +104,24 @@ package runtime
 //   - GPU KV cache size: and the scheduler tiers read the same as at
 //     0.28.0 (vllmKVCapacityRe; router.vllmBigGPUVRAMMB).
 //
-// 2026-09-20: checked while moving the ollama pin to 0.34.2 and uv to
-// 0.12.17, and DELIBERATELY NOT MOVED. Every vLLM tag newer than 0.29.0 is
-// a prerelease — v0.29.1rc0, v0.30.0rc1 and v0.30.0rc2 — and PyPI's latest
-// is still 0.29.0. renovate.json sets ignoreUnstable on this dep, so no
-// bump PR is raised for them either; this note is for the human who reads
-// the pin, sees a newer rc upstream, and wonders whether it was missed.
-// The cost of taking one anyway is not the diff: since #843 a pin-set move
-// rebuilds the venv on every installed host, and upstream can withdraw an
-// rc, which would leave the pin naming a release that no longer exists.
-// TransformersConstraint and VLLMPythonVersion are unchanged with it, and
-// uv is not a member of VLLMPinSet, so moving the uv pin on its own does
-// not rebuild any venv.
+// 2026-10-14: moved to the stable 0.31.0 release. Its published wheel
+// requires transformers >=5.10.4,<5.18.0 and Python >=3.10,<3.15, so the
+// companion pins below follow those bounds. The install/serve validation
+// for this move is recorded in waired-agent#1562.
 //
 // renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.30.0"
+const VLLMPinnedVersion = "0.31.0"
 
-// TransformersConstraint pins the transformers wheel to a version
-// compatible with VLLMPinnedVersion. vllm 0.28.0 requires
-// transformers>=5.5.3, the same floor 0.24.0 stated (its 0.11-era code
-// needed <5.0 instead — the two major lines are mutually incompatible),
-// so the constraint here only caps the major to keep uv from resolving a
-// future transformers 6.x before it has been verified. Bump together
-// with VLLMPinnedVersion after verifying compatibility on a real GPU
-// host.
-//
-// Unchanged at 0.28.0, and the cap is doing work rather than sitting
-// idle: the verified venv resolved transformers 5.16.1, so the range is
-// live at its top end, not pinned at its floor.
-//
-// 0.29.0 raises the floor to transformers>=5.10.4 with no upper bound of
-// its own; its verified venv resolved 5.17.0.
-const TransformersConstraint = "transformers>=5.10.4,<6.0"
+// TransformersConstraint follows vLLM 0.31.0's published dependency range.
+// The upper bound excludes the unsupported 5.18 line as well as a future
+// major release. Compatibility verification accompanies a pin change.
+const TransformersConstraint = "transformers>=5.10.4,<5.18.0"
 
-// VLLMPythonVersion is the interpreter `uv venv --python` materialises
-// for the venv — the Step 2 supported interpreter window. A constant
-// rather than a literal inside Install because the converge compares it:
-// a venv built on a different interpreter is a different build even when
-// the vLLM version matches.
-//
-// 0.28.0 and 0.29.0 both declare requires_python <3.15,>=3.10, so 3.12
-// stays inside it.
-const VLLMPythonVersion = "3.12"
+// VLLMPythonVersion selects the interpreter uv materialises for the venv.
+// vLLM 0.31.0 requires Python >=3.10,<3.15; 3.14 is its newest supported
+// stable minor. ConvergeVLLM compares this with the recorded interpreter
+// so installed 3.12 environments rebuild with the new pin (#843).
+const VLLMPythonVersion = "3.14"
 
 // VLLMPinSet is the tuple one venv was built from. Recorded beside the
 // venv at install time and compared on every converge, so that moving a
