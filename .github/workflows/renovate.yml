@@ -54,6 +54,7 @@ env:
   # IPv4-first to dodge the AAAA-first + Happy-Eyeballs ETIMEDOUT trap
   # (same dual-stack workarounds as the monorepo renovate.yml, #466).
   NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
+  npm_config_engine_strict: "true"
 
 defaults:
   run:
@@ -66,10 +67,10 @@ jobs:
     container:
       # Plain Debian node image (not the official renovate image) pins
       # the Node major independently of the runner image. It has to
-      # satisfy the latest Renovate's `engines`: on Node 22, npx quietly
-      # resolved the last release that still accepted 22 (42.99.0,
-      # unsupported) instead of failing.
-      image: node:26.11.1-trixie
+      # satisfy the latest Renovate's `engines` (^24.11.0 for Renovate 44).
+      # The explicit @latest and strict engine check below prevent an
+      # unsupported runtime from silently selecting an older Renovate.
+      image: node:24.21.0-trixie
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -82,12 +83,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      # npx pulls the latest Renovate at run time, keeping the bot self-
-      # updating. Debian node:26.11.1-trixie ships git/curl/bash/coreutils,
-      # which Renovate and the postUpgradeTasks
-      # (scripts/dev/update-*-sha.sh) need.
+      # Renovate 44 requires Node ^24.11.0. Use the latest Node 24 patch
+      # and request @latest explicitly: implicit npx resolution on Node 26
+      # selected unsupported Renovate 37 instead of the latest release.
       - name: Validate renovate.json
-        run: npx --yes --package renovate -- renovate-config-validator --strict
+        run: |
+          npx --yes renovate@latest --version
+          npx --yes --package renovate@latest -- renovate-config-validator --strict
 
       - name: Run Renovate
         env:
@@ -116,4 +118,4 @@ jobs:
           # while dropping KEY_0/VALUE_0, which kills every git it spawns
           # (see the monorepo renovate.yml header).
           unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
-          npx --yes renovate
+          npx --yes renovate@latest
