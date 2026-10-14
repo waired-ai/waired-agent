@@ -11,7 +11,7 @@
 # #413) — it never touches git or gh.
 #
 # Env (set by .github/workflows/renovate-review.yml):
-#   GH_TOKEN          token with pull-requests:write (default GITHUB_TOKEN)
+#   GH_TOKEN          token with pull-requests:write, checks:read, statuses:read (default GITHUB_TOKEN)
 #   GH_REPO           owner/repo (gh picks this up automatically)
 #   WR_PR             PR number from the workflow_run payload (may be empty)
 #   HEAD_BRANCH       PR head ref (renovate/*) — fallback PR resolution

@@ -81,6 +81,8 @@ func runTests(m *testing.M) int {
 	// different file than CI does — #386's shape again, and this time against
 	// a directory they use for real work.
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	// Colour assertions choose their own setting, independently of the shell.
+	os.Unsetenv("NO_COLOR")
 	// Under the sealed home, so a test that writes one gets a fresh tree and
 	// nothing lands in the real machine-wide location.
 	restorePath := claudemanaged.SwapPathForTest(
