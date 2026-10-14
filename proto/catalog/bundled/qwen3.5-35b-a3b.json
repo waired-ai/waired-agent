@@ -42,7 +42,7 @@
       "runtime_support": [
         "ollama"
       ],
-      "estimated_weight_gb": 24.0,
+      "estimated_weight_gb": 22.1,
       "min_ram_gb": 32,
       "quality_tier": 73,
       "param_count": 35000000000,
@@ -69,11 +69,10 @@
         "block_count": 40,
         "full_attention_layers": 10,
         "recurrent_state_bytes": 65863680,
-        "tensor_bytes": 23857106368,
-        "inline_projector_bytes": 893955008,
-        "nextn_bytes": 477493248,
-        "repeating_bytes": 21782407680,
-        "expert_bytes": 20887633920
+        "tensor_bytes": 21155768832,
+        "projector_bytes": 902822400,
+        "repeating_bytes": 20452518400,
+        "expert_bytes": 19503513600
       },
       "source": {
         "type": "ollama",
