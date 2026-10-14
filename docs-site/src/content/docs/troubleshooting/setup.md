@@ -99,7 +99,7 @@ Common causes:
   place of the engine's state:
 
   ```
-  runtimes:       ollama 0.34.0 (gave up, ctx 32k q4_0)
+  runtimes:       ollama 0.40.4 (gave up, ctx 32k q4_0)
   ⚠ ollama: engine repeatedly crashed; not retrying — …
   ```
 

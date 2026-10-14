@@ -411,5 +411,9 @@ package runtime
 // and discover/runner.go's "dropping integrated GPU" message. A change
 // there makes the check report "not read" rather than compare.
 //
+// 0.34.0 -> 0.40.4: the release assets and checksum table still match
+// ollamaReleaseFor, and the one-request family list still matches the
+// catalog (integration checks). Runtime verification is recorded in #1560.
+//
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.34.0"
+const OllamaPinnedVersion = "0.40.4"
