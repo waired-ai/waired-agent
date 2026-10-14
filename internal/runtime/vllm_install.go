@@ -28,7 +28,7 @@ import (
 
 // VLLMVerifyImports is the python snippet the install pipeline runs
 // to confirm the venv is truly usable: vllm importable, torch sees
-// CUDA, GPU compute capability ≥ 10 (= Blackwell-ready), and a
+// CUDA, GPU compute capability ≥ 8.0, and a
 // huggingface_hub console script present to download weights with.
 //
 // The downloader check is here rather than left to the pip request

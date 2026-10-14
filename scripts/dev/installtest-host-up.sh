@@ -44,7 +44,7 @@ it_require git go gpg dpkg-deb gzip python3 envsubst
 mkdir -p "$IT_WORKDIR" "$IT_RUNDIR" "$IT_LOGDIR"
 
 # --- nfpm (deb packager) ----------------------------------------------
-NFPM_VERSION="${NFPM_VERSION:-v2.41.3}"   # keep in sync with reusable-build-artifacts.yml
+NFPM_VERSION="${NFPM_VERSION:-v2.48.0}"   # keep in sync with reusable-build-artifacts.yml
 if ! command -v nfpm >/dev/null 2>&1; then
   it_log "installing nfpm $NFPM_VERSION"
   go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@$NFPM_VERSION"

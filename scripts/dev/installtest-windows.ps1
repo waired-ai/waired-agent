@@ -2402,7 +2402,7 @@ ItStep "stamping the Windows version resources ($WinFileVersion / $semver)"
 foreach ($p in 'waired', 'waired-agent', 'waired-tray') {
     Push-Location (Join-Path $Root "cmd\$p")
     try {
-        & go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0 -64 `
+        & go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -64 `
             -ver-major $vq[0] -ver-minor $vq[1] -ver-patch $vq[2] -ver-build $vq[3] `
             -product-ver-major $vq[0] -product-ver-minor $vq[1] `
             -product-ver-patch $vq[2] -product-ver-build $vq[3] `

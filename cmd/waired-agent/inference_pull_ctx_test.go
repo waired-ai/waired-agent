@@ -19,9 +19,10 @@ type blockingRunner struct {
 	started chan string
 	release chan struct{}
 
-	mu      sync.Mutex
-	tags    []string
-	ctxErrs []error
+	mu       sync.Mutex
+	tags     []string
+	pullTags []string
+	ctxErrs  []error
 }
 
 func newBlockingRunner(t *testing.T) *blockingRunner {
@@ -64,6 +65,7 @@ func (r *blockingRunner) Run(ctx context.Context, _ string, args, _ []string, on
 	}
 	r.mu.Lock()
 	r.tags = append(r.tags, tag)
+	r.pullTags = append(r.pullTags, tag)
 	r.mu.Unlock()
 	select {
 	case r.started <- tag:
@@ -92,7 +94,7 @@ func (r *blockingRunner) calls() int {
 func (r *blockingRunner) pulledTags() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]string(nil), r.tags...)
+	return append([]string(nil), r.pullTags...)
 }
 
 func (r *blockingRunner) firstCtxErr(t *testing.T) error {
@@ -210,5 +212,24 @@ func TestPullModel_CancelledByAgentShutdown(t *testing.T) {
 	}
 	if got := modelStateOf(t, p, "dense-mtp").State; got != catalog.ModelStateFailed {
 		t.Fatalf("model state after a cancelled pull = %q, want %q", got, catalog.ModelStateFailed)
+	}
+}
+
+// A cleanup can race the test's readback after a successful download. Its
+// rm command belongs in the call history, but is not another model pull.
+func TestBlockingRunner_PullReadbackExcludesRemoval(t *testing.T) {
+	r := newBlockingRunner(t)
+	r.releaseAll()
+	for _, args := range [][]string{{"pull", "kept:q4"}, {"rm", "probe:q8"}} {
+		if err := r.Run(context.Background(), "ollama-fake", args, nil, func(string) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := r.pulledTags()
+	if len(got) != 1 || got[0] != "kept:q4" {
+		t.Fatalf("pulls = %v, want only kept:q4; cleanup is not a download", got)
+	}
+	if got := r.calls(); got != 2 {
+		t.Fatalf("all calls = %d, want 2; retain the cleanup in the full history", got)
 	}
 }
