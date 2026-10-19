@@ -110,7 +110,7 @@ package runtime
 // for this move is recorded in waired-agent#1562.
 //
 // renovate: datasource=pypi depName=vllm
-const VLLMPinnedVersion = "0.31.0"
+const VLLMPinnedVersion = "0.32.0"
 
 // TransformersConstraint follows vLLM 0.31.0's published dependency range.
 // The upper bound excludes the unsupported 5.18 line as well as a future
