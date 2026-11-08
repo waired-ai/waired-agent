@@ -416,4 +416,4 @@ package runtime
 // catalog (integration checks). Runtime verification is recorded in #1560.
 //
 // renovate: datasource=github-releases depName=ollama/ollama
-const OllamaPinnedVersion = "0.40.4"
+const OllamaPinnedVersion = "0.40.6"
